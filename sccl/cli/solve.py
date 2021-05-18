@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import sccl.strategies as strategies
+from sccl.morphisms import find_automorphisms
 from .known_topologies import KnownTopologies
 from .known_collectives import KnownCollectives
 from .common import *
@@ -17,6 +18,7 @@ def make_solvers(cmd_parsers):
 def _make_handle_strategy(cmd_parsers, name, invoke, take_steps = True):
     cmd = cmd_parsers.add_parser(name)
     instance_handler = add_instance(cmd, take_steps=take_steps)
+    cmd.add_argument('--symmetry-breaking', action='store_true')
     topologies = KnownTopologies(cmd)
     collectives = KnownCollectives(cmd)
     validate_output_args, output_handler = add_output_algorithm(cmd)
@@ -29,22 +31,26 @@ def _make_handle_strategy(cmd_parsers, name, invoke, take_steps = True):
         topology = topologies.create(args)
         collective = collectives.create(args, topology.num_nodes())
         instance = instance_handler(args)
-        algo = invoke(args, topology, collective, instance)
+        if args.symmetry_breaking:
+            automorphisms = find_automorphisms(topology, collective, logging=True)
+        else:
+            automorphisms = None
+        algo = invoke(args, topology, collective, instance, automorphisms)
         output_handler(args, algo)
         return True
     
     return cmd, handle
 
 def make_handle_solve_instance(cmd_parsers):
-    def invoke(args, topology, collective, instance):
-        return strategies.solve_instance(topology, collective, instance, logging=True)
+    def invoke(args, topology, collective, instance, automorphisms):
+        return strategies.solve_instance(topology, collective, instance, automorphisms, logging=True)
 
     cmd, handle = _make_handle_strategy(cmd_parsers, 'instance', invoke)
     return handle
 
 def make_handle_solve_least_steps(cmd_parsers):
-    def invoke(args, topology, collective, instance):
-        return strategies.solve_least_steps(topology, collective, args.initial_steps, instance, logging=True)
+    def invoke(args, topology, collective, instance, automorphisms):
+        return strategies.solve_least_steps(topology, collective, args.initial_steps, instance, automorphisms, logging=True)
 
     cmd, handle = _make_handle_strategy(cmd_parsers, 'least-steps', invoke, take_steps=False)
     cmd.add_argument('--initial-steps', type=int, default=1, metavar='N')

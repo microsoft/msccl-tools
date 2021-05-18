@@ -45,7 +45,7 @@ def recover_primal_algorithm(dual_algorithm, primal, original_topology, instance
 
 def wrap_try_ncd_reduction(solver_cls):
     class NonCombiningReductionWrapper(solver_cls):
-        def __init__(self, topology, collective):
+        def __init__(self, topology, collective, automorphisms = None):
             self.primal = collective
             try:
                 # Create the dual collective
@@ -57,7 +57,7 @@ def wrap_try_ncd_reduction(solver_cls):
                 topology = reverse_topology(topology)
             except ReductionNotApplicableError:
                 self.dual = None
-            super().__init__(topology, collective)
+            super().__init__(topology, collective, automorphisms)
 
         def solve(self, instance):
             algo = super().solve(instance)

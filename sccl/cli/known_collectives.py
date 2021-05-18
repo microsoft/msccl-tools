@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 
 class KnownCollectives:
-    def __init__(self, parser):
+    def __init__(self, parser, optional=False):
         self.parser = parser
         self.constructors = {
             'Broadcast': self._rooted_coll(collectives.broadcast),
@@ -24,13 +24,16 @@ class KnownCollectives:
             'MultirootGather': self._multiroot_coll(collectives.multiroot_gather),
             'custom': self._custom_coll(),
         }
-        self.parser.add_argument('collective', type=str, choices=self.constructors.keys(), help='collective')
+        self.parser.add_argument('collective', nargs='?' if optional else None, type=str, choices=self.constructors.keys(), help='collective')
         self.parser.add_argument('--collective-file', type=Path, default=None, help='a serialized collective', metavar='FILE')
         self.parser.add_argument('--root', type=int, default=0, help='used by rooted collectives', metavar='N')
         self.parser.add_argument('--roots', type=int, nargs='+', default=[0], help='used by multi-rooted collectives', metavar='N')
 
     def create(self, args, num_nodes):
-        return self.constructors[args.collective](num_nodes, args)
+        if args.collective != None:
+            return self.constructors[args.collective](num_nodes, args)
+        else:
+            return None
 
     def _custom_coll(self):
         def make(size, args):

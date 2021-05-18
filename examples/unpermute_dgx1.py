@@ -4,7 +4,7 @@
 # This script shows how to use SCCL to find a way to permute the nodes of a DGX1 to match the default order.
 
 from sccl.topologies import *
-from sccl.isomorphisms import find_isomorphisms
+from sccl.morphisms import find_isomorphisms
 
 def solve_dgx1_permutation():
     local = nvlink_only()

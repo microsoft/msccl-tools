@@ -5,12 +5,13 @@ from .known_topologies import KnownTopologies
 from .known_collectives import KnownCollectives
 from .common import *
 from sccl.rounds_bound import lower_bound_rounds
-from sccl.isomorphisms import find_isomorphisms
+from sccl.morphisms import find_isomorphisms, find_automorphisms, are_all_permutations_automorphisms
 
 def make_analyses(cmd_parsers):
     handler_funcs = []
     handler_funcs.append(make_handle_bound_rounds)
     handler_funcs.append(make_handle_find_isomorphisms)
+    handler_funcs.append(make_handle_find_automorphisms)
 
     return make_cmd_category(cmd_parsers, 'analyze', 'analysis', handler_funcs)
 
@@ -42,6 +43,23 @@ def make_handle_find_isomorphisms(cmd_parsers):
         topology1 = topologies1.create(args)
         topology2 = topologies2.create(args)
         isomorphisms = find_isomorphisms(topology1, topology2, logging=True)
+        return True
+    
+    return handle
+
+def make_handle_find_automorphisms(cmd_parsers):
+    cmd = cmd_parsers.add_parser('automorphisms')
+    topologies = KnownTopologies(cmd)
+    collectives = KnownCollectives(cmd, optional=True)
+
+    def handle(args, command):
+        if command != 'automorphisms':
+            return False
+
+        topology = topologies.create(args)
+        collective = collectives.create(args, topology.num_nodes())
+        if not are_all_permutations_automorphisms(topology, collective, logging=True):
+            find_automorphisms(topology, collective, exclude_trivial=False, logging=True)
         return True
     
     return handle

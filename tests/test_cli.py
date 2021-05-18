@@ -88,6 +88,9 @@ def test_solve_bound_rounds():
 def test_find_isomorphisms():
     assert 0 == os.system('sccl analyze isomorphisms DGX1 DGX1')
 
+def test_find_automorphisms():
+    assert 0 == os.system('sccl analyze automorphisms DGX1 Allgather')
+
 def test_distribute_alltoall_greedy():
     with in_tempdir():
         assert 0 == os.system('sccl solve instance Ring Alltoall --nodes 4 --steps 2 -o local.json')

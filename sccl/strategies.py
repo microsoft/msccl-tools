@@ -28,15 +28,15 @@ def _solve_and_log(encoding, instance, logging):
 
     return result
 
-def solve_instance(topology, collective, instance, logging = False):
-    encoding = PathEncoding(topology, collective)
+def solve_instance(topology, collective, instance, automorphisms = None, logging = False):
+    encoding = PathEncoding(topology, collective, automorphisms)
     return _solve_and_log(encoding, instance, logging)
 
-def solve_least_steps(topology, collective, initial_steps = 1, base_instance = Instance(None), logging = False):
+def solve_least_steps(topology, collective, initial_steps = 1, base_instance = Instance(None), automorphisms = None, logging = False):
     if initial_steps < 1:
         raise ValueError('initial_steps must be strictly positive')
 
-    encoding = PathEncoding(topology, collective)
+    encoding = PathEncoding(topology, collective, automorphisms)
 
     # Lower bound the number of steps required
     steps_lb = lower_bound_steps(topology, collective)

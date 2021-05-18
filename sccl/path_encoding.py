@@ -33,11 +33,12 @@ def _addr_end(addr, rank):
     return Int(f'addr_end_{addr}_at_{rank}')
 
 class PathEncodingBase(object):
-    def __init__(self, topology, collective):
+    def __init__(self, topology, collective, automorphisms = None):
         self.topology = topology
         self.collective = collective
+        self.automorphisms = automorphisms
 
-    def _encode(self, s, instance, collective):
+    def _encode(self, s, instance, collective, automorphisms):
         # Calculate how much iterations of the algorithm overlap if pipelining is specified
         if instance.pipeline != None:
             # TODO: move this check into Instance
@@ -189,11 +190,42 @@ class PathEncodingBase(object):
                     in_memory = And(0 <= _idx(addr, rank), _idx(addr, rank) < idx_end)
                     s.add(Implies(_addr_start(addr, rank) <= instance.steps, in_memory))
 
+        # Symmetry breaking
+        def _comparisons(perm):
+            for chunk in collective.chunks():
+                pchunk = perm.chunks[chunk]
+                for rank in collective.ranks():
+                    prank = perm.nodes[rank]
+                    lhs = _start(chunk, rank)
+                    rhs = _start(pchunk, prank)
+                    yield (lhs == rhs, lhs <= rhs)
+            # TODO: Adding the following constraints, while correct, is disastrous for performance
+            # for chunk in collective.chunks():
+            #     pchunk = perm.chunks[chunk]
+            #     for rank in collective.ranks():
+            #         prank = perm.nodes[rank]
+            #         for src in self.topology.sources(rank):
+            #             psrc = perm.nodes[src]
+            #             lhs = _send(chunk, src, rank)
+            #             rhs = _send(pchunk, psrc, prank)
+            #             yield (lhs == rhs, Implies(lhs, rhs))
+
+        if automorphisms != None and not collective.is_combining:
+            for permutation in automorphisms:
+                prev_eq = True
+                for eq, lte in _comparisons(permutation):
+                    s.add(Implies(prev_eq, lte))
+                    prev_eq = And(prev_eq, eq)
+
     def solve(self, instance):
         chunked = self.collective.chunk_up(instance.chunks)
+        if self.automorphisms != None:
+            aut = [perm.chunk_up(instance.chunks) for perm in self.automorphisms]
+        else:
+            aut = None
 
         solver = Solver()
-        self._encode(solver, instance, chunked)
+        self._encode(solver, instance, chunked, aut)
         if solver.check() == sat:
             model = solver.model()
 
