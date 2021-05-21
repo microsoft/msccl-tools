@@ -418,8 +418,8 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         for (src, dst), addrs in grouped_sends.items():
             for src_buf, src_off, dst_buf, dst_off, cnt in make_intervals(src, dst, addrs):
                 for i in range(instances):
-                    new_src_off = src_off * instances + i
-                    new_dst_off = dst_off * instances + i
+                    new_src_off = src_off * instances + i * cnt
+                    new_dst_off = dst_off * instances + i * cnt
                     send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, cnt)
                     sends.append(send)
 
