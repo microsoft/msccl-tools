@@ -348,8 +348,30 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         _remap_scratch_into_input_output(liveness, gpus, logging)
 
     # Sort scratch mappings in an attemp to make more of them contiguous (this is of course a heuristic).
+    # The procedure first figures out the sets of addresses that would result in combined operations if
+    # the source and destination indices were contiguously allocated. These are then greedily allocated
+    # starting with the largest sets. Afterwards any remaining scratch mappings are allocated in order.
+    tosort = { rank: set(gpu.scratch.keys()) for rank, gpu in gpus.items() }
+    csets = defaultdict(set)
+    for idx, step in enumerate(algorithm.steps):
+        for addr, src, dst in step.sends:
+            if addr in tosort[src] and addr in tosort[dst]:
+                csets[(idx, src, dst)].add(addr)
     for gpu in gpus.values():
-        gpu.scratch = { addr: idx for idx, addr in enumerate(sorted(gpu.scratch)) }
+        gpu.scratch = {}
+    for key in sorted(csets, key=lambda x: len(csets[x]), reverse=True):
+        idx, src, dst = key
+        cset = csets[key]
+        if cset.issubset(tosort[src]) and cset.issubset(tosort[dst]):
+            tosort[src].difference_update(cset)
+            tosort[dst].difference_update(cset)
+            for addr in sorted(cset):
+                gpus[src].scratch[addr] = len(gpus[src].scratch)
+                gpus[dst].scratch[addr] = len(gpus[dst].scratch)
+    for rank in tosort:
+        gpu = gpus[rank]
+        for addr in sorted(tosort[rank]):
+            gpu.scratch[addr] = len(gpu.scratch)
 
     def get_buffer_and_offset(gpu, addr):
         # Map an address to one of the named buffers
