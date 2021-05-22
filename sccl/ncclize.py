@@ -546,11 +546,21 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         for i, tb in enumerate(gpu.threadblocks):
             tb.rbid = i
 
+    # Filter out dependencies within the same threadblock and mark all ops that have a dependence on them
+    for rank, gpu in gpus.items():
+        for tb in gpu.threadblocks:
+            for op in tb.steps:
+                op.block_rbid = tb.rbid
+    for rank, gpu in gpus.items():
+        for tb in gpu.threadblocks:
+            for op in tb.steps:
+                op.depends = list(filter(lambda d: d.block_rbid != op.block_rbid, op.depends))
+                for dep in op.depends:
+                    dep.has_dependence = True
+
     # Do some additional postprocessing of operations:
     # - Expand operations with extra dependencies with no-ops
     # - Mark the index of each operation taking any extra no-ops into account
-    # - Record the threadblock rbids for each operation
-    all_ops = []
     for rank, gpu in gpus.items():
         for tb in gpu.threadblocks:
             tb.steps.sort(key=lambda op: op.step)
@@ -565,18 +575,6 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
                         tb.ops[-1].idx = len(tb.ops) - 1
                 tb.ops.append(op)
                 tb.ops[-1].idx = len(tb.ops) - 1
-            for op in tb.ops:
-                op.block_rbid = tb.rbid
-            all_ops.extend(tb.ops)
-
-    # Filter out dependencies within the same threadblock
-    for op in all_ops:
-        op.depends = list(filter(lambda d: d.block_rbid != op.block_rbid, op.depends))
-
-    # Mark all ops that have a dependence on them
-    for op in all_ops:
-        for dep in op.depends:
-            dep.has_dependence = True
 
     # Generate the XML structure
     algo_elem = ET.Element('algo')
