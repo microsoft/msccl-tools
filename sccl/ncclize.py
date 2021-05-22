@@ -636,6 +636,9 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
                         if op.src_buffer is not None:
                             op_elem.set('buf', op.src_buffer)
                             op_elem.set('off', str(op.src_offset))
+                        if op.dst_buffer is not None:
+                            op_elem.set('rbuf', op.dst_buffer)
+                            op_elem.set('roff', str(op.dst_offset))
                     else:
                         if op.dst_buffer is not None:
                             op_elem.set('buf', op.dst_buffer)
