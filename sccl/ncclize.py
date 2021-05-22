@@ -17,7 +17,7 @@ class _Gpu:
     input_chunks: int
     output_chunks: int
     scratch: dict = field(default_factory=dict)
-    threadbloks: list = field(default_factory=list)
+    threadblocks: list = field(default_factory=list)
 
     def scratch_size(self):
         return max((idx for addr, idx in self.scratch.items()), default=-1) + 1
