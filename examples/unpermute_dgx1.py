@@ -8,7 +8,8 @@ from sccl.isomorphisms import find_isomorphisms
 
 def solve_dgx1_permutation():
     local = nvlink_only()
-    isomorphisms = find_isomorphisms(dgx1(), local, limit=1)
+    isomorphisms = find_isomorphisms(dgx1(), local, limit=4)
     if len(isomorphisms) == 0:
         raise RuntimeError('No isomorphism to DGX1 found')
-    return isomorphisms[0].nodes
+    return isomorphisms
+print(solve_dgx1_permutation())
