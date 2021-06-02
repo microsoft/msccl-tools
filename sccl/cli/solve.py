@@ -11,6 +11,7 @@ def make_solvers(cmd_parsers):
     handler_funcs.append(make_handle_solve_instance)
     handler_funcs.append(make_handle_solve_least_steps)
     handler_funcs.append(make_handle_solve_pareto_optimal)
+    handler_funcs.append(make_handle_solve_uflra)
 
     return make_cmd_category(cmd_parsers, 'solve', 'solver', handler_funcs)
 
@@ -89,4 +90,23 @@ def make_handle_solve_pareto_optimal(cmd_parsers):
                 output_handler(args, algorithm, algorithm.name)
         return True
     
+    return handle
+
+def make_handle_solve_uflra(cmd_parsers):
+    name = 'uflra'
+    cmd = cmd_parsers.add_parser(name)
+    topologies = KnownTopologies(cmd)
+    collectives = KnownCollectives(cmd)
+    # validate_output_args, output_handler = add_output_sccl_objects(cmd)
+
+    def handle(args, command):
+        if command != name:
+            return False
+
+        # validate_output_args(args)
+        topology = topologies.create(args)
+        collective = collectives.create(args, topology.num_nodes())
+        strategies.optimize(topology, collective, strategies.Optimizer.UFLRA)
+        return True
+
     return handle

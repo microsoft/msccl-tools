@@ -3,6 +3,7 @@
 
 from sccl.instance import Instance
 from sccl.path_encoding import PathEncoding
+from sccl.uflra_optimizer import UflraOptimizer
 from sccl.rounds_bound import lower_bound_rounds
 from sccl.steps_bound import lower_bound_steps
 
@@ -11,6 +12,7 @@ import math
 from fractions import Fraction
 import itertools
 from collections import defaultdict
+from enum import Enum
 
 def _solve_and_log(encoding, instance, logging):
     if logging:
@@ -157,3 +159,18 @@ def prune_pareto_optimal(algorithms):
             efficient_algorithms.append(algo)
 
     return efficient_algorithms
+
+class Optimizer(Enum):
+    UFLRA = 'UFLRA'
+
+    def __str__(self):
+        return self.value
+
+def optimize(topology, collective, optimizer):
+    if optimizer == Optimizer.UFLRA:
+        opt = UflraOptimizer(topology, collective)
+    start_time = time.time()
+    cont_algo = opt.optimize()
+    duration = time.time() - start_time
+    print(cont_algo)
+    print(f'Duration {duration:.1f}s')
