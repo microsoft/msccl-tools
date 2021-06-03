@@ -172,5 +172,4 @@ def optimize(topology, collective, optimizer):
     start_time = time.time()
     cont_algo = opt.optimize()
     duration = time.time() - start_time
-    print(cont_algo)
     print(f'Duration {duration:.1f}s')
