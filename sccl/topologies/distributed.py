@@ -7,6 +7,10 @@ def _copy_links(remote_bw, num_local, num_dist, local_links):
     return [[remote_bw if src // num_local != dst // num_local else local_links[dst % num_local][src % num_local]
         for src in range(num_dist)] for dst in range(num_dist)]
 
+def _copy_links_ext(remote_bw_func, num_local, num_dist, local_links):
+    return [[remote_bw_func(src,dst) if src // num_local != dst // num_local else local_links[dst % num_local][src % num_local]
+        for src in range(num_dist)] for dst in range(num_dist)]
+
 def _copy_switches(num_local, num_copies, local_switches):
     switches = []
     for srcs, dsts, bw, name in local_switches:
@@ -24,6 +28,16 @@ def distributed_fully_connected(local_topology, num_copies, remote_bw):
     switches = _copy_switches(num_local, num_copies, local_topology.switches)
 
     return Topology(f'DistributedFullyConnected(local={local_topology.name},copies={num_copies},bw={remote_bw})', links, switches)
+
+def distributed_relayed(local_topology, num_copies, remote_bw, relays=[0]):
+    num_local = local_topology.num_nodes()
+    num_dist = num_local * num_copies
+
+    links = _copy_links_ext(lambda src,dst: remote_bw if dst % num_local in relays and src % num_local in relays else 0,
+        num_local, num_dist, local_topology.links)
+    switches = _copy_switches(num_local, num_copies, local_topology.switches)
+
+    return Topology(f'DistributedRelayed(local={local_topology.name},copies={num_copies},bw={remote_bw},relays={relays})', links, switches)
 
 def distributed_hub_and_spoke(local_topology, num_copies, remote_bw):
     num_local = local_topology.num_nodes()

@@ -39,3 +39,10 @@ class Topology(object):
                     yield ([src], [dst], bw, f'{src}→{dst}')
         for srcs, dsts, bw, switch_name in self.switches:
             yield (srcs, dsts, bw, switch_name)
+
+    def least_common_bw_multiple(self):
+        from math import gcd
+        lcm = 1
+        for _,_,bw,_ in self.bandwidth_constraints():
+            lcm = lcm * bw // gcd(lcm, bw)
+        return lcm
