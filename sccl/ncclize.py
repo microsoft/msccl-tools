@@ -5,13 +5,14 @@ from lxml import etree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 import math
-import threading, queue
+import threading, queue, itertools
 from enum import Enum
 from z3 import *
 
 @dataclass
 class _Gpu:
-    copies: list
+    precopies: list
+    postcopies: list
     inputs: dict
     outputs: dict
     input_chunks: int
@@ -323,14 +324,14 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         if rank in algorithm.output_map:
             outputs.update({ addr: idx for idx, addr in enumerate(sorted(algorithm.output_map[rank])) })
         inputs = {}
-        copies = []
+        precopies = []
         if rank in algorithm.input_map:
             for idx, addr in enumerate(sorted(algorithm.input_map[rank])):
                 if addr in outputs:
-                    copies.append(_Copy(idx, outputs[addr]))
+                    precopies.append(_Op(rank, None, -1, False, 'cpy', 'i', idx, 'o', outputs[addr], 1, []))
                 else:
                     inputs[addr] = idx
-        gpus[rank] = _Gpu(copies, inputs, outputs, len(inputs) + len(copies), len(outputs))
+        gpus[rank] = _Gpu(precopies, [], inputs, outputs, len(inputs) + len(precopies), len(outputs))
 
     # Create scratch buffer mappings if necessary
     def allocate_scratch(gpu, addr):
@@ -347,11 +348,11 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         liveness = _analyze_liveness(gpus, algorithm)
         _remap_scratch_into_input_output(liveness, gpus, logging)
 
-    # Sort scratch mappings in an attemp to make more of them contiguous (this is of course a heuristic).
+    # Sort scratch mappings in an attempt to make more of them contiguous (this is of course a heuristic).
     # The procedure first figures out the sets of addresses that would result in combined operations if
     # the source and destination indices were contiguously allocated. These are then greedily allocated
     # starting with the largest sets. Afterwards any remaining scratch mappings are allocated in order.
-    tosort = { rank: set(gpu.scratch.keys()) for rank, gpu in gpus.items() }
+    tosort = { rank: set(gpu.scratch.keys()).union(gpu.inputs.keys()).union(gpu.outputs.keys()) for rank, gpu in gpus.items() }
     csets = defaultdict(set)
     for idx, step in enumerate(algorithm.steps):
         for addr, src, dst in step.sends:
@@ -363,15 +364,58 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         idx, src, dst = key
         cset = csets[key]
         if cset.issubset(tosort[src]) and cset.issubset(tosort[dst]):
+            # Block these addresses from being sorted again on both GPUs
             tosort[src].difference_update(cset)
             tosort[dst].difference_update(cset)
-            for addr in sorted(cset):
-                gpus[src].scratch[addr] = len(gpus[src].scratch)
-                gpus[dst].scratch[addr] = len(gpus[dst].scratch)
+
+            # Check if either side is already contiguous in the input or output buffer
+            addrs = sorted(cset)
+            def contiguous_in(buffer):
+                if cset.issubset(buffer.keys()):
+                    for i in range(1, len(addrs)):
+                        if buffer[addrs[i]] != buffer[addrs[i-1]] + 1:
+                            return False
+                    return True
+            skip_src = contiguous_in(gpus[src].inputs) or contiguous_in(gpus[src].outputs)
+            skip_dst = contiguous_in(gpus[dst].inputs) or contiguous_in(gpus[dst].outputs)
+
+            for addr in addrs:
+                def alloc(gpu):
+                    gpu.scratch[addr] = len(gpu.scratch)
+                    if addr in gpu.inputs:
+                        gpu.precopies.append(_Op(src, None, -1, False, 'cpy',
+                            'i', gpu.inputs[addr], 's', gpu.scratch[addr], 1, []))
+                        del gpu.inputs[addr]
+                    if addr in gpu.outputs:
+                        gpu.postcopies.append(_Op(src, None, -1, False, 'cpy',
+                            's', gpu.scratch[addr], 'o', gpu.outputs[addr], 1, []))
+                        del gpu.outputs[addr]
+                if not skip_src:
+                    alloc(gpus[src])
+                if not skip_dst:
+                    alloc(gpus[dst])
     for rank in tosort:
         gpu = gpus[rank]
         for addr in sorted(tosort[rank]):
-            gpu.scratch[addr] = len(gpu.scratch)
+            if not addr in gpu.inputs and not addr in gpu.outputs:
+                gpu.scratch[addr] = len(gpu.scratch)
+
+    # Sort and combine contiguous copy operations
+    for rank, gpu in gpus.items():
+        def combine_copies(copies):
+            copies.sort(key=lambda x: (x.src_buffer, x.dst_buffer, x.src_offset, x.dst_offset))
+            i = 0
+            while i < len(copies) - 1:
+                c1 = copies[i]
+                c2 = copies[i+1]
+                if (c1.src_buffer == c2.src_buffer and c1.dst_buffer == c2.dst_buffer and
+                    c1.src_offset + c1.cnt == c2.src_offset and c1.dst_offset + c1.cnt == c2.dst_offset):
+                    c1.cnt += c2.cnt
+                    del copies[i+1]
+                else:
+                    i += 1
+        combine_copies(gpu.precopies)
+        combine_copies(gpu.postcopies)
 
     def get_buffer_and_offset(gpu, addr):
         # Map an address to one of the named buffers
@@ -478,14 +522,12 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
 
     # Fixup everything to match the instanced sends when multiple instances are generated
     if instances > 1:
-        for gpu in gpus.values():
-            # Create instances copies of the copies.
-            new_copies = []
-            for copy in gpu.copies:
-                for i in range(instances):
-                    new_copy = _Copy(copy.input_offset * instances + i, copy.output_offset * instances + i)
-                    new_copies.append(new_copy)
-            gpu.copies = new_copies
+        for rank, gpu in gpus.items():
+            # Expand copies
+            for copy in itertools.chain(gpu.precopies, gpu.postcopies):
+                copy.src_offset *= instances
+                copy.dst_offset *= instances
+                copy.cnt *= instances
 
             # Multiply the other metadata with instances
             def expand_mappings(mappings):
@@ -546,6 +588,23 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         for i, tb in enumerate(gpu.threadblocks):
             tb.rbid = i
 
+    # Add all copies into extra threadblocks
+    for rank, gpu in gpus.items():
+        cpy_tb = _Threadblock(-1)
+        cpy_tb.rbid = len(gpu.threadblocks)
+        cpy_tb.steps = gpu.precopies + gpu.postcopies
+        if len(gpu.precopies) > 0:
+            end_pre =  gpu.precopies[-1]
+            for tb in gpu.threadblocks:
+                if len(tb.steps) > 0:
+                    tb.steps[0].depends.append(end_pre)
+        if len(gpu.precopies) > 0:
+            start_post = gpu.postcopies[0]
+            for tb in gpu.threadblocks:
+                if len(tb.steps) > 0:
+                    start_post.depends.append(tb.steps[-1])
+        gpu.threadblocks.append(cpy_tb)
+
     # Filter out dependencies within the same threadblock and mark all ops that have a dependence on them
     for rank, gpu in gpus.items():
         for tb in gpu.threadblocks:
@@ -594,10 +653,6 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         gpu_elem.set('i_chunks', str(gpu.input_chunks))
         gpu_elem.set('o_chunks', str(gpu.output_chunks))
         gpu_elem.set('s_chunks', str(gpu.scratch_size()))
-        for copy in gpu.copies:
-            copy_elem = ET.SubElement(gpu_elem, 'copy')
-            copy_elem.set('i_off', str(copy.input_offset))
-            copy_elem.set('o_off', str(copy.output_offset))
         for tb in gpu.threadblocks:
             tb_elem = ET.SubElement(gpu_elem, 'tb')
             tb_elem.set('id', str(tb.rbid))
