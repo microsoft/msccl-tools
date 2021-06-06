@@ -363,21 +363,24 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     for key in sorted(csets, key=lambda x: len(csets[x]), reverse=True):
         idx, src, dst = key
         cset = csets[key]
-        if cset.issubset(tosort[src]) and cset.issubset(tosort[dst]):
+
+        def contiguous_in(buffer):
+            if not cset.issubset(buffer.keys()):
+                return False
+            for i in range(1, len(addrs)):
+                if buffer[addrs[i]] != buffer[addrs[i-1]] + 1:
+                    return False
+            return True
+        
+        # Check if either side is already contiguous
+        addrs = sorted(cset)
+        skip_src = contiguous_in(gpus[src].inputs) or contiguous_in(gpus[src].outputs) or contiguous_in(gpus[src].scratch)
+        skip_dst = contiguous_in(gpus[dst].inputs) or contiguous_in(gpus[dst].outputs) or contiguous_in(gpus[dst].scratch)
+
+        if (cset.issubset(tosort[src]) or skip_src) and (cset.issubset(tosort[dst]) or skip_dst):
             # Block these addresses from being sorted again on both GPUs
             tosort[src].difference_update(cset)
             tosort[dst].difference_update(cset)
-
-            # Check if either side is already contiguous in the input or output buffer
-            addrs = sorted(cset)
-            def contiguous_in(buffer):
-                if cset.issubset(buffer.keys()):
-                    for i in range(1, len(addrs)):
-                        if buffer[addrs[i]] != buffer[addrs[i-1]] + 1:
-                            return False
-                    return True
-            skip_src = contiguous_in(gpus[src].inputs) or contiguous_in(gpus[src].outputs)
-            skip_dst = contiguous_in(gpus[dst].inputs) or contiguous_in(gpus[dst].outputs)
 
             for addr in addrs:
                 def alloc(gpu):
@@ -598,7 +601,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             for tb in gpu.threadblocks:
                 if len(tb.steps) > 0:
                     tb.steps[0].depends.append(end_pre)
-        if len(gpu.precopies) > 0:
+        if len(gpu.postcopies) > 0:
             start_post = gpu.postcopies[0]
             for tb in gpu.threadblocks:
                 if len(tb.steps) > 0:
