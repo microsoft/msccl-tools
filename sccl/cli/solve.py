@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import sccl.strategies as strategies
+import sccl.nondet as nondet
 from .known_topologies import KnownTopologies
 from .known_collectives import KnownCollectives
 from .common import *
@@ -11,6 +12,7 @@ def make_solvers(cmd_parsers):
     handler_funcs.append(make_handle_solve_instance)
     handler_funcs.append(make_handle_solve_least_steps)
     handler_funcs.append(make_handle_solve_pareto_optimal)
+    handler_funcs.append(make_handle_solve_nondet)
 
     return make_cmd_category(cmd_parsers, 'solve', 'solver', handler_funcs)
 
@@ -48,6 +50,13 @@ def make_handle_solve_least_steps(cmd_parsers):
 
     cmd, handle = _make_handle_strategy(cmd_parsers, 'least-steps', invoke, take_steps=False)
     cmd.add_argument('--initial-steps', type=int, default=1, metavar='N')
+    return handle
+
+def make_handle_solve_nondet(cmd_parsers):
+    def invoke(args, topology, collective, instance):
+        return nondet.nondet_build(topology, collective, instance)
+
+    cmd, handle = _make_handle_strategy(cmd_parsers, 'nondet', invoke)
     return handle
 
 def make_handle_solve_pareto_optimal(cmd_parsers):

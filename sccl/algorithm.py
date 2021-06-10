@@ -52,10 +52,9 @@ class Algorithm(object):
 
         algo = cls(name, collective, topology, instance, steps, input_map, output_map)
         algo.check_implements(chunked)
-        if instance.extra_rounds > 0:
-            used_extra_rounds = algo.extra_rounds()
-            if used_extra_rounds > instance.extra_rounds:
-                raise ValueError(f'steps use {used_extra_rounds} extra rounds but only {instance.extra_rounds} were allowed')
+        used_extra_rounds = algo.extra_rounds()
+        if used_extra_rounds > instance.extra_rounds:
+            raise ValueError(f'steps use {used_extra_rounds} extra rounds but only {instance.extra_rounds} were allowed')
         return algo
 
     def ranks(self):
