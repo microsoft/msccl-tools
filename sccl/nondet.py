@@ -16,12 +16,14 @@ class _BwLimit:
 def nondet_build(topology, collective, instance):
     bools = {}
     def choose_bool(name):
+        # return True
         if not name in bools:
             bools[name] = random.choice([True, False])
         return bools[name]
 
     ints = {}
     def choose_int(name, a, b):
+        # return a
         if not name in ints:
             ints[name] = random.randint(a, b)
         return ints[name]
@@ -65,7 +67,9 @@ def nondet_build(topology, collective, instance):
         step.rounds = max(math.ceil(limit.util / limit.bw) for limit in bw_limits)
 
     # This is the running time of the algorithm (abstractly)
-    print(f'Rounds: {sum(step.rounds for step in real_steps)}')
+    rounds = sum(step.rounds for step in real_steps)
+    print(f'Rounds: {rounds}')
     
     # Check that this was a valid algorithm
+    instance = instance.set(extra_rounds = rounds - len(real_steps))
     return Algorithm.make_implementation(collective, topology, instance, real_steps)
