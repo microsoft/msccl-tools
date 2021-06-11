@@ -611,7 +611,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
 
     # Add all copies into extra threadblocks
     for rank, gpu in gpus.items():
-        cpy_tb = _Threadblock(-1)
+        cpy_tb = _Threadblock(0)
         cpy_tb.rbid = len(gpu.threadblocks)
         cpy_tb.steps = gpu.precopies + gpu.postcopies
         if len(gpu.precopies) > 0:
