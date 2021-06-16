@@ -338,80 +338,80 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             allocate_scratch(gpus[src], addr)
             allocate_scratch(gpus[dst], addr)
 
-    # Analyze liveness of indices in buffers and remap scratch into input/output as possible
     if remap_scratch:
+        # Analyze liveness of indices in buffers and remap scratch into input/output as possible
         liveness = _analyze_liveness(gpus, algorithm)
         _remap_scratch_into_input_output(liveness, gpus, logging)
+    else:
+        # Sort scratch mappings in an attempt to make more of them contiguous (this is of course a heuristic).
+        # The procedure first figures out the sets of addresses that would result in combined operations if
+        # the source and destination indices were contiguously allocated. These are then greedily allocated
+        # starting with the largest sets. Afterwards any remaining scratch mappings are allocated in order.
+        tosort = { rank: set(gpu.scratch.keys()).union(gpu.inputs.keys()).union(gpu.outputs.keys()) for rank, gpu in gpus.items() }
+        csets = defaultdict(set)
+        for idx, step in enumerate(algorithm.steps):
+            for addr, src, dst in step.sends:
+                if addr in tosort[src] and addr in tosort[dst]:
+                    csets[(idx, src, dst)].add(addr)
+        for gpu in gpus.values():
+            gpu.scratch = {}
+        for key in sorted(csets, key=lambda x: len(csets[x]), reverse=True):
+            idx, src, dst = key
+            cset = csets[key]
 
-    # Sort scratch mappings in an attempt to make more of them contiguous (this is of course a heuristic).
-    # The procedure first figures out the sets of addresses that would result in combined operations if
-    # the source and destination indices were contiguously allocated. These are then greedily allocated
-    # starting with the largest sets. Afterwards any remaining scratch mappings are allocated in order.
-    tosort = { rank: set(gpu.scratch.keys()).union(gpu.inputs.keys()).union(gpu.outputs.keys()) for rank, gpu in gpus.items() }
-    csets = defaultdict(set)
-    for idx, step in enumerate(algorithm.steps):
-        for addr, src, dst in step.sends:
-            if addr in tosort[src] and addr in tosort[dst]:
-                csets[(idx, src, dst)].add(addr)
-    for gpu in gpus.values():
-        gpu.scratch = {}
-    for key in sorted(csets, key=lambda x: len(csets[x]), reverse=True):
-        idx, src, dst = key
-        cset = csets[key]
-
-        def contiguous_in(buffer):
-            if not cset.issubset(buffer.keys()):
-                return False
-            for i in range(1, len(addrs)):
-                if buffer[addrs[i]] != buffer[addrs[i-1]] + 1:
+            def contiguous_in(buffer):
+                if not cset.issubset(buffer.keys()):
                     return False
-            return True
-        
-        # Check if either side is already contiguous
-        addrs = sorted(cset)
-        src_input_contig = contiguous_in(gpus[src].inputs)
-        skip_src = src_input_contig or contiguous_in(gpus[src].outputs) or contiguous_in(gpus[src].scratch)
-        dst_input_contig = contiguous_in(gpus[dst].inputs) 
-        skip_dst = dst_input_contig or contiguous_in(gpus[dst].outputs) or contiguous_in(gpus[dst].scratch)
+                for i in range(1, len(addrs)):
+                    if buffer[addrs[i]] != buffer[addrs[i-1]] + 1:
+                        return False
+                return True
+            
+            # Check if either side is already contiguous
+            addrs = sorted(cset)
+            src_input_contig = contiguous_in(gpus[src].inputs)
+            skip_src = src_input_contig or contiguous_in(gpus[src].outputs) or contiguous_in(gpus[src].scratch)
+            dst_input_contig = contiguous_in(gpus[dst].inputs) 
+            skip_dst = dst_input_contig or contiguous_in(gpus[dst].outputs) or contiguous_in(gpus[dst].scratch)
 
-        if (cset.issubset(tosort[src]) or skip_src) and (cset.issubset(tosort[dst]) or skip_dst):
-            # Block these addresses from being sorted again on both GPUs
-            tosort[src].difference_update(cset)
-            tosort[dst].difference_update(cset)
+            if (cset.issubset(tosort[src]) or skip_src) and (cset.issubset(tosort[dst]) or skip_dst):
+                # Block these addresses from being sorted again on both GPUs
+                tosort[src].difference_update(cset)
+                tosort[dst].difference_update(cset)
 
-            for addr in addrs:
-                def alloc(gpu, skip, prefer_input):
-                    if skip:
-                        # If not allocating in scratch, check if we need to make a copy and do a precopy if that allows
-                        # maintaining contiguity.
-                        if addr in gpu.inputs and addr in gpu.outputs:
-                            copy = _Op(rank, None, -1, False, 'cpy', 'i', gpu.inputs[addr], 'o', gpu.outputs[addr], 1, [])
-                            if prefer_input:
-                                gpu.postcopies.append(copy)
-                                del gpu.outputs[addr]
-                            else:
-                                gpu.precopies.append(copy)
+                for addr in addrs:
+                    def alloc(gpu, skip, prefer_input):
+                        if skip:
+                            # If not allocating in scratch, check if we need to make a copy and do a precopy if that allows
+                            # maintaining contiguity.
+                            if addr in gpu.inputs and addr in gpu.outputs:
+                                copy = _Op(rank, None, -1, False, 'cpy', 'i', gpu.inputs[addr], 'o', gpu.outputs[addr], 1, [])
+                                if prefer_input:
+                                    gpu.postcopies.append(copy)
+                                    del gpu.outputs[addr]
+                                else:
+                                    gpu.precopies.append(copy)
+                                    del gpu.inputs[addr]
+                        else:
+                            # Reallocate address in scratch and insert necessary copies for input/output addresses
+                            gpu.scratch[addr] = len(gpu.scratch)
+                            if addr in gpu.inputs:
+                                gpu.precopies.append(_Op(src, None, -1, False, 'cpy',
+                                    'i', gpu.inputs[addr], 's', gpu.scratch[addr], 1, []))
                                 del gpu.inputs[addr]
-                    else:
-                        # Reallocate address in scratch and insert necessary copies for input/output addresses
-                        gpu.scratch[addr] = len(gpu.scratch)
-                        if addr in gpu.inputs:
-                            gpu.precopies.append(_Op(src, None, -1, False, 'cpy',
-                                'i', gpu.inputs[addr], 's', gpu.scratch[addr], 1, []))
-                            del gpu.inputs[addr]
-                        if addr in gpu.outputs:
-                            gpu.postcopies.append(_Op(src, None, -1, False, 'cpy',
-                                's', gpu.scratch[addr], 'o', gpu.outputs[addr], 1, []))
-                            del gpu.outputs[addr]
-                alloc(gpus[src], skip_src, src_input_contig)
-                alloc(gpus[dst], skip_dst, dst_input_contig)
+                            if addr in gpu.outputs:
+                                gpu.postcopies.append(_Op(src, None, -1, False, 'cpy',
+                                    's', gpu.scratch[addr], 'o', gpu.outputs[addr], 1, []))
+                                del gpu.outputs[addr]
+                    alloc(gpus[src], skip_src, src_input_contig)
+                    alloc(gpus[dst], skip_dst, dst_input_contig)
 
-    # Allocate any remaining addresses that aren't already input or output
-    for rank in tosort:
-        gpu = gpus[rank]
-        for addr in sorted(tosort[rank]):
-            if not addr in gpu.inputs and not addr in gpu.outputs:
-                gpu.scratch[addr] = len(gpu.scratch)
+        # Allocate any remaining addresses that aren't already input or output
+        for rank in tosort:
+            gpu = gpus[rank]
+            for addr in sorted(tosort[rank]):
+                if not addr in gpu.inputs and not addr in gpu.outputs:
+                    gpu.scratch[addr] = len(gpu.scratch)
 
     # Add any copies from input to output that weren't already added
     for gpu in gpus.values():
