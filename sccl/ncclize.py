@@ -5,7 +5,7 @@ from lxml import etree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 import math
-import threading, queue, itertools
+import threading, queue, itertools, bisect
 from enum import Enum
 from z3 import *
 
@@ -212,80 +212,8 @@ def _remap_scratch_into_input_output(liveness, gpus, logging):
         max_scratch_overhead = max(gpu.scratch_size() / (gpu.input_chunks + gpu.output_chunks) for gpu in gpus.values())
         print(f'Maximum scratch overhead is {max_scratch_overhead * 100:.0f}%')
 
-def _allocate_channels_max_concurrency(op_sets, logging):
-    # This function solves a coloring problem to ops to a minimal set of channels
-    ctx = Context()
-
-    def chan(idx):
-        return Int(f'chan_{idx}', ctx=ctx)
-    max_channels = Int('max_channels', ctx=ctx)
-
-    constraints = []
-
-    # Add basic constraints and find conflicting sets of operations
-    conflict_groups = defaultdict(set)
-    for idx, op_set in enumerate(op_sets):
-        for op in op_set:
-            # Two operations conflict if they use the same src-dst edge on the same step
-            conflict_groups[(op.gpu, op.is_send, op.peer, op.step)].add(idx)
-        constraints.append(chan(idx) >= 0)
-        constraints.append(chan(idx) < max_channels)
-
-    # Require channels within the conflict groups to be disjoint
-    for grp in conflict_groups.values():
-        constraints.append(Distinct([chan(idx) for idx in grp]))
-
-    opt = Optimize(ctx=ctx)
-    opt.add(constraints)
-    opt.minimize(max_channels)
-    
-    t = threading.Thread(target=opt.check)
-    t.start()
-    t.join(1)
-    main_ctx().interrupt()
-    t.join()
-
-    try:
-        model = opt.model()
-    except Z3Exception:
-        # TODO: This altenate process does not guarantee that channels are contiguous
-        s = Solver(ctx=ctx)
-        s.add(constraints)
-        s.check()
-        model = s.model()
-            
-    if logging:
-        print(f'Using up to {model[max_channels].as_long()} channels')
-
-    # Group the operations by which channels they use
-    ops_by_channel = defaultdict(list)
-    for idx, op_set in enumerate(op_sets):
-        ops = ops_by_channel[model[chan(idx)].as_long()]
-        ops.extend(op_set)
-
-    return ops_by_channel
-
-def _allocate_channels_match_topology(op_sets, topology, instances, logging):
-    if len(topology.switches) > 0 and logging:
-        print('Warning: Switches in the topology are ignored for the channel policy MatchTopology.')
-
-    ops_by_channel = defaultdict(list)
-    next_channel = defaultdict(lambda: 0)
-    for op_set in op_sets:
-        send = op_set[0]
-        assert send.op_type == 's'
-        src = send.gpu
-        dst = send.peer
-        ops_by_channel[next_channel[(src,dst)]].extend(op_set)
-        link = topology.link(src,dst) * instances
-        assert link > 0, 'Encountered send on non-existent link'
-        next_channel[(src,dst)] = (next_channel[(src,dst)] + 1) % link
-
-    return ops_by_channel
-
 class ChannelPolicy(Enum):
     One = 'One'
-    MaxConcurrency = 'MaxConcurrency'
     MatchTopology = 'MatchTopology'
 
     def __str__(self):
@@ -486,7 +414,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
                 yield (srcbuff, srcoff, dstbuff, dstoff, 1)    
 
     # Turn all steps of the algorithm into operations
-    op_sets = []
+    ops_by_channel = defaultdict(list)
     # Track the latest op that wrote to each buffer index
     writers = defaultdict(list)
     # Track all the reads since the last write to each buffer index
@@ -503,15 +431,56 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         # Combine sends into intervals and create multiple instances if necessary
         sends = []
         for (src, dst), addrs in grouped_sends.items():
-            for src_buf, src_off, dst_buf, dst_off, cnt in make_intervals(src, dst, addrs):
+            intervals = list(make_intervals(src, dst, addrs))
+            if channel_policy == ChannelPolicy.One:
+                num_chans = 1
+                channeled_intervals = [ (src_buf, src_off, dst_buf, dst_off, cnt, 0) for src_buf, src_off, dst_buf, dst_off, cnt in intervals ]
+            elif channel_policy == ChannelPolicy.MatchTopology:
+                # Divide sends onto channels matching the topology (assume bw is ideal concurrency)
+                # Sends are split to balance channels if necessary
+                num_chans = algorithm.topology.link(src,dst)
+                channeled_intervals = []
+
+                intervals.sort(key=lambda x: x[4])
+                counts = [x[4] for x in intervals]
+                total = sum(counts)
+                targets = [(total//num_chans) + (1 if i < (total%num_chans) else 0) for i in range(num_chans)]
+
+                chan = 0
+                while len(intervals) > 0:
+                    if targets[chan] >= counts[-1]:
+                        i = -1
+                    else:
+                        i = bisect.bisect_left(counts, targets[chan])
+                        if i == len(counts) or counts[i] != targets[chan]:
+                            i = -1
+                    src_buf, src_off, dst_buf, dst_off, cnt = intervals[i]
+                    del intervals[i]
+                    del counts[i]
+                    if cnt > targets[chan]:
+                        rem = cnt - targets[chan]
+                        cnt = targets[chan]
+                        j = bisect.bisect_left(counts, rem)
+                        intervals.insert(j, (src_buf, src_off + cnt, dst_buf, dst_off + cnt, rem))
+                        counts.insert(j, rem)
+
+                    channeled_intervals.append((src_buf, src_off, dst_buf, dst_off, cnt, chan))
+                    targets[chan] -= cnt
+                    assert targets[chan] >= 0
+                    if targets[chan] == 0:
+                        chan += 1
+            else:
+                assert False, 'Unhandled channel policy'
+
+            for src_buf, src_off, dst_buf, dst_off, cnt, chan in channeled_intervals:
                 for i in range(instances):
                     new_src_off = src_off * instances + i * cnt
                     new_dst_off = dst_off * instances + i * cnt
-                    send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, cnt)
+                    send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, cnt, chan * instances + i)
                     sends.append(send)
 
         # Perform dependency tracking and create _Op instances
-        for src, dst, src_buf, src_off, dst_buf, dst_off, cnt in sends:
+        for src, dst, src_buf, src_off, dst_buf, dst_off, cnt, chan in sends:
             read_keys = [(src,src_buf,src_off+i) for i in range(cnt)]
             # A send must wait for the previous recv (if any) to finish
             send_depends = list(set(d for k in read_keys for d in writers[k]))
@@ -523,7 +492,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             send_op = _Op(src, dst, step_idx, True, 's', src_buf, src_off, dst_buf, dst_off, cnt, send_depends)
             recv_op = _Op(dst, src, step_idx, False, 'r', src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
             # Record the send and receive as a set of operations that must happen on the same channel
-            op_sets.append([send_op, recv_op])
+            ops_by_channel[chan].extend([send_op, recv_op])
 
             # Mark writers and readers to be added for the next step
             for k in write_keys:
@@ -558,16 +527,6 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             gpu.input_chunks *= instances
             gpu.output_chunks *= instances
             gpu.scratch = expand_mappings(gpu.scratch)
-
-    # Allocate channels and group operations by channel
-    if channel_policy == ChannelPolicy.One:
-        ops_by_channel = {0: [op for op_set in op_sets for op in op_set]}
-    elif channel_policy == ChannelPolicy.MaxConcurrency:
-        ops_by_channel = _allocate_channels_max_concurrency(op_sets, logging)
-    elif channel_policy == ChannelPolicy.MatchTopology:
-        ops_by_channel = _allocate_channels_match_topology(op_sets, algorithm.topology, instances, logging)
-    else:
-        assert False, 'Unhandled channel policy'
 
     # Group by which operations need to be in the same threadblock
     tb_groups = defaultdict(list)
