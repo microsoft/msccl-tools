@@ -68,14 +68,11 @@ def _analyze_liveness(gpus, algorithm):
     output_livenesses = {rank: [[(math.inf,math.inf)] for _ in range(gpu.output_chunks)] for rank, gpu in gpus.items()}
     scratch_livenesses = {rank: [[(math.inf,-1)] for addr, idx in gpu.scratch.items()] for rank, gpu in gpus.items()}
 
-    # For copies reserve the index in the output buffer from the very beginning
-    for rank, gpu in gpus.items():
-        for copy in gpu.copies:
-            output_livenesses[rank][copy.output_offset] = [(-1,math.inf)]
-
     def update_liveness(rank, addr, step_idx):
         gpu = gpus[rank]
         # Find the relevant buffer and livenesses for the address
+        # Addresses in both input and output are treated as input (as currently postcopies are inserted).
+        # TODO: This is a bit dangerous, as changing the other bit of code to do precopies would silently break this.
         if addr in gpu.inputs:
             buffer = gpu.inputs
             liveness = input_livenesses[rank]
