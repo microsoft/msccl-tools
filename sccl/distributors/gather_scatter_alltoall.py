@@ -6,7 +6,7 @@ from sccl.algorithm import *
 from sccl.instance import *
 from sccl.topologies import distributed_fully_connected
 
-def synthesize_gather_scatter_distributed_alltoall(num_copies, gather_algo, scatter_algo, logging=False):
+def synthesize_gather_scatter_distributed_alltoall(num_copies, gather_algo, scatter_algo, remote_bw=1, logging=False):
     if gather_algo.is_pipelined() or scatter_algo.is_pipelined():
         raise ValueError('Pipelining is not supported.')
 
@@ -83,7 +83,7 @@ def synthesize_gather_scatter_distributed_alltoall(num_copies, gather_algo, scat
         print(f'Multiplying chunks by {len(gather_roots)} to match the number of roots.')
 
     collective = alltoall(nodes)
-    topology = distributed_fully_connected(gather_algo.topology, num_copies, 1)
+    topology = distributed_fully_connected(gather_algo.topology, num_copies, remote_bw)
 
     def nth_chunk_for_pair(src, dst, idx):
         # The following chunk calculation respects both the _scattered and _transpose

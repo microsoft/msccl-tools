@@ -41,6 +41,7 @@ def make_handle_gather_scatter_alltoall(cmd_parsers):
     read_gather_algorithm = add_input_algorithm(cmd, name='gather')
     read_scatter_algorithm = add_input_algorithm(cmd, name='scatter')
     cmd.add_argument('--copies', type=int, metavar='N', required=True, help='copies of the local topology to be made')
+    cmd.add_argument('-bw', '--remote-bandwidth', type=int, default=1, help='remote bandwidth', metavar='N')
     validate_output_args, output_handler = add_output_algorithm(cmd)
 
     def handle(args, command):
@@ -50,7 +51,7 @@ def make_handle_gather_scatter_alltoall(cmd_parsers):
         gather_algorithm = read_gather_algorithm(args)
         scatter_algorithm = read_scatter_algorithm(args)
         validate_output_args(args)
-        algo = synthesize_gather_scatter_distributed_alltoall(args.copies, gather_algorithm, scatter_algorithm, logging=True)
+        algo = synthesize_gather_scatter_distributed_alltoall(args.copies, gather_algorithm, scatter_algorithm, args.remote_bandwidth, logging=True)
         output_handler(args, algo)
         return True
 
