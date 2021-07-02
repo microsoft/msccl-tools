@@ -559,6 +559,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     # Generate the XML structure
     algo_elem = ET.Element('algo')
     algo_elem.set('name', algorithm.name)
+    algo_elem.set('proto', 'Simple')
     algo_elem.set('nchannels', str(1 + max(max(tb.channel for tb in gpu.threadblocks) for gpu in gpus.values())))
     if old_format:
         algo_elem.set('nchunksperloop', str(max(max(gpu.input_chunks, gpu.output_chunks) for gpu in gpus.values())))
