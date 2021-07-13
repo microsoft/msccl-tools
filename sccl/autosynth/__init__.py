@@ -51,7 +51,7 @@ def init(logging=False):
     os.environ['SCCL_XML_FILE'] = ef_files[0]
 
     perm = plan.local_rank_permutation()
-    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(perm.nodes)
+    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(rank) for rank in perm.nodes)
 
 def detect_machine(logging):
     machine = _detect_nvidia_machine(logging)
