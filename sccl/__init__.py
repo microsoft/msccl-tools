@@ -3,5 +3,5 @@
 
 import sccl.autosynth as _autosynth
 
-def autosynth():
-    _autosynth.init()
+def autosynth(logging=False):
+    _autosynth.init(logging=logging)

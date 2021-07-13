@@ -21,7 +21,7 @@ def init(logging=False):
 
     collective_names = ['Alltoall']
 
-    machine = detect_machine()
+    machine = detect_machine(logging)
     plan = select_synthesis_plan(machine)
     names = comm.gather(machine[0], root=0)
     if rank == 0:
@@ -53,25 +53,32 @@ def init(logging=False):
     perm = plan.local_rank_permutation()
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(perm.nodes)
 
-def detect_machine():
-    machine = _detect_nvidia_machine()
+def detect_machine(logging):
+    machine = _detect_nvidia_machine(logging)
     if machine != None:
         return machine
     return ('unknown', None)
 
-def _detect_nvidia_machine():
+def _detect_nvidia_machine(logging):
     try:
         smi_topo = subprocess.check_output(['nvidia-smi', 'topo', '-m']).decode("utf-8")
     except FileNotFoundError:
         return None
     except subprocess.CalledProcessError:
+        if logging:
+            print('Found nvidia-smi, but got error.')
         return ('unknown', None)
 
     nvlink_topo = nvlink_only(smi_topo)
 
     if nvlink_topo.num_nodes == 8: # DGX-1 and DGX A100 like nodes
+        if logging:
+            print('8 GPUs, so looks like a DGX-1 or DGX A100.')
         if _is_one_host_ib_dgx1():
             return ('one_host_ib_dgx1', nvlink_topo)
+        else:
+            if logging:
+                print('Unknown network configuration.')
 
 def _is_one_host_ib_dgx1(smi_topo):
     ib_host = re.findall('^mlx\\d_\\d(\s+NODE)*\s+X(\s+NODE)*&', smi_topo, re.MULTILINE)
