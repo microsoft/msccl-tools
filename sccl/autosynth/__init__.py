@@ -60,9 +60,13 @@ def detect_machine(logging):
     return ('unknown', None)
 
 def _detect_nvidia_machine(logging):
+    if logging:
+        print('Checking for NVIDIA machines')
     try:
         smi_topo = subprocess.check_output(['nvidia-smi', 'topo', '-m']).decode("utf-8")
     except FileNotFoundError:
+        if logging:
+            print('nvidia-smi not found.')
         return None
     except subprocess.CalledProcessError:
         if logging:
@@ -71,14 +75,15 @@ def _detect_nvidia_machine(logging):
 
     nvlink_topo = nvlink_only(smi_topo)
 
-    if nvlink_topo.num_nodes == 8: # DGX-1 and DGX A100 like nodes
+    if nvlink_topo.num_nodes() == 8: # DGX-1 and DGX A100 like nodes
         if logging:
             print('8 GPUs, so looks like a DGX-1 or DGX A100.')
-        if _is_one_host_ib_dgx1():
+        if _is_one_host_ib_dgx1(smi_topo):
             return ('one_host_ib_dgx1', nvlink_topo)
         else:
             if logging:
                 print('Unknown network configuration.')
+    return ('unknown', None)
 
 def _is_one_host_ib_dgx1(smi_topo):
     ib_host = re.findall('^mlx\\d_\\d(?:\s+NODE)*\s+X(?:\s+NODE)*$', smi_topo, re.MULTILINE)
