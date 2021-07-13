@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from sccl.autosynth import detect_node_type
+import sccl.autosynth as as
 
 def autosynth():
-    node_type = detect_node_type()
+    as.init()
