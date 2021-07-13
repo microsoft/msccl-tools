@@ -82,3 +82,5 @@ def select_synthesis_plan(machine):
     machine_name, machine_info = machine
     if machine_name == 'one_host_ib_dgx1':
         return DGX1RelayNodePlan(machine_info)
+    else:
+        raise RuntimeError(f'Unhandled machine type {machine_name}.')
