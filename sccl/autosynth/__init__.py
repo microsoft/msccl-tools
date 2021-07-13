@@ -81,8 +81,8 @@ def _detect_nvidia_machine(logging):
                 print('Unknown network configuration.')
 
 def _is_one_host_ib_dgx1(smi_topo):
-    ib_host = re.findall('^mlx\\d_\\d(\s+NODE)*\s+X(\s+NODE)*&', smi_topo, re.MULTILINE)
-    ib_any = re.findall('^mlx\\d_\\d.*&', smi_topo, re.MULTILINE)
+    ib_host = re.findall('^mlx\\d_\\d(?:\s+NODE)*\s+X(?:\s+NODE)*$', smi_topo, re.MULTILINE)
+    ib_any = re.findall('^mlx\\d_\\d.*$', smi_topo, re.MULTILINE)
     return len(ib_host) == 1 and len(ib_any) == 1
 
 def select_synthesis_plan(machine):
