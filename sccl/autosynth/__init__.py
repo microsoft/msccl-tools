@@ -3,8 +3,11 @@
 
 from sccl.topologies.nvidia import nvlink_only
 from sccl.autosynth.dgx1_relay_node_plan import DGX1RelayNodePlan
+from sccl.ncclize import ncclize
 import subprocess
 import re
+import tempfile
+import os
 
 def init(logging=False):
     try:
@@ -16,15 +19,39 @@ def init(logging=False):
     size = comm.Get_size()
     rank = comm.Get_rank()
 
+    collective_names = ['Alltoall']
+
     machine = detect_machine()
+    plan = select_synthesis_plan(machine)
     names = comm.gather(machine[0], root=0)
     if rank == 0:
         for i in range(len(names) - 1):
             if names[i] != names[i+1]:
                 raise RuntimeError(f'Rank {i} detected machine as {names[i]} but rank {i+1} detected machine as {names[i+1]}.')
-        plan = select_synthesis_plan(machine)
-        for algo in plan.synthesize(size, ['Alltoall'], logging):
-            pass
+        efs = []
+        for name in collective_names:
+            algo = plan.synthesize(size, name, logging)
+            efs.append(ncclize(algo, old_format=True, use_scratch=True))
+    else:
+        efs = None
+    efs = comm.bcast(efs, root=0)
+
+    tempdir = tempfile.mkdtemp()
+    ef_files = []
+    for name, ef in zip(collective_names, efs):
+        ef_file = os.path.join(tempdir, f'{name}.xml')
+        ef_files.append(ef_file)
+        with open(ef_file, 'w') as f:
+            f.write(ef)
+        if logging:
+            print(f'Wrote to {ef_file}')
+
+    if len(ef_files) != 1:
+        raise RuntimeError(f'Only a single algorithm is supported currently by the NCCL backend, but got {len(efs)}.')
+    os.environ['SCCL_XML_FILE'] = ef_files[0]
+
+    perm = plan.local_rank_permutation()
+    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(perm.nodes)
 
 def detect_machine():
     machine = _detect_nvidia_machine()
