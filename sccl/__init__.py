@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-import sccl.autosynth as as
+import sccl.autosynth as _autosynth
 
-def autosynth():
-    as.init()
+def autosynth(logging=False):
+    _autosynth.init(logging=logging)
