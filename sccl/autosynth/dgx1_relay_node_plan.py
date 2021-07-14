@@ -6,6 +6,7 @@ from sccl.collectives import gather, scatter
 from sccl.strategies import solve_least_steps
 from sccl.distributors.gather_scatter_alltoall import synthesize_gather_scatter_distributed_alltoall
 from sccl.isomorphisms import find_isomorphisms
+import re, subprocess
 
 class DGX1RelayNodePlan:
     def __init__(self, local_topo):
@@ -38,5 +39,13 @@ class DGX1RelayNodePlan:
         return self._select_isomorphism(isomorphisms)
 
     def _select_isomorphism(self, isomorphisms):
-        # TODO: do the microbenchmarking
-        return isomorphisms[0]
+        topo_detect_output = subprocess.run(['inspector-topo'], capture_output=True, env={"CUDA_VISIBLE_DEIVCES":"0,1,2,3,4,5,6,7"}).stdout.decode('utf-9')
+        print(topo_detect_output)
+        g = re.search("GPU pair shared with NIC appears to be (\d) and (\d)", topo_detect_output)
+        if g is None:
+            raise RuntimeError(f'expected to detect a pair of GPUs connected to IB but something went wrong!')
+        ib_gpus = {g.group(1), g.group(2)}
+        for iso in isomorphisms:
+            if ib_gpus.intersection({iso[0],iso[2]}) == None:
+                return iso
+        return None
