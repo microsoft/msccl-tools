@@ -38,11 +38,10 @@ class DGX1RelayNodePlan:
         return self._select_isomorphism(isomorphisms)
 
     def _select_isomorphism(self, isomorphisms):
-        print("Running inspector-topo to find the IB placement. This will take a minute...")
-
         with open(os.path.join(tempfile.gettempdir(), 'sccl_autosynth_inspector_topo.lock'), "w") as lock_file:
             fcntl.lockf(lock_file, fcntl.LOCK_EX)
             try:
+                print("Running inspector-topo to find the IB placement. This will take a minute...")
                 topo_detect = subprocess.run(['/usr/local/bin/inspector-topo'], capture_output=True, env={"CUDA_VISIBLE_DEIVCES":"0,1,2,3,4,5,6,7"})
                 if topo_detect.returncode != 0:
                     raise RuntimeError(f'inspector-topo had a failure:\n{topo_detect.stdout}\n{topo_detect.stderr}')
