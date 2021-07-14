@@ -6,7 +6,7 @@ from sccl.collectives import gather, scatter
 from sccl.strategies import solve_least_steps
 from sccl.distributors.gather_scatter_alltoall import synthesize_gather_scatter_distributed_alltoall
 from sccl.isomorphisms import find_isomorphisms
-import re, subprocess
+import re, subprocess, fcntl, tempfile, os
 
 class DGX1RelayNodePlan:
     def __init__(self, local_topo):
@@ -39,16 +39,21 @@ class DGX1RelayNodePlan:
 
     def _select_isomorphism(self, isomorphisms):
         print("Running inspector-topo to find the IB placement. This will take a minute...")
-        topo_detect = subprocess.run(['/usr/local/bin/inspector-topo'], capture_output=True, env={"CUDA_VISIBLE_DEIVCES":"0,1,2,3,4,5,6,7"})
-        if topo_detect.returncode != 0:
-            raise RuntimeError(f'inspector-topo had a failure:\n{topo_detect.stdout}\n{topo_detect.stderr}')
-        topo_detect_output = topo_detect.stdout.decode('utf-8')
-        g = re.search("GPU pair shared with NIC appears to be (\d) and (\d)", topo_detect_output)
-        if g is None:
-            raise RuntimeError(f'expected to detect a pair of GPUs connected to IB but something went wrong!')
-        ib_gpus = {int(g.group(1)), int(g.group(2))}
-        for iso in isomorphisms:
-            if len(ib_gpus.intersection({iso.nodes[0],iso.nodes[2]})) == 0:
-                return iso
-        raise RuntimeError(f'expected an isomorphism to match our expectation but none of them did!')
-        return None
+
+        with open(os.join(tempfile.gettempdir(), 'sccl_autosynth_inspector_topo.lock'), "w") as lock_file:
+            fcntl.lockf(lock_file, fcntl.LOCK_EX)
+            try:
+                topo_detect = subprocess.run(['/usr/local/bin/inspector-topo'], capture_output=True, env={"CUDA_VISIBLE_DEIVCES":"0,1,2,3,4,5,6,7"})
+                if topo_detect.returncode != 0:
+                    raise RuntimeError(f'inspector-topo had a failure:\n{topo_detect.stdout}\n{topo_detect.stderr}')
+                topo_detect_output = topo_detect.stdout.decode('utf-8')
+                g = re.search("GPU pair shared with NIC appears to be (\d) and (\d)", topo_detect_output)
+                if g is None:
+                    raise RuntimeError(f'expected to detect a pair of GPUs connected to IB but something went wrong!')
+                ib_gpus = {int(g.group(1)), int(g.group(2))}
+                for iso in isomorphisms:
+                    if len(ib_gpus.intersection({iso.nodes[0],iso.nodes[2]})) == 0:
+                        return iso
+                raise RuntimeError(f'expected an isomorphism to match our expectation but none of them did!')
+            finally:
+                fcntl.lockf(lock_file, fcntl.LOCK_UN)
