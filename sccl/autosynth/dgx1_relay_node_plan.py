@@ -38,13 +38,17 @@ class DGX1RelayNodePlan:
         return self._select_isomorphism(isomorphisms)
 
     def _select_isomorphism(self, isomorphisms):
-        topo_detect_output = subprocess.run(['inspector-topo'], capture_output=True, env={"CUDA_VISIBLE_DEIVCES":"0,1,2,3,4,5,6,7"}).stdout.decode('utf-9')
-        print(topo_detect_output)
+        print("Running inspector-topo to find the IB placement. This will take a minute...")
+        topo_detect = subprocess.run(['/usr/local/bin/inspector-topo'], capture_output=True, env={"CUDA_VISIBLE_DEIVCES":"0,1,2,3,4,5,6,7"})
+        print(topo_detect)
+        topo_detect_output = topo_detect.stdout.decode('utf-8')
         g = re.search("GPU pair shared with NIC appears to be (\d) and (\d)", topo_detect_output)
         if g is None:
             raise RuntimeError(f'expected to detect a pair of GPUs connected to IB but something went wrong!')
-        ib_gpus = {g.group(1), g.group(2)}
+        ib_gpus = {int(g.group(1)), int(g.group(2))}
+        print(isomorphisms)
         for iso in isomorphisms:
-            if ib_gpus.intersection({iso[0],iso[2]}) == None:
+            if len(ib_gpus.intersection({iso.nodes[0],iso.nodes[2]})) == 0:
                 return iso
+        raise RuntimeError(f'expected an isomorphism to match our expectation but none of them did!')
         return None
