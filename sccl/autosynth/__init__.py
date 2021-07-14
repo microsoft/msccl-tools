@@ -4,12 +4,29 @@
 from sccl.topologies.nvidia import nvlink_only
 from sccl.autosynth.dgx1_relay_node_plan import DGX1RelayNodePlan
 from sccl.ncclize import ncclize
-import subprocess
-import re
-import tempfile
-import os
+import re, subprocess, fcntl, tempfile, os, json, glob
 
-def init(logging=False):
+def init(logging=False, torch_distributed_launch_hack=False):
+    if torch_distributed_launch_hack:
+        with open(os.path.join(tempfile.gettempdir(), 'sccl_autosynth_env.lock'), "r+") as f:
+            fcntl.lockf(f, fcntl.LOCK_EX)
+            try:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                f.seek(0)
+                if size > 0:
+                    env = json.load(f)
+                else:
+                    env = _autosynth_and_get_env(logging)
+                    json.dump(env, f)
+            finally:
+                fcntl.lockf(f, fcntl.LOCK_UN)
+    else:
+        env = _autosynth_and_get_env(logging)
+
+    os.environ.update(env)
+
+def _autosynth_and_get_env(logging):
     try:
         from mpi4py import MPI
     except ImportError as e:
@@ -48,10 +65,13 @@ def init(logging=False):
 
     if len(ef_files) != 1:
         raise RuntimeError(f'Only a single algorithm is supported currently by the NCCL backend, but got {len(efs)}.')
-    os.environ['SCCL_XML_FILE'] = ef_files[0]
 
     perm = plan.local_rank_permutation()
-    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(rank) for rank in perm)
+
+    return {
+        'SCCL_XML_FILE': ef_files[0],
+        'CUDA_VISIBLE_DEVICES': ','.join(str(rank) for rank in perm)
+    }
 
 def detect_machine(logging):
     machine = _detect_nvidia_machine(logging)
