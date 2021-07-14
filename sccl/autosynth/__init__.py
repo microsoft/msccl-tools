@@ -8,7 +8,7 @@ import re, subprocess, fcntl, tempfile, os, json, glob
 
 def init(logging=False, torch_distributed_launch_hack=False):
     if torch_distributed_launch_hack:
-        with open(os.path.join(tempfile.gettempdir(), 'sccl_autosynth_env.lock'), "r+") as f:
+        with open(os.path.join(tempfile.gettempdir(), 'sccl_autosynth_env.lock'), "w+") as f:
             fcntl.lockf(f, fcntl.LOCK_EX)
             try:
                 f.seek(0, os.SEEK_END)
