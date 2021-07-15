@@ -8,13 +8,12 @@ import re, subprocess, fcntl, tempfile, os, json, glob
 
 def init(num_subprocesses=1, logging=True):
     if num_subprocesses > 1:
-        with open(os.path.join(tempfile.gettempdir(), 'sccl_autosynth_env.lock'), "w+") as f:
+        with open(os.path.join(tempfile.gettempdir(), 'sccl_autosynth_env.lock'), "a+") as f:
             fcntl.lockf(f, fcntl.LOCK_EX)
             try:
-                f.seek(0, os.SEEK_END)
                 size = f.tell()
-                f.seek(0)
                 if size > 0:
+                    f.seek(0)
                     env = json.load(f)
                 else:
                     env = _autosynth_and_get_env(num_subprocesses, logging)

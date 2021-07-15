@@ -38,13 +38,12 @@ class DGX1RelayNodePlan:
         return self._select_isomorphism(isomorphisms)
 
     def _select_isomorphism(self, isomorphisms):
-        with open(os.path.join(tempfile.gettempdir(), 'sccl_autosynth_inspector_topo.lock'), "w+") as f:
+        with open(os.path.join(tempfile.gettempdir(), 'sccl_autosynth_inspector_topo.lock'), "a+") as f:
             fcntl.lockf(f, fcntl.LOCK_EX)
             try:
-                f.seek(0, os.SEEK_END)
                 size = f.tell()
-                f.seek(0)
                 if size > 0:
+                    f.seek(0)
                     nodes = json.load(f)
                     print(f'Read permutation {nodes} from {f.name}')
                     return nodes
