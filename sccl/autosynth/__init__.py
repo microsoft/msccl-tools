@@ -6,8 +6,8 @@ from sccl.autosynth.dgx1_relay_node_plan import DGX1RelayNodePlan
 from sccl.ncclize import ncclize
 import re, subprocess, fcntl, tempfile, os, json, glob
 
-def init(logging=False, torch_distributed_launch_hack=False):
-    if torch_distributed_launch_hack:
+def init(num_subprocesses=1, logging=True):
+    if num_subprocesses > 1:
         with open(os.path.join(tempfile.gettempdir(), 'sccl_autosynth_env.lock'), "w+") as f:
             fcntl.lockf(f, fcntl.LOCK_EX)
             try:
@@ -17,23 +17,23 @@ def init(logging=False, torch_distributed_launch_hack=False):
                 if size > 0:
                     env = json.load(f)
                 else:
-                    env = _autosynth_and_get_env(logging)
+                    env = _autosynth_and_get_env(num_subprocesses, logging)
                     json.dump(env, f)
             finally:
                 fcntl.lockf(f, fcntl.LOCK_UN)
     else:
-        env = _autosynth_and_get_env(logging)
+        env = _autosynth_and_get_env(num_subprocesses, logging)
 
     os.environ.update(env)
 
-def _autosynth_and_get_env(logging):
+def _autosynth_and_get_env(num_subprocesses, logging):
     try:
         from mpi4py import MPI
     except ImportError as e:
         print('Please install the mpi4py package to use SCCL autosynth.')
         raise e
     comm = MPI.COMM_WORLD
-    size = comm.Get_size()
+    size = comm.Get_size() * num_subprocesses
     rank = comm.Get_rank()
 
     collective_names = ['Alltoall']
