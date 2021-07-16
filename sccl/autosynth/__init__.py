@@ -7,7 +7,9 @@ from sccl.ncclize import ncclize
 import re, subprocess, tempfile, os, json, atexit, time
 
 def init(logging=True):
+    # Detect how this process was launched
     if 'LOCAL_RANK' in os.environ:
+        # Either torch.distributed.run or legacy run with --use_env
         has_subprocesses = True
         world_size = int(os.environ['WORLD_SIZE'])
         is_mpi_process = int(os.environ['LOCAL_RANK']) == 0
@@ -19,12 +21,14 @@ def init(logging=True):
         parser.add_argument("--local_rank", type=int)
         args = parser.parse_known_args()
         if args.local_rank != None:
+            # Legacy torch.distributed.launch without --use_env
             has_subprocesses = True
             world_size = int(os.environ['WORLD_SIZE'])
             is_mpi_process = args.local_rank == 0
             if logging:
                 print('SCCL: Found --local_rank N argument, legacy torch.distributed.launch without --use_env detected.')
         else:
+            # Pure MPI
             has_subprocesses = False
             world_size = None
             is_mpi_process = True
@@ -33,7 +37,9 @@ def init(logging=True):
     # Name environment file by parent PID, which will be shared between subprocesses for torch.distributed.(launch|run)
     env_file = os.path.join(tempfile.gettempdir(), f'sccl_autosynth_env.{os.getppid()}.lock')
     if is_mpi_process:
+        # Synthesize on MPI rank 0 and distribute to all MPI processes
         env = _autosynth_and_get_env(world_size, logging)
+        # If there are non-MPI subprocesses, they get the environment through a temporary file
         if has_subprocesses:
             # Make sure the lock file doesn't exist yet
             if os.path.exists(env_file):
@@ -41,7 +47,7 @@ def init(logging=True):
             # Broadcast algorithm to other subprocesses
             with open(env_file, "w") as f:
                 json.dump(env, f)
-            # Delete the environment file at local rank 0 exit
+            # Delete the environment file when the local MPI process exits
             atexit.register(os.remove, env_file)
     else:
         assert has_subprocesses
