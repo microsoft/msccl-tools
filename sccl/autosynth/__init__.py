@@ -7,12 +7,12 @@ from sccl.ncclize import ncclize
 import re, subprocess, tempfile, os, json, atexit, time
 
 def init(logging=True):
-    if 'LOCAL_WORLD_SIZE' in os.environ:
+    if 'LOCAL_RANK' in os.environ:
         has_subprocesses = True
-        world_size = os.environ['WORLD_SIZE']
-        is_mpi_process = os.environ['LOCAL_RANK'] == 0
+        world_size = int(os.environ['WORLD_SIZE'])
+        is_mpi_process = int(os.environ['LOCAL_RANK']) == 0
         if logging:
-            print(f'SCCL: Found LOCAL_WORLD_SIZE in environment, torch.distributed.run detected, with {os.environ["LOCAL_WORLD_SIZE"]} subprocesses per machine.')
+            print(f'SCCL: Found LOCAL_RANK in environment, torch.distributed.run (or launch with --use_env) detected.')
     else:
         import argparse
         parser = argparse.ArgumentParser()
@@ -20,10 +20,10 @@ def init(logging=True):
         args = parser.parse_known_args()
         if args.local_rank != None:
             has_subprocesses = True
-            world_size = os.environ['WORLD_SIZE']
-            is_mpi_process = args.local_rank == True
+            world_size = int(os.environ['WORLD_SIZE'])
+            is_mpi_process = args.local_rank == 0
             if logging:
-                print('SCCL: Found --local_rank N argument, legacy torch.distributed.launch detected, assuming one subprocess per GPU.')
+                print('SCCL: Found --local_rank N argument, legacy torch.distributed.launch without --use_env detected.')
         else:
             has_subprocesses = False
             world_size = None
