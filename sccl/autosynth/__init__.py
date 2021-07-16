@@ -19,7 +19,7 @@ def init(logging=True):
         import argparse
         parser = argparse.ArgumentParser()
         parser.add_argument("--local_rank", type=int)
-        args = parser.parse_known_args()
+        args, _ = parser.parse_known_args()
         if args.local_rank != None:
             # Legacy torch.distributed.launch without --use_env
             has_subprocesses = True
