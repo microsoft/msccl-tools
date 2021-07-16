@@ -71,7 +71,7 @@ def _autosynth_and_get_env(world_size, logging):
     try:
         from mpi4py import MPI
     except ImportError as e:
-        print('Please install the mpi4py package to use SCCL autosynth.')
+        print('SCCL: Please install the mpi4py package to use SCCL\'s automated init function.')
         raise e
     comm = MPI.COMM_WORLD
     mpi_size = comm.Get_size()
@@ -105,7 +105,7 @@ def _autosynth_and_get_env(world_size, logging):
         with open(ef_file, 'w') as f:
             f.write(ef)
         if logging:
-            print(f'Wrote to {ef_file}')
+            print(f'SCCL: Wrote to {ef_file}')
 
     if len(ef_files) != 1:
         raise RuntimeError(f'Only a single algorithm is supported currently by the NCCL backend, but got {len(efs)}.')
@@ -125,28 +125,28 @@ def detect_machine(logging):
 
 def _detect_nvidia_machine(logging):
     if logging:
-        print('Checking for NVIDIA machines')
+        print('SCCL: Checking for NVIDIA machines')
     try:
         smi_topo = subprocess.check_output(['nvidia-smi', 'topo', '-m']).decode("utf-8")
     except FileNotFoundError:
         if logging:
-            print('nvidia-smi not found.')
+            print('SCCL: nvidia-smi not found.')
         return None
     except subprocess.CalledProcessError:
         if logging:
-            print('Found nvidia-smi, but got error.')
+            print('SCCL: Found nvidia-smi, but got error.')
         return ('unknown', None)
 
     nvlink_topo = nvlink_only(smi_topo)
 
     if nvlink_topo.num_nodes() == 8: # DGX-1 and DGX A100 like nodes
         if logging:
-            print('8 GPUs, so looks like a DGX-1 or DGX A100.')
+            print('SCCL: 8 GPUs, so looks like a DGX-1 or DGX A100.')
         if _is_one_host_ib_dgx1(smi_topo):
             return ('one_host_ib_dgx1', nvlink_topo)
         else:
             if logging:
-                print('Unknown network configuration.')
+                print('SCCL: Unknown network configuration.')
     return ('unknown', None)
 
 def _is_one_host_ib_dgx1(smi_topo):
