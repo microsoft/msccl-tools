@@ -42,7 +42,7 @@ def init(logging=True):
             with open(env_file, "w") as f:
                 json.dump(env, f)
             # Delete the environment file at local rank 0 exit
-            atexit.register(os.remove(), env_file)
+            atexit.register(os.remove, env_file)
     else:
         assert has_subprocesses
         # Wait until the environment file is available
