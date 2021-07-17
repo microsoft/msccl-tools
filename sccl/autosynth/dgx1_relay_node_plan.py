@@ -38,7 +38,7 @@ class DGX1RelayNodePlan:
         return self._select_isomorphism(isomorphisms)
 
     def _select_isomorphism(self, isomorphisms, verbose=False):
-        with open(os.path.join(tempfile.gettempdir(), 'sccl_autosynth_inspector_topo.lock'), "a+") as f:
+        with open('/var/lock/sccl_autosynth_inspector_topo.lock', "a+") as f:
             fcntl.lockf(f, fcntl.LOCK_EX)
             try:
                 size = f.tell()
