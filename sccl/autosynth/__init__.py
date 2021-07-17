@@ -56,14 +56,13 @@ def init(verbose=False):
         while not os.path.exists(env_file):
             time.sleep(1)
             elapsed += 1
-            if elapsed == 10:
+            if elapsed == 60:
                 print(f'SCCL: Still waiting to read lock file {env_file}...')
         # Load the environment to set from the file
         with open(env_file, "r") as f:
             env = json.load(f)
 
     os.environ.update(env)
-    print('SCCL: Algorithms installed.')
 
 def _autosynth_and_get_env(world_size, verbose):
     try:
@@ -79,6 +78,8 @@ def _autosynth_and_get_env(world_size, verbose):
         world_size = mpi_size
 
     collective_names = ['Alltoall']
+    if mpi_rank == 0:
+        print(f'SCCL: Synthesizing algorithm(s) for {", ".join(collective_names)}...')
 
     machine = detect_machine(verbose)
     plan = select_synthesis_plan(machine)
