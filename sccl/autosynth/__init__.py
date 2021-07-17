@@ -6,14 +6,14 @@ from sccl.autosynth.dgx1_relay_node_plan import DGX1RelayNodePlan
 from sccl.ncclize import ncclize
 import re, subprocess, tempfile, os, json, atexit, time
 
-def init(logging=True):
+def init(verbose=False):
     # Detect how this process was launched
     if 'LOCAL_RANK' in os.environ:
         # Either torch.distributed.run or legacy run with --use_env
         has_subprocesses = True
         world_size = int(os.environ['WORLD_SIZE'])
         is_mpi_process = int(os.environ['LOCAL_RANK']) == 0
-        if logging:
+        if verbose:
             print(f'SCCL: Found LOCAL_RANK in environment, torch.distributed.run (or launch with --use_env) detected.')
     else:
         import argparse
@@ -25,20 +25,20 @@ def init(logging=True):
             has_subprocesses = True
             world_size = int(os.environ['WORLD_SIZE'])
             is_mpi_process = args.local_rank == 0
-            if logging:
+            if verbose:
                 print('SCCL: Found --local_rank N argument, legacy torch.distributed.launch without --use_env detected.')
         else:
             # Pure MPI
             has_subprocesses = False
             world_size = None
             is_mpi_process = True
-            if logging:
+            if verbose:
                 print(f'SCCL: No launcher detected, assuming one MPI rank per process.')
     # Name environment file by parent PID, which will be shared between subprocesses for torch.distributed.(launch|run)
     env_file = os.path.join(tempfile.gettempdir(), f'sccl_autosynth_env.{os.getppid()}.lock')
     if is_mpi_process:
         # Synthesize on MPI rank 0 and distribute to all MPI processes
-        env = _autosynth_and_get_env(world_size, logging)
+        env = _autosynth_and_get_env(world_size, verbose)
         # If there are non-MPI subprocesses, they get the environment through a temporary file
         if has_subprocesses:
             # Make sure the lock file doesn't exist yet
@@ -56,18 +56,16 @@ def init(logging=True):
         while not os.path.exists(env_file):
             time.sleep(1)
             elapsed += 1
-            if elapsed == 10 and logging:
+            if elapsed == 10:
                 print(f'SCCL: Still waiting to read lock file {env_file}...')
         # Load the environment to set from the file
         with open(env_file, "r") as f:
             env = json.load(f)
 
     os.environ.update(env)
+    print('SCCL: Algorithms installed.')
 
-    if logging:
-        print('SCCL: Algorithms installed.')
-
-def _autosynth_and_get_env(world_size, logging):
+def _autosynth_and_get_env(world_size, verbose):
     try:
         from mpi4py import MPI
     except ImportError as e:
@@ -82,7 +80,7 @@ def _autosynth_and_get_env(world_size, logging):
 
     collective_names = ['Alltoall']
 
-    machine = detect_machine(logging)
+    machine = detect_machine(verbose)
     plan = select_synthesis_plan(machine)
     names = comm.gather(machine[0], root=0)
     if mpi_rank == 0:
@@ -91,7 +89,7 @@ def _autosynth_and_get_env(world_size, logging):
                 raise RuntimeError(f'Rank {i} detected machine as {names[i]} but rank {i+1} detected machine as {names[i+1]}.')
         efs = []
         for name in collective_names:
-            algo = plan.synthesize(world_size, name, logging)
+            algo = plan.synthesize(world_size, name, verbose)
             efs.append(ncclize(algo, old_format=True, use_scratch=True))
     else:
         efs = None
@@ -104,7 +102,7 @@ def _autosynth_and_get_env(world_size, logging):
         ef_files.append(ef_file)
         with open(ef_file, 'w') as f:
             f.write(ef)
-        if logging:
+        if verbose:
             print(f'SCCL: Wrote to {ef_file}')
 
     if len(ef_files) != 1:
@@ -117,35 +115,35 @@ def _autosynth_and_get_env(world_size, logging):
         'CUDA_VISIBLE_DEVICES': ','.join(str(rank) for rank in perm)
     }
 
-def detect_machine(logging):
-    machine = _detect_nvidia_machine(logging)
+def detect_machine(verbose):
+    machine = _detect_nvidia_machine(verbose)
     if machine != None:
         return machine
     return ('unknown', None)
 
-def _detect_nvidia_machine(logging):
-    if logging:
+def _detect_nvidia_machine(verbose):
+    if verbose:
         print('SCCL: Checking for NVIDIA machines')
     try:
         smi_topo = subprocess.check_output(['nvidia-smi', 'topo', '-m']).decode("utf-8")
     except FileNotFoundError:
-        if logging:
+        if verbose:
             print('SCCL: nvidia-smi not found.')
         return None
     except subprocess.CalledProcessError:
-        if logging:
+        if verbose:
             print('SCCL: Found nvidia-smi, but got error.')
         return ('unknown', None)
 
     nvlink_topo = nvlink_only(smi_topo)
 
     if nvlink_topo.num_nodes() == 8: # DGX-1 and DGX A100 like nodes
-        if logging:
+        if verbose:
             print('SCCL: 8 GPUs, so looks like a DGX-1 or DGX A100.')
         if _is_one_host_ib_dgx1(smi_topo):
             return ('one_host_ib_dgx1', nvlink_topo)
         else:
-            if logging:
+            if verbose:
                 print('SCCL: Unknown network configuration.')
     return ('unknown', None)
 

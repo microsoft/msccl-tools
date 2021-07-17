@@ -37,7 +37,7 @@ class DGX1RelayNodePlan:
             raise RuntimeError(f'Expected to find 4 isomorphisms to DGX1 topology, but found {len(isomorphisms)}.')
         return self._select_isomorphism(isomorphisms)
 
-    def _select_isomorphism(self, isomorphisms):
+    def _select_isomorphism(self, isomorphisms, verbose=False):
         with open(os.path.join(tempfile.gettempdir(), 'sccl_autosynth_inspector_topo.lock'), "a+") as f:
             fcntl.lockf(f, fcntl.LOCK_EX)
             try:
@@ -45,7 +45,8 @@ class DGX1RelayNodePlan:
                 if size > 0:
                     f.seek(0)
                     nodes = json.load(f)
-                    print(f'SCCL: Read IB placement from {f.name}')
+                    if verbose:
+                        print(f'SCCL: Read IB placement from {f.name}')
                     return nodes
                 else:
                     print('SCCL: Running inspector-topo to find the IB placement. This will take a minute...')
@@ -61,7 +62,8 @@ class DGX1RelayNodePlan:
                         if len(ib_gpus.intersection({iso.nodes[0],iso.nodes[2]})) == 0:
                             nodes = iso.nodes
                             json.dump(nodes, f)
-                            print(f'SCCL: Wrote IB placement to {f.name}')
+                            if verbose:
+                                print(f'SCCL: Wrote IB placement to {f.name}')
                             return nodes
                     raise RuntimeError(f'expected an isomorphism to match our expectation but none of them did!')
             finally:
