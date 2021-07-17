@@ -35,7 +35,7 @@ def init(verbose=False):
             if verbose:
                 print(f'SCCL: No launcher detected, assuming one MPI rank per process.')
     # Name environment file by parent PID, which will be shared between subprocesses for torch.distributed.(launch|run)
-    env_file = os.path.join(tempfile.gettempdir(), f'sccl_autosynth_env.{os.getppid()}.lock')
+    env_file = f'/var/lock/sccl_autosynth_env.{os.getppid()}.lock'
     if is_mpi_process:
         # Synthesize on MPI rank 0 and distribute to all MPI processes
         env = _autosynth_and_get_env(world_size, verbose)
@@ -45,8 +45,9 @@ def init(verbose=False):
             if os.path.exists(env_file):
                 raise RuntimeError(f'SCCL: Lock file already exists: {env_file}')
             # Broadcast algorithm to other subprocesses
-            with open(env_file, "w") as f:
+            with tempfile.mkstemp() as (f, private_file):
                 json.dump(env, f)
+            os.rename(private_file, env_file)
             # Delete the environment file when the local MPI process exits
             atexit.register(os.remove, env_file)
     else:
