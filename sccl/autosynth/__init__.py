@@ -45,7 +45,8 @@ def init(verbose=False):
             if os.path.exists(env_file):
                 raise RuntimeError(f'SCCL: Lock file already exists: {env_file}')
             # Broadcast algorithm to other subprocesses
-            with tempfile.mkstemp() as (f, private_file):
+            fd, private_file = tempfile.mkstemp()
+            with open(fd, "w") as f:
                 json.dump(env, f)
             os.rename(private_file, env_file)
             # Delete the environment file when the local MPI process exits
