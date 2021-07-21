@@ -7,6 +7,15 @@ from sccl.ncclize import ncclize
 import re, subprocess, tempfile, os, json, atexit, time
 
 def init(verbose=False):
+    env = _autosynth_assume_deterministic_z3_and_ompi(verbose)
+    os.environ.update(env)
+    return
+
+    # The code below does not work in all usecases with PyTorch, due to mpi4py calling MPI_Init, which
+    # some part of PyTorch cannot tolerate. The other way around would work, importing mpi4py after
+    # torch.distributed has initialized, but currently the SCCL interpreter in NCCL cannot load new algorithms
+    # after initialization. Once this dynamic loading support lands the code path below can be re-enabled.
+
     # Detect how this process was launched
     if 'LOCAL_RANK' in os.environ:
         # Either torch.distributed.run or legacy run with --use_env
@@ -65,6 +74,52 @@ def init(verbose=False):
             env = json.load(f)
 
     os.environ.update(env)
+
+def _autosynth_assume_deterministic_z3_and_ompi(verbose):
+    rank = None
+    if 'WORLD_SIZE' in os.environ:
+        # We're in a PyTorch launcher compatible script
+        world_size = int(os.environ['WORLD_SIZE'])
+        if 'RANK' in os.environ:
+            rank = int(os.environ['RANK'])
+    else:
+        if not 'OMPI_COMM_WORLD_SIZE' in os.environ:
+            print('SCCL: Could not detect world size. Please set either WORLD_SIZE or OMPI_COMM_WORLD_SIZE to total number of processes.')
+            raise RuntimeError('Could not detect world size.')
+        world_size = int(os.environ['OMPI_COMM_WORLD_SIZE'])
+        if 'OMPI_COMM_WORLD_RANK' in os.environ:
+            rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
+
+    collective_names = ['Alltoall']
+    if rank == 0:
+        print(f'SCCL: Synthesizing algorithm(s) for {", ".join(collective_names)}...')
+    
+    machine = detect_machine(verbose)
+    plan = select_synthesis_plan(machine)
+    efs = []
+    for name in collective_names:
+        algo = plan.synthesize(world_size, name, verbose)
+        efs.append(ncclize(algo, old_format=True, use_scratch=True))
+
+    tempdir = tempfile.mkdtemp()
+    ef_files = []
+    for name, ef in zip(collective_names, efs):
+        ef_file = os.path.join(tempdir, f'{name}.xml')
+        ef_files.append(ef_file)
+        with open(ef_file, 'w') as f:
+            f.write(ef)
+        if verbose:
+            print(f'SCCL: Wrote to {ef_file}')
+
+    if len(ef_files) != 1:
+        raise RuntimeError(f'Only a single algorithm is supported currently by the NCCL backend, but got {len(efs)}.')
+
+    perm = plan.local_rank_permutation()
+
+    return {
+        'SCCL_XML_FILE': ef_files[0],
+        'CUDA_VISIBLE_DEVICES': ','.join(str(rank) for rank in perm)
+    }
 
 def _autosynth_and_get_env(world_size, verbose):
     try:
