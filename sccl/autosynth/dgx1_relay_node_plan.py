@@ -37,10 +37,11 @@ class DGX1RelayNodePlan:
             raise RuntimeError(f'Expected to find 4 isomorphisms to DGX1 topology, but found {len(isomorphisms)}.')
         return self._select_isomorphism(isomorphisms)
 
-    def _select_isomorphism(self, isomorphisms, verbose=False):
+    def _select_isomorphism(self, isomorphisms, verbose=True):
         with open('/var/lock/sccl_autosynth_inspector_topo.lock', "a+") as f:
             fcntl.lockf(f, fcntl.LOCK_EX)
             try:
+                f.seek(0, 2)
                 size = f.tell()
                 if size > 0:
                     f.seek(0)
@@ -49,8 +50,9 @@ class DGX1RelayNodePlan:
                         print(f'SCCL: Read IB placement from {f.name}')
                     return nodes
                 else:
-                    print('SCCL: Running inspector-topo to find the IB placement. This will take a minute...')
-                    topo_detect = subprocess.run(['/usr/local/bin/inspector-topo'], capture_output=True, env={"CUDA_VISIBLE_DEIVCES":"0,1,2,3,4,5,6,7"})
+                    print('SCCL: Running inspector-topo to find the IB placement. This will take a couple of minutes...')
+                    topo_detect = subprocess.run(['/usr/local/bin/inspector-topo'], capture_output=True, env={"CUDA_VISIBLE_DEVICES":"0,1,2,3,4,5,6,7"})
+                    print('SCCL: Finished running inspector-topo. Finding the permutaion.')
                     if topo_detect.returncode != 0:
                         raise RuntimeError(f'inspector-topo had a failure:\n{topo_detect.stdout}\n{topo_detect.stderr}')
                     topo_detect_output = topo_detect.stdout.decode('utf-8')
@@ -62,6 +64,7 @@ class DGX1RelayNodePlan:
                         if len(ib_gpus.intersection({iso.nodes[0],iso.nodes[2]})) == 0:
                             nodes = iso.nodes
                             json.dump(nodes, f)
+                            f.flush()
                             if verbose:
                                 print(f'SCCL: Wrote IB placement to {f.name}')
                             return nodes

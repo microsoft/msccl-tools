@@ -118,7 +118,9 @@ def _autosynth_assume_deterministic_z3_and_ompi(verbose):
 
     return {
         'SCCL_XML_FILE': ef_files[0],
-        'CUDA_VISIBLE_DEVICES': ','.join(str(rank) for rank in perm)
+        'CUDA_VISIBLE_DEVICES': ','.join(str(rank) for rank in perm),
+        'NCCL_NET_SHARED_BUFFERS': '0',
+        'NCCL_MIN_NCHANNELS': str(algo.nchannels)
     }
 
 def _autosynth_and_get_env(world_size, verbose):
