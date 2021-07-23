@@ -12,6 +12,9 @@ setup(
             'sccl = sccl.__main__:main',
         ],
     },
+    scripts = [
+        'sccl/autosynth/sccl_ndv2_launcher.sh'
+    ],
     install_requires=[
         'dataclasses; python_version < "3.7"',
         'z3-solver',
