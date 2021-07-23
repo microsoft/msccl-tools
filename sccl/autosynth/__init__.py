@@ -75,6 +75,14 @@ def init(verbose=False):
 
     os.environ.update(env)
 
+def ndv2_perm(verbose=True):
+    machine = detect_machine(verbose)
+    if machine[1] == None:
+        return
+    plan = select_synthesis_plan(machine)
+    plan.local_rank_permutation()
+    
+
 def _autosynth_assume_deterministic_z3_and_ompi(verbose):
     rank = None
     if 'WORLD_SIZE' in os.environ:
@@ -99,7 +107,7 @@ def _autosynth_assume_deterministic_z3_and_ompi(verbose):
     efs = []
     for name in collective_names:
         algo = plan.synthesize(world_size, name, verbose)
-        efs.append(ncclize(algo, old_format=True, use_scratch=True))
+        efs.append(ncclize(algo, old_format=True, use_scratch=True, instances=8))
 
     tempdir = tempfile.mkdtemp()
     ef_files = []
@@ -114,11 +122,8 @@ def _autosynth_assume_deterministic_z3_and_ompi(verbose):
     if len(ef_files) != 1:
         raise RuntimeError(f'Only a single algorithm is supported currently by the NCCL backend, but got {len(efs)}.')
 
-    perm = plan.local_rank_permutation()
-
     return {
         'SCCL_XML_FILE': ef_files[0],
-        'CUDA_VISIBLE_DEVICES': ','.join(str(rank) for rank in perm),
         'NCCL_NET_SHARED_BUFFERS': '0',
         'NCCL_MIN_NCHANNELS': str(algo.nchannels)
     }
