@@ -45,10 +45,10 @@ class DGX1RelayNodePlan:
                 size = f.tell()
                 if size > 0:
                     f.seek(0)
-                    nodes = json.load(f)
+                    order = f.read()
                     if verbose:
                         print(f'SCCL: Read IB placement from {f.name}')
-                    return nodes
+                    return order
                 else:
                     print('SCCL: Running inspector-topo to find the IB placement. This will take a couple of minutes...')
                     topo_detect = subprocess.run(['/usr/local/bin/inspector-topo'], capture_output=True, env={"CUDA_VISIBLE_DEVICES":"0,1,2,3,4,5,6,7"})
@@ -63,11 +63,12 @@ class DGX1RelayNodePlan:
                     for iso in isomorphisms:
                         if len(ib_gpus.intersection({iso.nodes[0],iso.nodes[2]})) == 0:
                             nodes = iso.nodes
-                            json.dump(nodes, f)
+                            order = ",".join(str(rank) for rank in nodes)
+                            f.write(order)
                             f.flush()
                             if verbose:
                                 print(f'SCCL: Wrote IB placement to {f.name}')
-                            return nodes
+                            return order
                     raise RuntimeError(f'expected an isomorphism to match our expectation but none of them did!')
             finally:
                 fcntl.lockf(f, fcntl.LOCK_UN)
