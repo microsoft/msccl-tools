@@ -146,6 +146,9 @@ def _autosynth_and_get_env(world_size, verbose):
         print(f'SCCL: Synthesizing algorithm(s) for {", ".join(collective_names)}...')
 
     machine = detect_machine(verbose)
+    machine_name, machine_info = machine
+    if machine_name == "unknown":
+        return {}
     plan = select_synthesis_plan(machine)
     names = comm.gather(machine[0], root=0)
     if mpi_rank == 0:
