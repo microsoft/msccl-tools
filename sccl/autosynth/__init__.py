@@ -92,8 +92,8 @@ def _autosynth_assume_deterministic_z3_and_ompi(verbose):
             rank = int(os.environ['RANK'])
     else:
         if not 'OMPI_COMM_WORLD_SIZE' in os.environ:
-            print('SCCL: Could not detect world size. Please set either WORLD_SIZE or OMPI_COMM_WORLD_SIZE to total number of processes.')
-            raise RuntimeError('Could not detect world size.')
+            print('SCCL: Could not detect world size and import SCCL will be ignored.')
+            return {}
         world_size = int(os.environ['OMPI_COMM_WORLD_SIZE'])
         if 'OMPI_COMM_WORLD_RANK' in os.environ:
             rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
