@@ -102,6 +102,7 @@ def _autosynth_assume_deterministic_z3_and_ompi(verbose):
     if rank == 0:
         print(f'SCCL: Synthesizing algorithm(s) for {", ".join(collective_names)}...')
     
+    machine = detect_machine(verbose)
     machine_name, machine_info = machine
     if machine_name == "unknown":
         print("SCCL could not detect the type of machine. import sccl will be ignored.")
