@@ -31,6 +31,10 @@ class DGX1RelayNodePlan:
         # TODO: is this always the right thing?
         return (0,1)
 
+    def is_dgx1(self):
+        isomorphisms = find_isomorphisms(dgx1(), self.local_topo)
+        return len(isomorphisms) == 4
+            
     def local_rank_permutation(self):
         isomorphisms = find_isomorphisms(dgx1(), self.local_topo)
         if len(isomorphisms) != 4:

@@ -92,7 +92,7 @@ def _autosynth_assume_deterministic_z3_and_ompi(verbose):
             rank = int(os.environ['RANK'])
     else:
         if not 'OMPI_COMM_WORLD_SIZE' in os.environ:
-            print('SCCL: Could not detect world size and import SCCL will be ignored.')
+            print('SCCL info: Could not detect world size and import SCCL will be ignored.')
             return {}
         world_size = int(os.environ['OMPI_COMM_WORLD_SIZE'])
         if 'OMPI_COMM_WORLD_RANK' in os.environ:
@@ -100,14 +100,20 @@ def _autosynth_assume_deterministic_z3_and_ompi(verbose):
 
     collective_names = ['Alltoall']
     if rank == 0:
-        print(f'SCCL: Synthesizing algorithm(s) for {", ".join(collective_names)}...')
+        print(f'SCCL info: Synthesizing algorithm(s) for {", ".join(collective_names)}...')
     
     machine = detect_machine(verbose)
     machine_name, machine_info = machine
     if machine_name == "unknown":
-        print("SCCL could not detect the type of machine. import sccl will be ignored.")
+        print("SCCL warning: could not detect the type of machine. import sccl will be ignored.")
+        return {}
+    if world_size != 16:
+        print(f'SCCL warning: currently only generates alltoall for 2 ndv2 nodes. import sccl will be ignored.')
         return {}
     plan = select_synthesis_plan(machine)
+    if plan.is_dgx1() == False:
+        print(f'SCCL warning: the node does seem like a ndv2. import sccl will be ignored.')
+        return {}
     efs = []
     for name in collective_names:
         algo = plan.synthesize(world_size, name, verbose)
@@ -124,7 +130,7 @@ def _autosynth_assume_deterministic_z3_and_ompi(verbose):
             print(f'SCCL: Wrote to {ef_file}')
 
     if len(ef_files) != 1:
-        raise RuntimeError(f'Only a single algorithm is supported currently by the NCCL backend, but got {len(efs)}.')
+        raise RuntimeError(f'SCCL error: only a single algorithm is supported currently by the NCCL backend, but got {len(efs)}.')
 
     return {
         'SCCL_XML_FILE': ef_files[0],
@@ -195,16 +201,16 @@ def detect_machine(verbose):
 
 def _detect_nvidia_machine(verbose):
     if verbose:
-        print('SCCL: Checking for NVIDIA machines')
+        print('SCCL info: Checking for NVIDIA machines')
     try:
         smi_topo = subprocess.check_output(['nvidia-smi', 'topo', '-m']).decode("utf-8")
     except FileNotFoundError:
         if verbose:
-            print('SCCL: nvidia-smi not found.')
+            print('SCCL info: nvidia-smi not found.')
         return None
     except subprocess.CalledProcessError:
         if verbose:
-            print('SCCL: Found nvidia-smi, but got error.')
+            print('SCCL warning: Found nvidia-smi, but got error.')
         return ('unknown', None)
 
     nvlink_topo = nvlink_only(smi_topo)
