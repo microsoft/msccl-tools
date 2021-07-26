@@ -563,6 +563,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     nchannels = 1 + max(max(tb.channel for tb in gpu.threadblocks) for gpu in gpus.values())
     algorithm.nchannels = nchannels
     algo_elem.set('nchannels', str(nchannels))
+    algo_elem.set('ngpus', str(len(gpus)))
     if old_format:
         algo_elem.set('nchunksperloop', str(max(max(gpu.input_chunks, gpu.output_chunks) for gpu in gpus.values())))
     for rank, gpu in gpus.items():
