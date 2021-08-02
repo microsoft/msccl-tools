@@ -100,11 +100,11 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                 if op.inst in _local_src_insts:
                     key = (gpu.rank, op.src.buffer)
                     buffer_sizes[key] = max(
-                        buffer_sizes[key], op.src.index + 1)
+                        buffer_sizes[key], op.src.index + op.src.size)
                 if op.inst in _local_dst_insts:
                     key = (gpu.rank, op.dst.buffer)
                     buffer_sizes[key] = max(
-                        buffer_sizes[key], op.dst.index + 1)
+                        buffer_sizes[key], op.dst.index + op.dst.size)
 
     tb_id = {}
     # Sort threadblocks in each GPU by peers and then the channel
