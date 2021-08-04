@@ -79,7 +79,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
     # topology = NDv4(num_nodes, gpus_per_node)
     topology = fully_connected(num_ranks)
     collective = alltoall(num_ranks)
-    s = 0
+    s = 0 # Setting steps is hacky right now
     with SCCLProgram("hierarchical_all_to_all", collective, topology):
         for r1 in range(num_ranks):
             for r2 in range(num_ranks):
@@ -117,5 +117,5 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                     # copy input to output.
         XML()
         Check()
-# allgather_ring(8)
+allgather_ring(8)
 alltoall_hierarchical(4, 3)
