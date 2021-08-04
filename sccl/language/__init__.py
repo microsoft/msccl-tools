@@ -21,13 +21,15 @@ class SCCLProgram:
         # Initialize the chunks on each rank according to the precondition
         self.ranks = []
         for r in collective.ranks():
-            chunks = []
+            input_chunks = [None] * collective.num_chunks
+            output_chunks = [None] * collective.num_chunks
+            scratch_chunks = [None] * collective.num_chunks
             for c in collective.chunks():
                 if collective.precondition(r, c):
-                    chunks.append(Ref(Buffer.input, c, 1, self, r))
-                else:
-                    chunks.append(None)
-            # print(f'Rank:{r} Chunks:{chunks}')
+                    input_chunks[c] = Ref(Buffer.input, c, 1, self, r)
+            chunks = {Buffer.input : input_chunks, 
+                      Buffer.output : output_chunks, 
+                      Buffer.scratch : scratch_chunks}
             self.ranks.append(Process(self, r, chunks))
 
     def rank(self, rank):
@@ -38,8 +40,9 @@ class SCCLProgram:
     def check(self):
         correct = True
         for r in self.collective.ranks():
+            output_chunks = self.ranks[r].chunks[Buffer.output]
             for c in self.collective.chunks():
-                if self.collective.postcondition(r, c) and self.ranks[r].chunks[c] is None:
+                if self.collective.postcondition(r, c) and output_chunks[c] is None:
                     print(f'Rank {r} chunk {c} is missing')
                     correct = False
         return correct
@@ -80,7 +83,7 @@ class Process:
     def input(self, id):
         # TODO: mark input
         # return Ref(self.prog, self, id)
-        return self.chunks[id]
+        return self.chunks[Buffer.input][id]
 
     def _add_send(self, tbid, step, ch, op):
         # print(f'Send {op.dst.index} from {op.src.rank} to {op.dst.rank} {tbid} {step}')
@@ -99,7 +102,7 @@ class Process:
     def _add_recv(self, tbid, step, ch, op):
         assert(op.inst == Instruction.recv)
         recvd_chunk = op.dst
-        self.chunks[recvd_chunk.index] = recvd_chunk
+        self.chunks[recvd_chunk.buffer][recvd_chunk.index] = recvd_chunk
         # print(f"{self.rank} adds chunk to index {recvd_chunk.index}")
         receivefrom = op.src.rank
         if tbid not in self.tbs:
@@ -115,6 +118,7 @@ class Process:
 
     def _add_copy(self, tbid, step, ch, op):
         assert(op.inst == Instruction.copy)
+        self.chunks[op.dst.buffer][op.dst.index] = op.dst
         if tbid not in self.tbs:
             self.tbs[tbid] = Threadblock(ch, ops={step: op})
         else:
