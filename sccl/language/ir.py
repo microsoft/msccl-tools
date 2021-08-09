@@ -152,6 +152,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                         #op_tb_id[new_ops[-1]] = op_tb_id[op]
                 new_ops.append(op)
                 op_idx[new_ops[-1]] = len(new_ops) - 1
+            tb.ops = new_ops
 
     # Generate the XML structure
     algo_elem = ET.Element('algo')

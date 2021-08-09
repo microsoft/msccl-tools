@@ -20,13 +20,15 @@ class SCCLProgram:
         self.topo = topo
         # Initialize the chunks on each rank according to the precondition
         self.ranks = []
+        # TODO: Clean this up - not using the collective
+        num_chunks = topo.num_nodes()
         for r in collective.ranks():
-            input_chunks = [None] * collective.num_chunks
-            output_chunks = [None] * collective.num_chunks
-            scratch_chunks = [None] * collective.num_chunks
-            for c in collective.chunks():
-                if collective.precondition(r, c):
-                    input_chunks[c] = Ref(Buffer.input, c, 1, self, r)
+            input_chunks = [None] * num_chunks
+            output_chunks = [None] * num_chunks
+            scratch_chunks = [None] * num_chunks * num_chunks
+            # for c in collective.chunks():
+            #     if collective.precondition(r, c):
+            #         input_chunks[c] = Ref(Buffer.input, c, 1, self, r, [])
             chunks = {Buffer.input : input_chunks, 
                       Buffer.output : output_chunks, 
                       Buffer.scratch : scratch_chunks}
@@ -36,7 +38,7 @@ class SCCLProgram:
         return self.ranks[rank]
 
     # Checks that all chunks that should be on each rank
-    # are present. Does not check if they are ordered correctly.
+    # are present in the output buffer.
     def check(self):
         correct = True
         for r in self.collective.ranks():
@@ -80,10 +82,10 @@ class Process:
         self.chunks = chunks
         self.tbs = {}
     
-    def input(self, id):
-        # TODO: mark input
-        # return Ref(self.prog, self, id)
-        return self.chunks[Buffer.input][id]
+    def input(self, index):
+        c = Ref(Buffer.input, index, 1, self.prog, self.rank, [])
+        self.chunks[Buffer.input][index] = c
+        return c
 
     def _add_send(self, tbid, step, ch, op):
         # print(f'Send {op.dst.index} from {op.src.rank} to {op.dst.rank} {tbid} {step}')
@@ -111,7 +113,6 @@ class Process:
             tb = self.tbs[tbid]
             assert (tb.recv == -1 or tb.recv == receivefrom), \
                    f'Rank {self.rank}: Threadblock {tbid} is already set to receive from {tb.recv}, trying to receive from {receivefrom}'
-
             tb.recv = receivefrom
             assert step not in tb.ops, f'Step {step} in rank {self.rank} tbid {tbid}'
             tb.ops[step] = op
@@ -134,34 +135,58 @@ class Process:
 class Ref(ChunkRef):
     prog: SCCLProgram
     rank: int
-    hops: int = 0 
-    creator: Op = None
+    creator: list
 
-    def _get_ref(self, dst, buffer, index, size):
+    def _get_ref(self, dst, buffer, index):
         index = self.index if index == -1 else index
-        size = self.size if size == -1 else size
-        return Ref(buffer, index, self.size, self.prog, dst, self.hops+1, self)
+        return Ref(buffer, index, self.size, self.prog, dst, [])
 
-    def send(self, dst, size=-1, step=-1, sendtb=-1, recvtb=-1, ch=0, buffer=Buffer.output, index=-1):
+    def split(self, num):
+        assert (self.size % num == 0), 'Trying to split a chunk of {self.size} elements into {num} parts'
+        chunks = [None] * num
+        size = self.size // num
+        for i in range(num):
+            index = self.index + i * size
+            chunks[i] = Ref(self.buffer, index, size, self.prog, self.rank, self.creator)
+        return chunks
+
+    def concatenate(self, other):
+        assert (self.rank == other.rank), f'Trying to concatenate chunks on ranks {self.rank} and {other.rank}'
+        assert (self.buffer == other.buffer), f'Trying to concatenate chunks in {self.buffer} and {other.buffer}'
+        if self.index < other.index:
+            first = self
+            second = other
+        else:
+            first = other
+            second = self
+        # TODO: Check somewhere that all chunks are valid before sending
+        # Merge the creators
+        return  Ref(self.buffer, first.index, first.size + second.size, self.prog, self.rank, self.creator + other.creator)
+        
+
+    def send(self, dst, buffer=Buffer.output, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
+        # Local copy
+        if dst == self.rank:
+            return self._copy(buffer, index, step, sendtb, ch)
+        # Direct send
         sendtb = dst if sendtb == -1 else sendtb
         recvtb = self.rank if recvtb == -1 else recvtb
-        dstchunk = self._get_ref(dst, buffer, index, size)
-        depends = [] if self.creator is None else [self.creator]
-        self.prog.ranks[self.rank]._add_send(sendtb, step, ch, Op(Instruction.send, self, dstchunk, depends))
+        dstchunk = self._get_ref(dst, buffer, index)
+        self.prog.ranks[self.rank]._add_send(sendtb, step, ch, Op(Instruction.send, self, dstchunk, self.creator))
         receiveInstr = Op(Instruction.recv, self, dstchunk, [])
         self.prog.ranks[dst]._add_recv(recvtb, step, ch, receiveInstr)
-        dstchunk.creator = receiveInstr
+        dstchunk.creator.append(receiveInstr)
         return dstchunk
     
-    def wait(self, steps):
-        # TODO: fix this - I don't think we need this anymore?
-        future = Ref(self.prog, self.proc, )
-        self.prog._add_op(TransferOp(OpCode.Wait, self, future))
-        return future
+    # def wait(self, steps):
+    #     # TODO: fix this - I don't think we need this anymore?
+    #     future = Ref(self.prog, self.proc, )
+    #     self.prog._add_op(TransferOp(OpCode.Wait, self, future))
+    #     return future
 
-    def copyto(self, buffer=Buffer.output, size=-1, index=-1, step=-1, tb=-1, ch=0):
-        dstchunk = self._get_ref(self.rank, buffer, index, size)
-        self.prog.ranks[self.rank]._add_copy(tb, step, ch, Op(Instruction.copy, self, dstchunk, []))
+    def _copy(self, buffer=Buffer.output, index=-1, step=-1, tb=-1, ch=0):
+        dstchunk = self._get_ref(self.rank, buffer, index)
+        self.prog.ranks[self.rank]._add_copy(tb, step, ch, Op(Instruction.copy, self, dstchunk, self.creator))
         return dstchunk
 
     def reduce(self, other):
