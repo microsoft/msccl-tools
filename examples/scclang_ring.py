@@ -15,7 +15,7 @@ def allgather_ring(size):
             # Get the chunk at rank r, input[r]
             c = Rank(r).input(r)
             # Copy chunk to the output buffer
-            c.copyto(step=0, tb=0)
+            c.send(r, step=0, sendtb=0)
 
             next = (r + 1) % size
             hops = 0
@@ -75,47 +75,62 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
         g2 = n1 if n2 > n1 else n1-1
         # invariant: CrossNodeNghr(n1, g1) == (n2, g2) and vice versa
         return g1, g2
+
+    def AddChunk(ib_chunks, key, c):
+        if key in ib_chunks: 
+            ib_chunks[key] = ib_chunks[key].concatenate(c)
+        else:
+            ib_chunks[key] = c
         
     # topology = NDv4(num_nodes, gpus_per_node)
     topology = fully_connected(num_ranks)
     collective = alltoall(num_ranks)
     s = 0 # Setting steps is hacky right now
     with SCCLProgram("hierarchical_all_to_all", collective, topology):
+
+        ib_chunks = {}
         for r1 in range(num_ranks):
+            (n1, g1) = NodeGpuPairFromRank(r1)
             for r2 in range(num_ranks):
-                chunk = r2 * num_ranks + r1
-                c = Rank(r1).input(chunk)
-                (n1, g1) = NodeGpuPairFromRank(r1)
+                c = Rank(r1).input(r2)
                 (n2, g2) = NodeGpuPairFromRank(r2)
                 if (n1 != n2): # general case - route through IB
                     (h1, h2) = IBToUse(n1, n2)  # use the IB link from (n1, h1) to (n2, h2) for this chunk
-                    
                     # Local Gather. 
                     # All chunks destined to n2 should be sent together
                     # in case of h1 = g1, do a copy to scratch buffer
                     next = RankFromNodeGpuPair(n1, h1)
-                    # print(f'Chunk {chunk} goes from {r1} to {next} using IBs {h1} {h2}')
-                    if next != r1:
-                        c = c.send(next, step=s)
-                        s+=1
-
-                    # IB Send. All chunks from all local nodes destined to n2 should be sent together   
-                    next2 = RankFromNodeGpuPair(n2, h2)
-                    c = c.send(next2, step=s)
-                    s +=1
-
-                    # Local Scatter
-                    next3 = RankFromNodeGpuPair(n2, g2)
-                    if next2 != next3:
-                        c = c.send(next3, step=s)
-                        s +=1
+                    scratch_index = n2*gpus_per_node*gpus_per_node + g2 * gpus_per_node + g1                   
+                    c = c.send(next, step=s, buffer=Buffer.scratch, index=scratch_index)
+                    # Concatenate chunks destined for the same node together
+                    AddChunk(ib_chunks, (n1, n2), c)
                 elif (g1 != g2):
-                    c = c.send(r2, step=s) # this should be coalesced with the first send above
-                    s +=1
+                    c = c.send(r2, buffer=Buffer.output, index=r1, step=s) # this should be coalesced with the first send above
                 else:
-                    c.copyto(tb=0, step=0)
-                    # copy input to output.
-        XML()
-        Check()
-allgather_ring(8)
+                    c.send(r1, sendtb=0, step=s, buffer=Buffer.output) # copy input to output.
+                s += 1
+
+
+        # IB Send. All chunks from all local nodes destined to n2 should be sent together
+        for key, ib_chunk in ib_chunks.items(): 
+            (n1, n2) = key
+            (h1, h2) = IBToUse(n1, n2)  # use the IB link from (n1, h1) to (n2, h2) for this chunk
+            next2 = RankFromNodeGpuPair(n2, h2)
+            receive_index = ib_chunk.index + num_ranks * num_ranks
+            ib_chunk = ib_chunk.send(next2, step=s, buffer=Buffer.scratch)
+            s +=1
+
+        # Local scatter within the nodes
+        for key, ib_chunk in ib_chunks.items(): 
+            current_rank = ib_chunk.rank
+            n1, n2 = key
+            # Break chunks into smaller chunks of size gpus_per_node
+            chunks = ib_chunk.split(gpus_per_node)
+            for g2, c in enumerate(chunks):
+                next3 = RankFromNodeGpuPair(n1, g2)
+                index = n2 * gpus_per_node
+                c.send(next3, step=s, buffer=Buffer.output, index=index)
+                s +=1
+        XML() # Prints the XML
+# allgather_ring(8)
 alltoall_hierarchical(4, 3)
