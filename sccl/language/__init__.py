@@ -81,6 +81,21 @@ class Process:
         self.rank = rank
         self.chunks = chunks
         self.tbs = {}
+        self.tb_mapping = {}
+        self.tb_count = 0
+
+    def _get_tbid(self, inst, other_rank):
+        if inst == Instruction.copy:
+            tbid = 0
+        key = (inst, other_rank)
+        if key in self.tb_mapping:
+            tbid = self.tb_mapping[key]
+        else:
+            self.tb_count += 1
+            self.tb_mapping[key] = self.tb_count
+            tbid = self.tb_count
+        return tbid
+        
     
     def input(self, index):
         c = Ref(Buffer.input, index, 1, self.prog, self.rank, {})
@@ -91,6 +106,8 @@ class Process:
         # print(f'Send {op.dst.index} from {op.src.rank} to {op.dst.rank} {tbid} {step}')
         assert(op.inst == Instruction.send)
         sendto = op.dst.rank
+        if tbid == -1:
+            tbid = self._get_tbid(Instruction.send, sendto)
         if tbid not in self.tbs:
             self.tbs[tbid] = Threadblock(ch, send=sendto, ops={step: op})
         else:
@@ -103,10 +120,13 @@ class Process:
 
     def _add_recv(self, tbid, step, ch, op):
         assert(op.inst == Instruction.recv)
+        receivefrom = op.src.rank
+        if tbid == -1:
+            tbid = self._get_tbid(Instruction.recv, receivefrom)
         recvd_chunk = op.dst
+        recvd_chunk.creator[tbid] = op
         self.chunks[recvd_chunk.buffer][recvd_chunk.index] = recvd_chunk
         # print(f"{self.rank} adds chunk to index {recvd_chunk.index}")
-        receivefrom = op.src.rank
         if tbid not in self.tbs:
             self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops={step: op})
         else:
@@ -119,6 +139,8 @@ class Process:
 
     def _add_copy(self, tbid, step, ch, op):
         assert(op.inst == Instruction.copy)
+        if tbid == -1:
+            tbid = self._get_tbid(Instruction.copy, -1)
         self.chunks[op.dst.buffer][op.dst.index] = op.dst
         if tbid not in self.tbs:
             self.tbs[tbid] = Threadblock(ch, ops={step: op})
@@ -174,14 +196,11 @@ class Ref(ChunkRef):
         if dst == self.rank:
             return self._copy(buffer, index, step, sendtb, ch)
         # Direct send
-        sendtb = dst if sendtb == -1 else sendtb
-        recvtb = self.rank if recvtb == -1 else recvtb
         dstchunk = self._get_ref(dst, buffer, index)
         sendOp =  Op(Instruction.send, self, dstchunk, list(self.creator.values()), step)
         self.prog.ranks[self.rank]._add_send(sendtb, step, ch, sendOp)
         receiveOp = Op(Instruction.recv, self, dstchunk, [], step)
         self.prog.ranks[dst]._add_recv(recvtb, step, ch, receiveOp)
-        dstchunk.creator[recvtb] = receiveOp
         return dstchunk
     
     # def wait(self, steps):
