@@ -66,6 +66,7 @@ class Op:
     src: ChunkRef
     dst: ChunkRef
     depends: list = field(default_factory=list)
+    step: int = -1# TODO: fix this - relative step not the actual step
 
     def cnt(self):
         if self.src:
