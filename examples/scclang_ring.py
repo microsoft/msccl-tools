@@ -117,8 +117,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
             (n1, n2) = key
             (h1, h2) = IBToUse(n1, n2)  # use the IB link from (n1, h1) to (n2, h2) for this chunk
             next2 = RankFromNodeGpuPair(n2, h2)
-            receive_index = ib_chunk.index + num_ranks * num_ranks
-            ib_chunk = ib_chunk.send(next2, step=s, buffer=Buffer.scratch)
+            ib_chunks[key] = ib_chunk.send(next2, step=s, buffer=Buffer.scratch)
             s +=1
 
         # Local scatter within the nodes
@@ -128,10 +127,10 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
             # Break chunks into smaller chunks of size gpus_per_node
             chunks = ib_chunk.split(gpus_per_node)
             for g2, c in enumerate(chunks):
-                next3 = RankFromNodeGpuPair(n1, g2)
-                index = n2 * gpus_per_node
+                next3 = RankFromNodeGpuPair(n2, g2)
+                index = n1 * gpus_per_node
                 c.send(next3, step=s, buffer=Buffer.output, index=index)
                 s +=1
         XML() # Prints the XML
 # allgather_ring(8)
-alltoall_hierarchical(7, 8)
+alltoall_hierarchical(9, 8)
