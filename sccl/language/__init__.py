@@ -83,7 +83,7 @@ class Process:
         self.tbs = {}
     
     def input(self, index):
-        c = Ref(Buffer.input, index, 1, self.prog, self.rank, [])
+        c = Ref(Buffer.input, index, 1, self.prog, self.rank, {})
         self.chunks[Buffer.input][index] = c
         return c
 
@@ -131,15 +131,16 @@ class Process:
             tb.ops = [v for k,v in sorted(tb.ops.items())]
         return Gpu(self.rank, self.tbs.values())
 
+
 @dataclass
 class Ref(ChunkRef):
     prog: SCCLProgram
     rank: int
-    creator: list
+    creator: dict
 
     def _get_ref(self, dst, buffer, index):
         index = self.index if index == -1 else index
-        return Ref(buffer, index, self.size, self.prog, dst, [])
+        return Ref(buffer, index, self.size, self.prog, dst, {})
 
     def split(self, num):
         assert (self.size % num == 0), 'Trying to split a chunk of {self.size} elements into {num} parts'
@@ -161,7 +162,11 @@ class Ref(ChunkRef):
             second = self
         # TODO: Check somewhere that all chunks are valid before sending
         # Merge the creators
-        return  Ref(self.buffer, first.index, first.size + second.size, self.prog, self.rank, self.creator + other.creator)
+        creator = self.creator.copy()
+        for k, op in other.creator.items():
+            if k not in creator or creator[k].step < op.step:
+                creator[k] = op
+        return  Ref(self.buffer, first.index, first.size + second.size, self.prog, self.rank, creator)
         
 
     def send(self, dst, buffer=Buffer.output, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
@@ -172,10 +177,11 @@ class Ref(ChunkRef):
         sendtb = dst if sendtb == -1 else sendtb
         recvtb = self.rank if recvtb == -1 else recvtb
         dstchunk = self._get_ref(dst, buffer, index)
-        self.prog.ranks[self.rank]._add_send(sendtb, step, ch, Op(Instruction.send, self, dstchunk, self.creator))
-        receiveInstr = Op(Instruction.recv, self, dstchunk, [])
-        self.prog.ranks[dst]._add_recv(recvtb, step, ch, receiveInstr)
-        dstchunk.creator.append(receiveInstr)
+        sendOp =  Op(Instruction.send, self, dstchunk, list(self.creator.values()), step)
+        self.prog.ranks[self.rank]._add_send(sendtb, step, ch, sendOp)
+        receiveOp = Op(Instruction.recv, self, dstchunk, [], step)
+        self.prog.ranks[dst]._add_recv(recvtb, step, ch, receiveOp)
+        dstchunk.creator[recvtb] = receiveOp
         return dstchunk
     
     # def wait(self, steps):
@@ -186,7 +192,8 @@ class Ref(ChunkRef):
 
     def _copy(self, buffer=Buffer.output, index=-1, step=-1, tb=-1, ch=0):
         dstchunk = self._get_ref(self.rank, buffer, index)
-        self.prog.ranks[self.rank]._add_copy(tb, step, ch, Op(Instruction.copy, self, dstchunk, self.creator))
+        op = Op(Instruction.copy, self, dstchunk, list(self.creator.values()), step)
+        self.prog.ranks[self.rank]._add_copy(tb, step, ch, op)
         return dstchunk
 
     def reduce(self, other):
