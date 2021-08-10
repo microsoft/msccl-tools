@@ -76,7 +76,7 @@ class Op:
         elif self.dst:
             return self.dst.size
         else:
-            return -1
+            return 0
 
     def __eq__(self, other):
         return self is other
@@ -164,6 +164,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     if old_format:
         algo_elem.set('nchunksperloop', str(
             max(max(buffer_sizes[(gpu.rank, Buffer.input)], buffer_sizes[(gpu.rank, Buffer.output)]) for gpu in program.gpus)))
+    algo_elem.set('ngpus', str(len(program.gpus)))
     for gpu in program.gpus:
         gpu_elem = ET.SubElement(algo_elem, 'gpu')
         gpu_elem.set('id', str(gpu.rank))

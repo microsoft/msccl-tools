@@ -142,6 +142,7 @@ class Process:
         if tbid == -1:
             tbid = self._get_tbid(Instruction.copy, -1)
         self.chunks[op.dst.buffer][op.dst.index] = op.dst
+        op.dst.creator[tbid] = op
         if tbid not in self.tbs:
             self.tbs[tbid] = Threadblock(ch, ops={step: op})
         else:
@@ -211,7 +212,8 @@ class Ref(ChunkRef):
 
     def _copy(self, buffer=Buffer.output, index=-1, step=-1, tb=-1, ch=0):
         dstchunk = self._get_ref(self.rank, buffer, index)
-        op = Op(Instruction.copy, self, dstchunk, list(self.creator.values()), step)
+        depends = list(self.creator.values())
+        op = Op(Instruction.copy, self, dstchunk, depends, step)
         self.prog.ranks[self.rank]._add_copy(tb, step, ch, op)
         return dstchunk
 
