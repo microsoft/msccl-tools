@@ -82,10 +82,11 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
         else:
             ib_chunks[key] = c
         
+        
     # topology = NDv4(num_nodes, gpus_per_node)
     topology = fully_connected(num_ranks)
     collective = alltoall(num_ranks)
-    s = 0 # Setting steps is hacky right now
+    s = 0 # Setting steps is hacky right now - actually specifies the relative ordering
     with SCCLProgram("hierarchical_all_to_all", collective, topology):
 
         ib_chunks = {}
@@ -107,7 +108,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                 elif (g1 != g2):
                     c = c.send(r2, buffer=Buffer.output, index=r1, step=s) # this should be coalesced with the first send above
                 else:
-                    c.send(r1, sendtb=0, step=s, buffer=Buffer.output) # copy input to output.
+                    c.send(r1, step=s, buffer=Buffer.output) # copy input to output.
                 s += 1
 
 
@@ -133,4 +134,4 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                 s +=1
         XML() # Prints the XML
 # allgather_ring(8)
-alltoall_hierarchical(4, 3)
+alltoall_hierarchical(7, 8)
