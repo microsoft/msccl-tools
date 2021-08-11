@@ -74,6 +74,25 @@ def XML():
 def Check():
     return _curr().check()
 
+class BufferSlice:
+    def __init__(self, buf, size, offset):
+        self.buf = buf
+        self.offset = offset
+        self.chunks = [None] * size
+
+    def get_index(self, index):
+        return self.offset + index
+
+    def get_buffer(self):
+        return self.buf
+
+    def __getitem__(self, key):
+        return self.chunks[key]
+    
+    def __setitem__(self, key, value):
+        self.chunks[key] = value
+
+
 
 class Process:
     def __init__(self, prog, rank, chunks):
@@ -83,6 +102,18 @@ class Process:
         self.tbs = {}
         self.tb_mapping = {}
         self.tb_count = 0
+        self.scratch_offset = 0
+
+
+    def input(self, index):
+        c = Ref(Buffer.input, index, 1, self.prog, self.rank, {})
+        self.chunks[Buffer.input][index] = c
+        return c
+
+    def create_scratch(self, name, size):
+        assert (name not in self.chunks), f'Scratch buffer, {name}, already created'
+        self.chunks[name] = BufferSlice(Buffer.scratch, size, self.scratch_offset)
+        self.scratch_offset += size
 
     def _get_tbid(self, inst, other_rank):
         if inst == Instruction.copy:
@@ -95,12 +126,6 @@ class Process:
             self.tb_mapping[key] = self.tb_count
             tbid = self.tb_count
         return tbid
-        
-    
-    def input(self, index):
-        c = Ref(Buffer.input, index, 1, self.prog, self.rank, {})
-        self.chunks[Buffer.input][index] = c
-        return c
 
     def _add_send(self, tbid, step, ch, op):
         # print(f'Send {op.dst.index} from {op.src.rank} to {op.dst.rank} {tbid} {step}')
@@ -149,9 +174,25 @@ class Process:
             tb = self.tbs[tbid]
             tb.ops[step] = op
 
+    def lower_chunk(self, chunk):
+        if chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
+            rank = self.prog.ranks[chunk.rank]
+            buffer = rank.chunks[chunk.buffer].get_buffer()
+            index = rank.chunks[chunk.buffer].get_index(chunk.index)
+            return ChunkRef(buffer, index, chunk.size)
+        return chunk
+
     def lower(self):
         for tb in self.tbs.values():
-            tb.ops = [v for k,v in sorted(tb.ops.items())]
+            # tb.ops = [v for k,v in sorted(tb.ops.items())]
+            # Sort Ops by step
+            # Index scratch buffers
+            tb_ops = []
+            for _, op in sorted(tb.ops.items()):
+                op.src = self.lower_chunk(op.src)
+                op.dst = self.lower_chunk(op.dst)
+                tb_ops.append(op)
+            tb.ops = tb_ops
         return Gpu(self.rank, self.tbs.values())
 
 
@@ -192,7 +233,7 @@ class Ref(ChunkRef):
         return  Ref(self.buffer, first.index, first.size + second.size, self.prog, self.rank, creator)
         
 
-    def send(self, dst, buffer=Buffer.output, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
+    def send(self, dst, buffer, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
         # Local copy
         if dst == self.rank:
             return self._copy(buffer, index, step, sendtb, ch)

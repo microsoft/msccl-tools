@@ -88,8 +88,18 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
     collective = alltoall(num_ranks)
     s = 0 # Setting steps is hacky right now - actually specifies the relative ordering
     with SCCLProgram("hierarchical_all_to_all", collective, topology):
-
+        # Allocate scratch buffers for the local gathers
+        scratch_size = gpus_per_node * gpus_per_node
+        for n1 in range(num_nodes):
+            for n2 in range(num_nodes):
+                if n1 != n2:
+                    (h1, h2) = IBToUse(n1, n2)
+                    r1 = RankFromNodeGpuPair(n1, h1)
+                    r2 = RankFromNodeGpuPair(n2, h2)
+                    Rank(r1).create_scratch((n1, n2), scratch_size) # Sender's buffer
+                    Rank(r2).create_scratch((n1, n2), scratch_size) # Receiver's buffer
         ib_chunks = {}
+
         for r1 in range(num_ranks):
             (n1, g1) = NodeGpuPairFromRank(r1)
             for r2 in range(num_ranks):
@@ -101,8 +111,8 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                     # All chunks destined to n2 should be sent together
                     # in case of h1 = g1, do a copy to scratch buffer
                     next = RankFromNodeGpuPair(n1, h1)
-                    scratch_index = n2*gpus_per_node*gpus_per_node + g2 * gpus_per_node + g1                   
-                    c = c.send(next, step=s, buffer=Buffer.scratch, index=scratch_index)
+                    scratch_index = g2 * gpus_per_node + g1                   
+                    c = c.send(next, step=s, buffer=(n1, n2), index=scratch_index)
                     # Concatenate chunks destined for the same node together
                     AddChunk(ib_chunks, (n1, n2), c)
                 elif (g1 != g2):
@@ -117,7 +127,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
             (n1, n2) = key
             (h1, h2) = IBToUse(n1, n2)  # use the IB link from (n1, h1) to (n2, h2) for this chunk
             next2 = RankFromNodeGpuPair(n2, h2)
-            ib_chunks[key] = ib_chunk.send(next2, step=s, buffer=Buffer.scratch)
+            ib_chunks[key] = ib_chunk.send(next2, step=s, buffer=key)
             s +=1
 
         # Local scatter within the nodes
@@ -133,4 +143,4 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                 s +=1
         XML() # Prints the XML
 # allgather_ring(8)
-alltoall_hierarchical(9, 8)
+alltoall_hierarchical(4, 3)
