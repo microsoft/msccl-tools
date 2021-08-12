@@ -5,58 +5,6 @@ from sccl.language import *
 from sccl.topologies import *
 from sccl.collectives import *
 
-def allgather_ring(size):
-    # A new program is created with a name and a topology, desired collective
-    # collective = allgather(size)
-    topology = fully_connected(size)
-    with SCCLProgram("allgather_ring", topology):
-        # Loop over each chunk's root
-        for r in range(size):
-            # Get the chunk at rank r, input[r]
-            c = Rank(r).input(r)
-            # Copy chunk to the output buffer
-            c.send(r, step=0, sendtb=0)
-
-            next = (r + 1) % size
-            hops = 0
-            while next != r:
-                # For each rank in the ring, send the chunk to the next rank
-                c = c.send(next, step=hops, sendtb=1, recvtb=2)
-                next = (next + 1) % size
-                hops += 1
-        # Print()
-        XML()
-        # assert Check() # check desired chunks end up on each rank
-
-def wait():
-    with SCCLProgram("scheduling", line(2)):
-        Rank(0).input(0).send(2).send(3).send(4).output()
-        # Here wait(1) is used to avoid the two send(3)s happening at the same time
-        Rank(1).input(1).send(2).wait(1).send(3).output()
-
-def allreduce_ring():
-    size = 8
-    with SCCLProgram("allreduce_ring", ring(size)):
-        for r in range(size):
-            c = Rank(r).input(r)
-            next = r + 1 % size
-            while next != r:
-                # There's something awkward about this reduce(c_next), it's
-                # convenient to use the same id for this input as we did for c, but
-                # we still need to say reduce(c_next). Would it be ok to not call
-                # reduce here?
-                c_next = Rank(next).input(r)
-                c = c.send(next).reduce(c_next)
-                next = (next + 1) % size
-            c.output()
-            while next != (r - 1) % size:
-                # Chunks are only marked as output in this second loop here, where
-                # the final values are produced.
-                c = c.send(next).output()
-                next = (next + 1) % size
-
-
-    
 def alltoall_hierarchical(num_nodes, gpus_per_node):
     num_ranks = num_nodes * gpus_per_node
     def NodeGpuPairFromRank(r):
@@ -152,5 +100,4 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                 s +=1
         XML() # Prints the XML
 
-# allgather_ring(8)
 alltoall_hierarchical(4, 3)
