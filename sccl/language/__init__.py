@@ -14,24 +14,22 @@ def _curr():
     return _current_program
 
 class SCCLProgram:
-    def __init__(self, name, collective, topo):
+    def __init__(self, name, topo):
         self.name = name
-        self.collective = collective
-        self.topo = topo
-        # Initialize the chunks on each rank according to the precondition
+        self.topo = topo       
         self.ranks = []
         # TODO: Clean this up - not using the collective
+        # Initialize the chunks on each rank according to the precondition
+        # self.collective = collective
         num_chunks = topo.num_nodes()
-        for r in collective.ranks():
+        for r in range(num_chunks):
             input_chunks = [None] * num_chunks
             output_chunks = [None] * num_chunks
-            scratch_chunks = [None] * num_chunks * num_chunks
             # for c in collective.chunks():
             #     if collective.precondition(r, c):
             #         input_chunks[c] = Ref(Buffer.input, c, 1, self, r, [])
             chunks = {Buffer.input : input_chunks, 
-                      Buffer.output : output_chunks, 
-                      Buffer.scratch : scratch_chunks}
+                      Buffer.output : output_chunks}
             self.ranks.append(Process(self, r, chunks))
 
     def rank(self, rank):
@@ -39,15 +37,15 @@ class SCCLProgram:
 
     # Checks that all chunks that should be on each rank
     # are present in the output buffer.
-    def check(self):
-        correct = True
-        for r in self.collective.ranks():
-            output_chunks = self.ranks[r].chunks[Buffer.output]
-            for c in self.collective.chunks():
-                if self.collective.postcondition(r, c) and output_chunks[c] is None:
-                    print(f'Rank {r} chunk {c} is missing')
-                    correct = False
-        return correct
+    # def check(self):
+    #     correct = True
+    #     for r in self.collective.ranks():
+    #         output_chunks = self.ranks[r].chunks[Buffer.output]
+    #         for c in self.collective.chunks():
+    #             if self.collective.postcondition(r, c) and output_chunks[c] is None:
+    #                 print(f'Rank {r} chunk {c} is missing')
+    #                 correct = False
+    #     return correct
 
     def lower(self):
         gpu_prgms = [rank.lower() for rank in self.ranks]
@@ -71,8 +69,8 @@ def Rank(index):
 def XML():
    print(ir_to_xml(_curr().lower()))
 
-def Check():
-    return _curr().check()
+# def Check():
+#     return _curr().check()
 
 class BufferSlice:
     def __init__(self, buf, size, offset):
