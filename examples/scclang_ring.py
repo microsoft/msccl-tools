@@ -112,22 +112,22 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                         r2 = RankFromNodeGpuPair(n2, g2)
                         c = Rank(r1).input(r2)
                         
-                    if (n1 != n2): # general case - route through IB
-                        h1 = CrossNodeRouter(n1, n2)
-                        h2 = CrossNodeRouter(n2, n1)
-                        # Local Gather. 
-                        # All chunks destined to n2 should be sent together
-                        # in case of h1 = g1, do a copy to scratch buffer
-                        next = RankFromNodeGpuPair(n1, h1)
-                        scratch_index = g2 * gpus_per_node + g1                   
-                        c = c.send(next, step=s, buffer=(n1, n2), index=scratch_index)
-                        # Concatenate chunks destined for the same node together - handle parts of the transpose here.
-                        AddChunk(ib_chunks, (n1, n2), c)
-                    elif (g1 != g2):
-                        c = c.send(r2, buffer=Buffer.output, index=r1, step=s) # this should be coalesced with the first send above
-                    else:
-                        c.send(r1, step=s, buffer=Buffer.output) # copy input to output.
-                    s += 1
+                        if (n1 != n2): # general case - route through IB
+                            h1 = CrossNodeRouter(n1, n2)
+                            h2 = CrossNodeRouter(n2, n1)
+                            # Local Gather. 
+                            # All chunks destined to n2 should be sent together
+                            # in case of h1 = g1, do a copy to scratch buffer
+                            next = RankFromNodeGpuPair(n1, h1)
+                            scratch_index = g2 * gpus_per_node + g1                   
+                            c = c.send(next, step=s, buffer=(n1, n2), index=scratch_index)
+                            # Concatenate chunks destined for the same node together - handle parts of the transpose here.
+                            AddChunk(ib_chunks, (n1, n2), c)
+                        elif (g1 != g2):
+                            c = c.send(r2, buffer=Buffer.output, index=r1, step=s) # this should be coalesced with the first send above
+                        else:
+                            c.send(r1, step=s, buffer=Buffer.output) # copy input to output.
+                        s += 1
 
 
         # IB Send. All chunks from all local nodes destined to n2 should be sent together
