@@ -7,7 +7,7 @@ from sccl.collectives import *
 
 def allgather_ring(size):
     topology = fully_connected(size)
-    with SCCLProgram("allgather_ring", topology):
+    with SCCLProgram("allgather_ring", topology, 'allgather'):
         # Loop over each chunk's root
         for r in range(size):
             # Get the chunk at rank r, input[r]
@@ -23,6 +23,7 @@ def allgather_ring(size):
                 next = (next + 1) % size
                 hops += 1
         XML()
+        Check()
 
 # def wait():
 #     with SCCLProgram("scheduling", line(2)):

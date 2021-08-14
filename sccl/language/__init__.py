@@ -6,6 +6,54 @@ from dataclasses import dataclass
 from enum import Enum
 from sccl.language.ir import *
 
+def alltoall_init_buffers(prog):
+    num_ranks = prog.topo.num_nodes()
+    for r in range(num_ranks):
+        input_buffer = [None] * num_ranks
+        output_buffer = [None] * num_ranks
+        for index in range(num_ranks):
+            chunk = Chunk(r, index)
+            input_buffer[index] = chunk
+        buffers = {Buffer.input : input_buffer, 
+                   Buffer.output : output_buffer}
+        prog.ranks.append(Process(prog, r, buffers))
+            
+
+def alltoall_expected_output(prog):
+    num_ranks = prog.topo.num_nodes()
+    correct = True
+    for r in range(num_ranks):
+        output = prog.ranks[r].buffers[Buffer.output]
+        for i in range(num_ranks):
+            chunk = output[i]
+            if chunk is None or chunk.origin_rank != i or chunk.origin_index != r:
+                print(f'Rank {r} chunk {i} is incorrect should be ({r},{i}) given {chunk}')
+                correct = False
+    return correct
+
+def allgather_init_buffers(prog):
+    num_ranks = prog.topo.num_nodes()
+    for r in range(num_ranks):
+        input_buffer = [Chunk(r, 0)]
+        output_buffer = [None] * num_ranks
+        buffers = {Buffer.input : input_buffer, 
+                   Buffer.output : output_buffer}
+        prog.ranks.append(Process(prog, r, buffers))
+            
+
+def allgather_expected_output(prog):
+    num_ranks = prog.topo.num_nodes()
+    correct = True
+    for r in range(num_ranks):
+        output = prog.ranks[r].buffers[Buffer.output]
+        for i in range(num_ranks):
+            chunk = output[i]
+            if chunk is None or chunk.origin_rank != i or chunk.origin_index != 0:
+                print(f'Rank {r} chunk {i} is incorrect should be ({i}, 0) given {chunk}')
+                correct = False
+    return correct
+
+
 _current_program = None
 def _curr():
     global _current_program
@@ -14,38 +62,28 @@ def _curr():
     return _current_program
 
 class SCCLProgram:
-    def __init__(self, name, topo):
+    def __init__(self, name, topo, collective):
         self.name = name
-        self.topo = topo       
+        self.topo = topo
+        self.collective = collective       
         self.ranks = []
-        # TODO: Clean this up - not using the collective
-        # Initialize the chunks on each rank according to the precondition
-        # self.collective = collective
-        num_chunks = topo.num_nodes()
-        for r in range(num_chunks):
-            input_chunks = [None] * num_chunks
-            output_chunks = [None] * num_chunks
-            # for c in collective.chunks():
-            #     if collective.precondition(r, c):
-            #         input_chunks[c] = Ref(Buffer.input, c, 1, self, r, [])
-            chunks = {Buffer.input : input_chunks, 
-                      Buffer.output : output_chunks}
-            self.ranks.append(Process(self, r, chunks))
+        # Initialize the buffers
+        if self.collective == 'alltoall':
+            alltoall_init_buffers(self)
+        elif self.collective == 'allgather':
+            allgather_init_buffers(self)
 
     def rank(self, rank):
         return self.ranks[rank]
 
     # Checks that all chunks that should be on each rank
     # are present in the output buffer.
-    # def check(self):
-    #     correct = True
-    #     for r in self.collective.ranks():
-    #         output_chunks = self.ranks[r].chunks[Buffer.output]
-    #         for c in self.collective.chunks():
-    #             if self.collective.postcondition(r, c) and output_chunks[c] is None:
-    #                 print(f'Rank {r} chunk {c} is missing')
-    #                 correct = False
-    #     return correct
+    def check(self):
+        if self.collective == 'alltoall':
+            return alltoall_expected_output(self)
+        elif self.collective == 'allgather':
+            return allgather_expected_output(self)
+        return False
 
     def lower(self):
         gpu_prgms = [rank.lower() for rank in self.ranks]
@@ -69,8 +107,8 @@ def Rank(index):
 def XML():
    print(ir_to_xml(_curr().lower()))
 
-# def Check():
-#     return _curr().check()
+def Check():
+    return _curr().check()
 
 class BufferSlice:
     def __init__(self, buf, size, offset):
@@ -93,24 +131,23 @@ class BufferSlice:
 
 
 class Process:
-    def __init__(self, prog, rank, chunks):
+    def __init__(self, prog, rank, buffers):
         self.prog = prog
         self.rank = rank
-        self.chunks = chunks
+        self.buffers = buffers
         self.tbs = {}
         self.tb_mapping = {}
         self.tb_count = 0
         self.scratch_offset = 0
 
-
+    # Returns a reference to the chunk located at index of the input buffer.
     def input(self, index):
-        c = Ref(Buffer.input, index, 1, self.prog, self.rank, {})
-        self.chunks[Buffer.input][index] = c
-        return c
+        chunk = self.buffers[Buffer.input][index]
+        return Ref(Buffer.input, index, 1, self.prog, self.rank, {})
 
     def create_scratch(self, name, size):
-        assert (name not in self.chunks), f'Scratch buffer, {name}, already created'
-        self.chunks[name] = BufferSlice(Buffer.scratch, size, self.scratch_offset)
+        assert (name not in self.buffers), f'Scratch buffer, {name}, already created'
+        self.buffers[name] = BufferSlice(Buffer.scratch, size, self.scratch_offset)
         self.scratch_offset += size
 
     def _get_tbid(self, inst, other_rank):
@@ -146,10 +183,14 @@ class Process:
         receivefrom = op.src.rank
         if tbid == -1:
             tbid = self._get_tbid(Instruction.recv, receivefrom)
-        recvd_chunk = op.dst
-        recvd_chunk.creator[tbid] = op
-        self.chunks[recvd_chunk.buffer][recvd_chunk.index] = recvd_chunk
-        # print(f"{self.rank} adds chunk to index {recvd_chunk.index}")
+        recvd_chunkref = op.dst
+        recvd_chunkref.creator[tbid] = op
+
+        # Update buffer with sent chunks
+        for i in range(op.src.size):
+            self.buffers[op.dst.buffer][op.dst.index+i] = self.prog.ranks[op.src.rank].buffers[op.src.buffer][op.src.index+i]
+
+        # Update tbs
         if tbid not in self.tbs:
             self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops={step: op})
         else:
@@ -164,7 +205,12 @@ class Process:
         assert(op.inst == Instruction.copy)
         if tbid == -1:
             tbid = self._get_tbid(Instruction.copy, -1)
-        self.chunks[op.dst.buffer][op.dst.index] = op.dst
+
+        # Update buffer copied chunks
+        for i in range(op.src.size):
+            self.buffers[op.dst.buffer][op.dst.index+i] = self.buffers[op.src.buffer][op.src.index+i]
+        
+        # Update tbs
         op.dst.creator[tbid] = op
         if tbid not in self.tbs:
             self.tbs[tbid] = Threadblock(ch, ops={step: op})
@@ -172,17 +218,17 @@ class Process:
             tb = self.tbs[tbid]
             tb.ops[step] = op
 
+    
     def lower_chunk(self, chunk):
         if chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
             rank = self.prog.ranks[chunk.rank]
-            buffer = rank.chunks[chunk.buffer].get_buffer()
-            index = rank.chunks[chunk.buffer].get_index(chunk.index)
+            buffer = rank.buffers[chunk.buffer].get_buffer()
+            index = rank.buffers[chunk.buffer].get_index(chunk.index)
             return ChunkRef(buffer, index, chunk.size)
         return chunk
 
     def lower(self):
         for tb in self.tbs.values():
-            # tb.ops = [v for k,v in sorted(tb.ops.items())]
             # Sort Ops by step
             # Index scratch buffers
             tb_ops = []
@@ -193,16 +239,25 @@ class Process:
             tb.ops = tb_ops
         return Gpu(self.rank, self.tbs.values())
 
+@dataclass
+class Chunk:
+    origin_rank: int # Rank chunk initially started at
+    origin_index: int # Index chunk initially started at
 
 @dataclass
 class Ref(ChunkRef):
     prog: SCCLProgram
+<<<<<<< HEAD
     rank: int
     creator: dict
     missing: set = field(default_factory=set)
 
     def _end(self):
         return self.index + self.size
+=======
+    rank: int # Where this ref resides
+    creator: dict # Op(s) that created this reference
+>>>>>>> add correctness checks
 
     def _get_ref(self, dst, buffer, index):
         index = self.index if index == -1 else index
@@ -217,7 +272,8 @@ class Ref(ChunkRef):
             chunks[i] = Ref(self.buffer, index, size, self.prog, self.rank, self.creator)
         return chunks
 
-    def concatenate(self, other):
+    # TODO: this is weird...
+    def group(self, other):
         assert (self.rank == other.rank), f'Trying to concatenate chunks on ranks {self.rank} and {other.rank}'
         assert (self.buffer == other.buffer), f'Trying to concatenate chunks in {self.buffer} and {other.buffer}'
         if self.index < other.index:
@@ -246,12 +302,12 @@ class Ref(ChunkRef):
         if dst == self.rank:
             return self._copy(buffer, index, step, sendtb, ch)
         # Direct send
-        dstchunk = self._get_ref(dst, buffer, index)
-        sendOp =  Op(Instruction.send, self, dstchunk, list(self.creator.values()), step)
+        dst_chunkref = self._get_ref(dst, buffer, index)
+        sendOp =  Op(Instruction.send, self, dst_chunkref, list(self.creator.values()), step)
         self.prog.ranks[self.rank]._add_send(sendtb, step, ch, sendOp)
-        receiveOp = Op(Instruction.recv, self, dstchunk, [], step)
+        receiveOp = Op(Instruction.recv, self, dst_chunkref, [], step)
         self.prog.ranks[dst]._add_recv(recvtb, step, ch, receiveOp)
-        return dstchunk
+        return dst_chunkref
     
     # def wait(self, steps):
     #     # TODO: fix this - I don't think we need this anymore?
@@ -260,11 +316,11 @@ class Ref(ChunkRef):
     #     return future
 
     def _copy(self, buffer=Buffer.output, index=-1, step=-1, tb=-1, ch=0):
-        dstchunk = self._get_ref(self.rank, buffer, index)
+        dst_chunkref = self._get_ref(self.rank, buffer, index)
         depends = list(self.creator.values())
-        op = Op(Instruction.copy, self, dstchunk, depends, step)
+        op = Op(Instruction.copy, self, dst_chunkref, depends, step)
         self.prog.ranks[self.rank]._add_copy(tb, step, ch, op)
-        return dstchunk
+        return dst_chunkref
 
     def reduce(self, other):
         # TODO: do something
