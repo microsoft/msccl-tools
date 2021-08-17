@@ -199,6 +199,10 @@ class Ref(ChunkRef):
     prog: SCCLProgram
     rank: int
     creator: dict
+    missing: set = field(default_factory=set)
+
+    def _end(self):
+        return self.index + self.size
 
     def _get_ref(self, dst, buffer, index):
         index = self.index if index == -1 else index
@@ -228,10 +232,16 @@ class Ref(ChunkRef):
         for k, op in other.creator.items():
             if k not in creator or creator[k].step < op.step:
                 creator[k] = op
-        return  Ref(self.buffer, first.index, first.size + second.size, self.prog, self.rank, creator)
+        end = max(first._end(), second._end())
+        missing = set(range(first.index, end))
+        missing.difference_update(set(range(first.index, first._end())).difference(first.missing))
+        missing.difference_update(set(range(second.index, second._end())).difference(second.missing))
+        print(first.index, first.size, second.index, second.size, missing)
+        return Ref(self.buffer, first.index, end - first.index, self.prog, self.rank, creator, missing)
         
 
     def send(self, dst, buffer, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
+        assert (len(self.missing) == 0, f'Trying to send an incomplete concatenation. Missing indices {self.missing}')
         # Local copy
         if dst == self.rank:
             return self._copy(buffer, index, step, sendtb, ch)
