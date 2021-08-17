@@ -247,17 +247,12 @@ class Chunk:
 @dataclass
 class Ref(ChunkRef):
     prog: SCCLProgram
-<<<<<<< HEAD
     rank: int
     creator: dict
     missing: set = field(default_factory=set)
 
     def _end(self):
         return self.index + self.size
-=======
-    rank: int # Where this ref resides
-    creator: dict # Op(s) that created this reference
->>>>>>> add correctness checks
 
     def _get_ref(self, dst, buffer, index):
         index = self.index if index == -1 else index
