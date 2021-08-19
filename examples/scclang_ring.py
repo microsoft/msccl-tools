@@ -72,37 +72,36 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances):
                                 h1 = CrossNodeRouter(n1, n2)
                                 h2 = CrossNodeRouter(n2, n1)
                                 next = RankFromNodeGpuPair(n1, h1)
+                                scratch_key = (n1, n2, ch)
                                 scratch_index = g2 * gpus_per_node + g1                   
-                                c = c.send(next, step=s, buffer=(n1, n2, ch), index=scratch_index, ch=ch)
+                                c = c.send(next, step=s, buffer=scratch_key, index=scratch_index, ch=ch)
                                 # Group chunks destined for the same node together, handle the transpose here.
-                                AddChunk(ib_chunks, (n1, n2, ch), c)
+                                AddChunk(ib_chunks, scratch_key, c)
                             elif (g1 != g2):
-                                c = c.send(r2, buffer=Buffer.output, index=r1 + ch * num_ranks, step=s, ch=ch) # this should be coalesced with the first send above
+                                c.send(r2, buffer=Buffer.output, index=r1 + ch*num_ranks, step=s, ch=ch) # this should be coalesced with the first send above
                             else:
                                 c.send(r1, step=s, buffer=Buffer.output, ch=ch) # copy input to output.
                             s += 1
 
 
-            # IB Send. All chunks from all local nodes destined to n2 should be sent together
-            for key, ib_chunk in ib_chunks.items(): 
-                (n1, n2, ch) = key
-                h1 = CrossNodeRouter(n1, n2)
-                h2 = CrossNodeRouter(n2, n1)
-                next2 = RankFromNodeGpuPair(n2, h2)
-                ib_chunks[key] = ib_chunk.send(next2, step=s, buffer=key, ch=ch)
-                s +=1
+        # IB Send. All chunks from all local nodes destined to n2 should be sent together
+        for key, ib_chunk in ib_chunks.items(): 
+            (n1, n2, ch) = key
+            h2 = CrossNodeRouter(n2, n1)
+            next2 = RankFromNodeGpuPair(n2, h2)
+            ib_chunks[key] = ib_chunk.send(next2, step=s, buffer=key, ch=ch)
+            s +=1
 
-            # Local scatter within the nodes
-            for key, ib_chunk in ib_chunks.items(): 
-                current_rank = ib_chunk.rank
-                n1, n2, _ = key
-                # Break chunks into smaller chunks of size gpus_per_node
-                chunks = ib_chunk.split(gpus_per_node)
-                for g2, c in enumerate(chunks):
-                    next3 = RankFromNodeGpuPair(n2, g2)
-                    index = n1 * gpus_per_node + ch * num_ranks
-                    c.send(next3, step=s, buffer=Buffer.output, index=index, ch=ch)
-                    s +=1
+        # Local scatter within the nodes
+        for key, ib_chunk in ib_chunks.items(): 
+            n1, n2, ch = key
+            # Break chunks into smaller chunks of size gpus_per_node
+            chunks = ib_chunk.split(gpus_per_node)
+            for g2, c in enumerate(chunks):
+                next3 = RankFromNodeGpuPair(n2, g2)
+                index = n1 * gpus_per_node + ch * num_ranks
+                c.send(next3, step=s, buffer=Buffer.output, index=index, ch=ch)
+                s +=1
 
         XML() # Prints the XML
         Check()

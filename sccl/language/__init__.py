@@ -17,7 +17,6 @@ def alltoall_init_buffers(prog, instances):
             input_buffer[index] = chunk
         buffers = {Buffer.input : input_buffer, 
                    Buffer.output : output_buffer}
-        # print(f'{r}: {input_buffer}')
         prog.ranks.append(Process(prog, r, buffers))
             
 
@@ -297,7 +296,7 @@ class Ref(ChunkRef):
         
 
     def send(self, dst, buffer, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
-        assert (len(self.missing) == 0, f'Trying to send an incomplete concatenation. Missing indices {self.missing}')
+        assert (len(self.missing) == 0), f'Trying to send an incomplete concatenation. Missing indices {self.missing}'
         # Local copy
         if dst == self.rank:
             return self._copy(buffer, index, step, sendtb, ch)
