@@ -6,29 +6,33 @@ from dataclasses import dataclass
 from enum import Enum
 from sccl.language.ir import *
 
-def alltoall_init_buffers(prog):
+def alltoall_init_buffers(prog, instances):
     num_ranks = prog.topo.num_nodes()
+    chunks_per_node = num_ranks * instances
     for r in range(num_ranks):
-        input_buffer = [None] * num_ranks
-        output_buffer = [None] * num_ranks
-        for index in range(num_ranks):
+        input_buffer = [None] * chunks_per_node
+        output_buffer = [None] * chunks_per_node
+        for index in range(chunks_per_node):
             chunk = Chunk(r, index)
             input_buffer[index] = chunk
         buffers = {Buffer.input : input_buffer, 
                    Buffer.output : output_buffer}
+        # print(f'{r}: {input_buffer}')
         prog.ranks.append(Process(prog, r, buffers))
             
 
-def alltoall_expected_output(prog):
+def alltoall_expected_output(prog, instances):
     num_ranks = prog.topo.num_nodes()
     correct = True
     for r in range(num_ranks):
         output = prog.ranks[r].buffers[Buffer.output]
-        for i in range(num_ranks):
-            chunk = output[i]
-            if chunk is None or chunk.origin_rank != i or chunk.origin_index != r:
-                print(f'Rank {r} chunk {i} is incorrect should be ({r},{i}) given {chunk}')
-                correct = False
+        for ch in range(instances):
+            for i in range(num_ranks):
+                index = i + ch * num_ranks
+                chunk = output[index]
+                if chunk is None or chunk.origin_rank != i or chunk.origin_index != r + ch * num_ranks:
+                    print(f'Rank {r} chunk {index} is incorrect should be ({r},{i}) given {chunk}')
+                    correct = False
     return correct
 
 def allgather_init_buffers(prog):
@@ -62,14 +66,15 @@ def _curr():
     return _current_program
 
 class SCCLProgram:
-    def __init__(self, name, topo, collective):
+    def __init__(self, name, topo, collective, instances):
         self.name = name
         self.topo = topo
         self.collective = collective       
         self.ranks = []
+        self.instances = instances
         # Initialize the buffers
         if self.collective == 'alltoall':
-            alltoall_init_buffers(self)
+            alltoall_init_buffers(self, instances)
         elif self.collective == 'allgather':
             allgather_init_buffers(self)
 
@@ -80,7 +85,7 @@ class SCCLProgram:
     # are present in the output buffer.
     def check(self):
         if self.collective == 'alltoall':
-            return alltoall_expected_output(self)
+            return alltoall_expected_output(self, self.instances)
         elif self.collective == 'allgather':
             return allgather_expected_output(self)
         return False
@@ -150,10 +155,10 @@ class Process:
         self.buffers[name] = BufferSlice(Buffer.scratch, size, self.scratch_offset)
         self.scratch_offset += size
 
-    def _get_tbid(self, inst, other_rank):
+    def _get_tbid(self, inst, other_rank, ch):
         if inst == Instruction.copy:
             tbid = 0
-        key = (inst, other_rank)
+        key = (inst, other_rank, ch)
         if key in self.tb_mapping:
             tbid = self.tb_mapping[key]
         else:
@@ -167,7 +172,7 @@ class Process:
         assert(op.inst == Instruction.send)
         sendto = op.dst.rank
         if tbid == -1:
-            tbid = self._get_tbid(Instruction.send, sendto)
+            tbid = self._get_tbid(Instruction.send, sendto, ch)
         if tbid not in self.tbs:
             self.tbs[tbid] = Threadblock(ch, send=sendto, ops={step: op})
         else:
@@ -182,7 +187,7 @@ class Process:
         assert(op.inst == Instruction.recv)
         receivefrom = op.src.rank
         if tbid == -1:
-            tbid = self._get_tbid(Instruction.recv, receivefrom)
+            tbid = self._get_tbid(Instruction.recv, receivefrom, ch)
         recvd_chunkref = op.dst
         recvd_chunkref.creator[tbid] = op
 
@@ -204,7 +209,7 @@ class Process:
     def _add_copy(self, tbid, step, ch, op):
         assert(op.inst == Instruction.copy)
         if tbid == -1:
-            tbid = self._get_tbid(Instruction.copy, -1)
+            tbid = self._get_tbid(Instruction.copy, -1, ch)
 
         # Update buffer copied chunks
         for i in range(op.src.size):
@@ -287,7 +292,7 @@ class Ref(ChunkRef):
         missing = set(range(first.index, end))
         missing.difference_update(set(range(first.index, first._end())).difference(first.missing))
         missing.difference_update(set(range(second.index, second._end())).difference(second.missing))
-        print(first.index, first.size, second.index, second.size, missing)
+        # print(first.index, first.size, second.index, second.size, missing)
         return Ref(self.buffer, first.index, end - first.index, self.prog, self.rank, creator, missing)
         
 
