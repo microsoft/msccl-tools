@@ -5,7 +5,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='sccl',
-    version='2.1.2',
+    version='2.2.0',
     packages=find_packages(),
     entry_points={
         'console_scripts': [
