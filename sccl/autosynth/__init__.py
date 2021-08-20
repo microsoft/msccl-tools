@@ -66,7 +66,7 @@ def _candidate_sort_key(candidate):
     return priority
 
 
-def ndv2_perm(self):
+def ndv2_perm(self): # pragma: no cover
     # This function is used in a hacky way right now. The sccl_ndv2_launcher.sh
     # relies on the side effect of _select_isomorphism creating the lock file,
     # which is read by the script after calling this function, so the return
@@ -79,7 +79,7 @@ def ndv2_perm(self):
     return _select_isomorphism(isomorphisms)
 
 
-def _select_isomorphism(self, isomorphisms, verbose=True):
+def _select_isomorphism(self, isomorphisms, verbose=True): # pragma: no cover
     with open('/var/lock/sccl_autosynth_inspector_topo.lock', "a+") as f:
         fcntl.lockf(f, fcntl.LOCK_EX)
         try:

@@ -21,8 +21,6 @@ def register_synthesis_plan(collective, machine_type, machines=lambda x: True, s
                 lower = humanfriendly.parse_size(lower)
             if isinstance(upper, str):
                 upper = humanfriendly.parse_size(upper)
-            if lower == None:
-                lower = 0
             if upper == None:
                 upper = math.inf
             return (lower, upper)
