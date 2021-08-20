@@ -11,7 +11,9 @@ import os
 import humanfriendly
 
 from sccl.autosynth.dgx1_plans import register_dgx1_plans
+from sccl.autosynth.a100_plans import register_a100_plans
 register_dgx1_plans()
+register_a100_plans()
 
 
 def init(num_machines, machine_type, *collectives):
