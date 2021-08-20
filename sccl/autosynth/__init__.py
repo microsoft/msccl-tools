@@ -1,238 +1,122 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from sccl.topologies.nvidia import nvlink_only
-from sccl.autosynth.dgx1_relay_node_plan import DGX1RelayNodePlan
-from sccl.ncclize import ncclize
-import re, subprocess, tempfile, os, json, atexit, time
+from sccl.topologies import dgx1
+from sccl.isomorphisms import find_isomorphisms
+from sccl.autosynth.registry import synthesis_plans
+import re
+import subprocess
+import fcntl
+import tempfile
+import os
+import subprocess
+import tempfile
+import atexit
+import humanfriendly
 
-def init(verbose=False):
-    env = _autosynth_assume_deterministic_z3_and_ompi(verbose)
-    os.environ.update(env)
-    return
+from sccl.autosynth.dgx1_plans import register_dgx1_plans
+register_dgx1_plans()
 
-    # The code below does not work in all usecases with PyTorch, due to mpi4py calling MPI_Init, which
-    # some part of PyTorch cannot tolerate. The other way around would work, importing mpi4py after
-    # torch.distributed has initialized, but currently the SCCL interpreter in NCCL cannot load new algorithms
-    # after initialization. Once this dynamic loading support lands the code path below can be re-enabled.
 
-    # Detect how this process was launched
-    if 'LOCAL_RANK' in os.environ:
-        # Either torch.distributed.run or legacy run with --use_env
-        has_subprocesses = True
-        world_size = int(os.environ['WORLD_SIZE'])
-        is_mpi_process = int(os.environ['LOCAL_RANK']) == 0
-        if verbose:
-            print(f'SCCL: Found LOCAL_RANK in environment, torch.distributed.run (or launch with --use_env) detected.')
-    else:
-        import argparse
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--local_rank", type=int)
-        args, _ = parser.parse_known_args()
-        if args.local_rank != None:
-            # Legacy torch.distributed.launch without --use_env
-            has_subprocesses = True
-            world_size = int(os.environ['WORLD_SIZE'])
-            is_mpi_process = args.local_rank == 0
-            if verbose:
-                print('SCCL: Found --local_rank N argument, legacy torch.distributed.launch without --use_env detected.')
+def init(num_machines, machine_type, *collectives):
+    plans_and_sizes = []
+    for collective in collectives:
+        name, size = collective
+        if isinstance(size, str):
+            size = humanfriendly.parse_size(size)
+        candidates = synthesis_plans[(name, machine_type)]
+        valid_candidates = filter(
+            _candidate_filter(num_machines, size), candidates)
+        sorted_candidates = sorted(valid_candidates, key=_candidate_sort_key)
+        description = f'{name} with size {humanfriendly.format_size(size)}'
+        if len(sorted_candidates) == 0:
+            print(
+                f'SCCL: No synthesis plan found for {description}. Falling back to NCCL baseline.')
         else:
-            # Pure MPI
-            has_subprocesses = False
-            world_size = None
-            is_mpi_process = True
-            if verbose:
-                print(f'SCCL: No launcher detected, assuming one MPI rank per process.')
-    # Name environment file by parent PID, which will be shared between subprocesses for torch.distributed.(launch|run)
-    env_file = f'/var/lock/sccl_autosynth_env.{os.getppid()}.lock'
-    if is_mpi_process:
-        # Synthesize on MPI rank 0 and distribute to all MPI processes
-        env = _autosynth_and_get_env(world_size, verbose)
-        # If there are non-MPI subprocesses, they get the environment through a temporary file
-        if has_subprocesses:
-            # Make sure the lock file doesn't exist yet
-            if os.path.exists(env_file):
-                raise RuntimeError(f'SCCL: Lock file already exists: {env_file}')
-            # Broadcast algorithm to other subprocesses
-            fd, private_file = tempfile.mkstemp()
-            with open(fd, "w") as f:
-                json.dump(env, f)
-            os.rename(private_file, env_file)
-            # Delete the environment file when the local MPI process exits
-            atexit.register(os.remove, env_file)
-    else:
-        assert has_subprocesses
-        # Wait until the environment file is available
-        elapsed = 0
-        while not os.path.exists(env_file):
-            time.sleep(1)
-            elapsed += 1
-            if elapsed == 60:
-                print(f'SCCL: Still waiting to read lock file {env_file}...')
-        # Load the environment to set from the file
-        with open(env_file, "r") as f:
-            env = json.load(f)
+            name, plan, _, _, _ = sorted_candidates[-1]
+            print(f'SCCL: Synthesis plan for {description} is {name}')
+            plans_and_sizes.append((plan, size))
 
-    os.environ.update(env)
-
-def ndv2_perm(verbose=True):
-    machine = detect_machine(verbose)
-    if machine[1] == None:
-        return
-    plan = select_synthesis_plan(machine)
-    plan.local_rank_permutation()
-    
-
-def _autosynth_assume_deterministic_z3_and_ompi(verbose):
-    rank = None
-    if 'WORLD_SIZE' in os.environ:
-        # We're in a PyTorch launcher compatible script
-        world_size = int(os.environ['WORLD_SIZE'])
-        if 'RANK' in os.environ:
-            rank = int(os.environ['RANK'])
-    else:
-        if not 'OMPI_COMM_WORLD_SIZE' in os.environ:
-            print('SCCL info: Could not detect world size and import SCCL will be ignored.')
-            return {}
-        world_size = int(os.environ['OMPI_COMM_WORLD_SIZE'])
-        if 'OMPI_COMM_WORLD_RANK' in os.environ:
-            rank = int(os.environ['OMPI_COMM_WORLD_RANK'])
-
-    collective_names = ['Alltoall']
-    if rank == 0:
-        print(f'SCCL info: Synthesizing algorithm(s) for {", ".join(collective_names)}...')
-    
-    machine = detect_machine(verbose)
-    machine_name, machine_info = machine
-    if machine_name == "unknown":
-        print("SCCL warning: could not detect the type of machine. import sccl will be ignored.")
-        return {}
-    if world_size != 16:
-        print(f'SCCL warning: currently only generates alltoall for 2 ndv2 nodes. import sccl will be ignored.')
-        return {}
-    plan = select_synthesis_plan(machine)
-    if plan.is_dgx1() == False:
-        print(f'SCCL warning: the node does seem like a ndv2. import sccl will be ignored.')
-        return {}
-    efs = []
-    for name in collective_names:
-        algo = plan.synthesize(world_size, name, verbose)
-        efs.append(ncclize(algo, old_format=True, use_scratch=True, instances=8))
-
-    tempdir = tempfile.mkdtemp()
-    ef_files = []
-    for name, ef in zip(collective_names, efs):
-        ef_file = os.path.join(tempdir, f'{name}.xml')
-        ef_files.append(ef_file)
-        with open(ef_file, 'w') as f:
+    envs = {}
+    for plan, size in plans_and_sizes:
+        ef, env = plan(num_machines, size)
+        fd, path = tempfile.mkstemp()
+        with os.fdopen(fd, 'w') as f:
             f.write(ef)
-        if verbose:
-            print(f'SCCL: Wrote to {ef_file}')
-
-    if len(ef_files) != 1:
-        raise RuntimeError(f'SCCL error: only a single algorithm is supported currently by the NCCL backend, but got {len(efs)}.')
-
-    return {
-        'SCCL_XML_FILE': ef_files[0],
-        'NCCL_NET_SHARED_BUFFERS': '0',
-        'NCCL_MIN_NCHANNELS': str(algo.nchannels)
-    }
-
-def _autosynth_and_get_env(world_size, verbose):
-    try:
-        from mpi4py import MPI
-    except ImportError as e:
-        print('SCCL: Please install the mpi4py package to use SCCL\'s automated init function.')
-        raise e
-    comm = MPI.COMM_WORLD
-    mpi_size = comm.Get_size()
-    mpi_rank = comm.Get_rank()
-
-    if world_size == None:
-        world_size = mpi_size
-
-    collective_names = ['Alltoall']
-    if mpi_rank == 0:
-        print(f'SCCL: Synthesizing algorithm(s) for {", ".join(collective_names)}...')
-
-    machine = detect_machine(verbose)
-    machine_name, machine_info = machine
-    if machine_name == "unknown":
-        return {}
-    plan = select_synthesis_plan(machine)
-    names = comm.gather(machine[0], root=0)
-    if mpi_rank == 0:
-        for i in range(len(names) - 1):
-            if names[i] != names[i+1]:
-                raise RuntimeError(f'Rank {i} detected machine as {names[i]} but rank {i+1} detected machine as {names[i+1]}.')
-        efs = []
-        for name in collective_names:
-            algo = plan.synthesize(world_size, name, verbose)
-            efs.append(ncclize(algo, old_format=True, use_scratch=True))
-    else:
-        efs = None
-    efs = comm.bcast(efs, root=0)
-
-    tempdir = tempfile.mkdtemp()
-    ef_files = []
-    for name, ef in zip(collective_names, efs):
-        ef_file = os.path.join(tempdir, f'{name}.xml')
-        ef_files.append(ef_file)
-        with open(ef_file, 'w') as f:
-            f.write(ef)
-        if verbose:
-            print(f'SCCL: Wrote to {ef_file}')
-
-    if len(ef_files) != 1:
-        raise RuntimeError(f'Only a single algorithm is supported currently by the NCCL backend, but got {len(efs)}.')
-
-    perm = plan.local_rank_permutation()
-
-    return {
-        'SCCL_XML_FILE': ef_files[0],
-        'CUDA_VISIBLE_DEVICES': ','.join(str(rank) for rank in perm)
-    }
-
-def detect_machine(verbose):
-    machine = _detect_nvidia_machine(verbose)
-    if machine != None:
-        return machine
-    return ('unknown', None)
-
-def _detect_nvidia_machine(verbose):
-    if verbose:
-        print('SCCL info: Checking for NVIDIA machines')
-    try:
-        smi_topo = subprocess.check_output(['nvidia-smi', 'topo', '-m']).decode("utf-8")
-    except FileNotFoundError:
-        if verbose:
-            print('SCCL info: nvidia-smi not found.')
-        return None
-    except subprocess.CalledProcessError:
-        if verbose:
-            print('SCCL warning: Found nvidia-smi, but got error.')
-        return ('unknown', None)
-
-    nvlink_topo = nvlink_only(smi_topo)
-
-    if nvlink_topo.num_nodes() == 8: # DGX-1 and DGX A100 like nodes
-        if verbose:
-            print('SCCL: 8 GPUs, so looks like a DGX-1 or DGX A100.')
-        if _is_one_host_ib_dgx1(smi_topo):
-            return ('one_host_ib_dgx1', nvlink_topo)
+        atexit.register(os.remove, path)
+        if 'SCCL_XML_FILE' in envs:
+            envs['SCCL_XML_FILE'] += ',' + path
         else:
-            if verbose:
-                print('SCCL: Unknown network configuration.')
-    return ('unknown', None)
+            envs['SCCL_XML_FILE'] = path
+        envs.update(env)
 
-def _is_one_host_ib_dgx1(smi_topo):
-    ib_host = re.findall('^mlx\\d_\\d(?:\s+NODE)*\s+X(?:\s+NODE)*\s+$', smi_topo, re.MULTILINE)
-    ib_any = re.findall('^mlx\\d_\\d.*$', smi_topo, re.MULTILINE)
-    return len(ib_host) == 1 and len(ib_any) == 1
+    os.environ.update(envs)
 
-def select_synthesis_plan(machine):
-    machine_name, machine_info = machine
-    if machine_name == 'one_host_ib_dgx1':
-        return DGX1RelayNodePlan(machine_info)
-    else:
-        raise RuntimeError(f'Unhandled machine type {machine_name}.')
+
+def _candidate_filter(m, s):
+    def fun(candidate):
+        _, _, machines, size_ranges, _ = candidate
+        size_matches = any(map(lambda x: x[0] <= s and s <= x[1], size_ranges))
+        return size_matches and machines(m)
+    return fun
+
+
+def _candidate_sort_key(candidate):
+    _, _, _, _, priority = candidate
+    return priority
+
+
+def ndv2_perm(self):
+    # This function is used in a hacky way right now. The sccl_ndv2_launcher.sh
+    # relies on the side effect of _select_isomorphism creating the lock file,
+    # which is read by the script after calling this function, so the return
+    # value does't currently get used. If you make changes, please fix or update
+    # sccl_ndv2_launcher.sh accordingly.
+    isomorphisms = find_isomorphisms(dgx1(), self.local_topo)
+    if len(isomorphisms) != 4:
+        raise RuntimeError(
+            f'Expected to find 4 isomorphisms to DGX1 topology, but found {len(isomorphisms)}.')
+    return _select_isomorphism(isomorphisms)
+
+
+def _select_isomorphism(self, isomorphisms, verbose=True):
+    with open('/var/lock/sccl_autosynth_inspector_topo.lock', "a+") as f:
+        fcntl.lockf(f, fcntl.LOCK_EX)
+        try:
+            f.seek(0, 2)
+            size = f.tell()
+            if size > 0:
+                f.seek(0)
+                order = f.read()
+                if verbose:
+                    print(f'SCCL: Read IB placement from {f.name}')
+                return order
+            else:
+                print(
+                    'SCCL: Running inspector-topo to find the IB placement. This will take a couple of minutes...')
+                topo_detect = subprocess.run(
+                    ['/usr/local/bin/inspector-topo'], capture_output=True, env={"CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7"})
+                print('SCCL: Finished running inspector-topo. Finding the permutaion.')
+                if topo_detect.returncode != 0:
+                    raise RuntimeError(
+                        f'inspector-topo had a failure:\n{topo_detect.stdout}\n{topo_detect.stderr}')
+                topo_detect_output = topo_detect.stdout.decode('utf-8')
+                g = re.search(
+                    "GPU pair shared with NIC appears to be (\d) and (\d)", topo_detect_output)
+                if g is None:
+                    raise RuntimeError(
+                        f'expected to detect a pair of GPUs connected to IB but something went wrong!')
+                ib_gpus = {int(g.group(1)), int(g.group(2))}
+                for iso in isomorphisms:
+                    if len(ib_gpus.intersection({iso.nodes[0], iso.nodes[2]})) == 0:
+                        nodes = iso.nodes
+                        order = ",".join(str(rank) for rank in nodes)
+                        f.write(order)
+                        f.flush()
+                        if verbose:
+                            print(f'SCCL: Wrote IB placement to {f.name}')
+                        return order
+                raise RuntimeError(
+                    f'expected an isomorphism to match our expectation but none of them did!')
+        finally:
+            fcntl.lockf(f, fcntl.LOCK_UN)

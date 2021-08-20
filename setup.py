@@ -20,6 +20,7 @@ setup(
         'z3-solver',
         'argcomplete',
         'lxml',
+        'humanfriendly'
     ],
     python_requires='>=3.6',
 )
