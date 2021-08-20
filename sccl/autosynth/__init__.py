@@ -7,11 +7,7 @@ from sccl.autosynth.registry import synthesis_plans
 import re
 import subprocess
 import fcntl
-import tempfile
 import os
-import subprocess
-import tempfile
-import atexit
 import humanfriendly
 
 from sccl.autosynth.dgx1_plans import register_dgx1_plans
@@ -31,19 +27,15 @@ def init(num_machines, machine_type, *collectives):
         description = f'{name} with size {humanfriendly.format_size(size)}'
         if len(sorted_candidates) == 0:
             print(
-                f'SCCL: No synthesis plan found for {description}. Falling back to NCCL baseline.')
+                f'SCCL: No plan found for {description}. Falling back to NCCL baseline.')
         else:
-            name, plan, _, _, _ = sorted_candidates[-1]
-            print(f'SCCL: Synthesis plan for {description} is {name}')
+            desc, plan, _, _, _ = sorted_candidates[-1]
+            print(f'SCCL: Plan for {description} is {desc}')
             plans_and_sizes.append((plan, size))
 
     envs = {}
     for plan, size in plans_and_sizes:
-        ef, env = plan(num_machines, size)
-        fd, path = tempfile.mkstemp()
-        with os.fdopen(fd, 'w') as f:
-            f.write(ef)
-        atexit.register(os.remove, path)
+        path, env = plan(num_machines, size)
         if 'SCCL_XML_FILE' in envs:
             envs['SCCL_XML_FILE'] += ',' + path
         else:
