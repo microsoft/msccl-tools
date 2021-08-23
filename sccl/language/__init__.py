@@ -322,3 +322,12 @@ class Ref(ChunkRef):
     def reduce(self, other):
         # TODO: do something
         return self
+
+    def _get_chunk(self, index):
+        return self.prog.ranks[self.rank].buffers[self.buffer][index]
+
+    def get_origin_index(self, index=0):
+        return self._get_chunk(index + self.index).origin_index
+
+    def get_origin_rank(self, index=0):
+        return self._get_chunk(index + self.index).origin_rank

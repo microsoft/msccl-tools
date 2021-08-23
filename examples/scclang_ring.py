@@ -185,19 +185,17 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances):
             (n1, n2) = key
             h2 = CrossNodeRouter(n2, n1)
             next2 = RankFromNodeGpuPair(n2, h2)
-            ib_chunks[key] = ib_chunk.send(next2, step=s, buffer=key, ch=0)
-            s +=1
-
-        # # Local scatter within the nodes
-        for key, ib_chunk in ib_chunks.items(): 
-            n1, n2 = key
-            chunks = ib_chunk.split(gpus_per_node)
-            for g1, cc in enumerate(chunks):
-                c = cc.split(gpus_per_node)
-                for g2, cc in enumerate(c):
-                    next3 = RankFromNodeGpuPair(n2, g2)
-                    index = (n1 * gpus_per_node + g1) * instances
-                    cc.send(next3, step=s, buffer=Buffer.output, index=index, ch=1)
+            # TODO: Not a great way of dividing up this big send across multiple channels
+            chunks = ib_chunk.split(instances)
+            for ch, chunk in enumerate(chunks):
+                chunk = chunk.send(next2, step=s, buffer=key, ch=ch)
+                cs = chunk.split(gpus_per_node * gpus_per_node)
+                for i, c in enumerate(cs):
+                    origin_index = c.get_origin_index()
+                    origin_rank = c.get_origin_rank()
+                    next3 = origin_index // instances
+                    index = origin_rank * instances + origin_index % instances
+                    c.send(next3, step=s, buffer=Buffer.output, index=index, ch=2 + i % 2) # TODO: Not great channel spec..
                     s +=1
 
         XML() # Prints the XML
