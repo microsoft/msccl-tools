@@ -25,12 +25,13 @@ def alltoall_expected_output(prog, instances):
     correct = True
     for r in range(num_ranks):
         output = prog.ranks[r].buffers[Buffer.output]
-        for ch in range(instances):
-            for i in range(num_ranks):
-                index = i + ch * num_ranks
+        for i in range(num_ranks):
+            for ch in range(instances):
+                index = ch + i * instances
                 chunk = output[index]
-                if chunk is None or chunk.origin_rank != i or chunk.origin_index != r + ch * num_ranks:
-                    print(f'Rank {r} chunk {index} is incorrect should be ({r},{i}) given {chunk}')
+                expected_origin_index = ch + r * instances
+                if chunk is None or chunk.origin_rank != i or chunk.origin_index != expected_origin_index:
+                    print(f'Rank {r} chunk {index} is incorrect should be chunk({i},{expected_origin_index}) given {chunk}')
                     correct = False
     return correct
 
@@ -145,9 +146,9 @@ class Process:
         self.scratch_offset = 0
 
     # Returns a reference to the chunk located at index of the input buffer.
-    def input(self, index):
-        chunk = self.buffers[Buffer.input][index]
-        return Ref(Buffer.input, index, 1, self.prog, self.rank, {})
+    def input(self, index, size):
+        # chunk = self.buffers[Buffer.input][index]
+        return Ref(Buffer.input, index, size, self.prog, self.rank, {})
 
     def create_scratch(self, name, size):
         assert (name not in self.buffers), f'Scratch buffer, {name}, already created'
@@ -155,15 +156,13 @@ class Process:
         self.scratch_offset += size
 
     def _get_tbid(self, inst, other_rank, ch):
-        if inst == Instruction.copy:
-            tbid = 0
         key = (inst, other_rank, ch)
         if key in self.tb_mapping:
             tbid = self.tb_mapping[key]
         else:
-            self.tb_count += 1
             self.tb_mapping[key] = self.tb_count
             tbid = self.tb_count
+            self.tb_count += 1
         return tbid
 
     def _add_send(self, tbid, step, ch, op):
@@ -222,7 +221,7 @@ class Process:
             tb = self.tbs[tbid]
             tb.ops[step] = op
 
-    
+    # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
         if chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
             rank = self.prog.ranks[chunk.rank]
@@ -263,7 +262,7 @@ class Ref(ChunkRef):
         return Ref(buffer, index, self.size, self.prog, dst, {})
 
     def split(self, num):
-        assert (self.size % num == 0), 'Trying to split a chunk of {self.size} elements into {num} parts'
+        assert (self.size % num == 0), f'Trying to split a chunk of {self.size} elements into {num} parts'
         chunks = [None] * num
         size = self.size // num
         for i in range(num):
@@ -281,7 +280,6 @@ class Ref(ChunkRef):
         else:
             first = other
             second = self
-        # TODO: Check somewhere that all chunks are valid before sending
         # Merge the creators
         creator = self.creator.copy()
         for k, op in other.creator.items():
