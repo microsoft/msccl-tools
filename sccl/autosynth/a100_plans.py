@@ -5,7 +5,7 @@ from sccl.autosynth.registry import register_synthesis_plan
 
 def register_a100_plans():
     @register_synthesis_plan('alltoall', 'a100', machines=lambda x: x == 9)
-    def synthesize_a100_hierarchical(machines, size):
+    def synthesize_a100_hierarchical_alltoall(machines, size):
         xml = ""
         nnodes = 9
         assert(machines == nnodes)
