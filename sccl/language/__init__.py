@@ -146,7 +146,7 @@ class Process:
         self.scratch_offset = 0
 
     # Returns a reference to the chunk located at index of the input buffer.
-    def input(self, index, size):
+    def input(self, index, size=1):
         # chunk = self.buffers[Buffer.input][index]
         return Ref(Buffer.input, index, size, self.prog, self.rank, {})
 
