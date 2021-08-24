@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from sccl.language.ir import *
 
+# Initializes input buffer for an alltoall
 def alltoall_init_buffers(prog, instances):
     num_ranks = prog.topo.num_nodes()
     chunks_per_node = num_ranks * instances
@@ -19,7 +20,7 @@ def alltoall_init_buffers(prog, instances):
                    Buffer.output : output_buffer}
         prog.ranks.append(Process(prog, r, buffers))
             
-
+# Expected output buffer for alltoall
 def alltoall_expected_output(prog, instances):
     num_ranks = prog.topo.num_nodes()
     correct = True
@@ -35,6 +36,7 @@ def alltoall_expected_output(prog, instances):
                     correct = False
     return correct
 
+# Initializes input buffer for an allgather
 def allgather_init_buffers(prog):
     num_ranks = prog.topo.num_nodes()
     for r in range(num_ranks):
@@ -44,7 +46,7 @@ def allgather_init_buffers(prog):
                    Buffer.output : output_buffer}
         prog.ranks.append(Process(prog, r, buffers))
             
-
+# Expected output buffer for allgather
 def allgather_expected_output(prog):
     num_ranks = prog.topo.num_nodes()
     correct = True
@@ -72,12 +74,13 @@ class SCCLProgram:
         self.collective = collective       
         self.ranks = []
         self.instances = instances
-        # Initialize the buffers
+        # Initialize the input buffers
         if self.collective == 'alltoall':
             alltoall_init_buffers(self, instances)
         elif self.collective == 'allgather':
             allgather_init_buffers(self)
 
+    # Returns a Process corresponding to rank number
     def rank(self, rank):
         return self.ranks[rank]
 
@@ -90,6 +93,7 @@ class SCCLProgram:
             return allgather_expected_output(self)
         return False
 
+    # Lower program to XML
     def lower(self):
         for rank in self.ranks:
             rank.lower_buffers()
@@ -123,6 +127,7 @@ class BufferSlice:
         self.offset = -1
         self.chunks = {}
 
+    # Returns the global index into the scratch buffer
     def get_index(self, index):
         assert (self.offset > -1), 'set_offset needs to be called first'
         return self.offset + index
@@ -152,17 +157,6 @@ class Process:
         self.tbs = {}
         self.tb_mapping = {}
         self.tb_count = 0
-        # self.scratch_offset = 0
-
-    # Returns a reference to the chunk located at index of the input buffer.
-    def input(self, index, size=1):
-        # chunk = self.buffers[Buffer.input][index]
-        return Ref(Buffer.input, index, size, self.prog, self.rank, {})
-
-    def create_scratch(self, name):
-        assert (name not in self.buffers), f'Scratch buffer, {name}, already created'
-        self.buffers[name] = BufferSlice(Buffer.scratch)
-        # self.scratch_offset += size
 
     def _get_tbid(self, inst, other_rank, ch):
         key = (inst, other_rank, ch)
@@ -230,6 +224,16 @@ class Process:
             tb = self.tbs[tbid]
             tb.ops[step] = op
 
+    # Returns a reference to the chunk located at index of the input buffer.
+    def input(self, index, size=1):
+        # chunk = self.buffers[Buffer.input][index]
+        return Ref(Buffer.input, index, size, self.prog, self.rank, {})
+
+    # Creates a scratch buffer with a name
+    def create_scratch(self, name):
+        assert (name not in self.buffers), f'Scratch buffer, {name}, already created'
+        self.buffers[name] = BufferSlice(Buffer.scratch)
+
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
         if chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
@@ -247,6 +251,7 @@ class Process:
                 buf.set_offset(offset)
                 offset += buf.size()
 
+    # Preprocess the threadblocks for lowering into xml
     def lower_tbs(self):
         for tb in self.tbs.values():
             # Sort Ops by step
@@ -261,8 +266,8 @@ class Process:
 
 @dataclass
 class Chunk:
-    origin_rank: int # Rank chunk initially started at
-    origin_index: int # Index chunk initially started at
+    origin_rank: int # Rank the chunk initially started at
+    origin_index: int # Index the chunk initially started at
 
 @dataclass
 class Ref(ChunkRef):
@@ -277,6 +282,16 @@ class Ref(ChunkRef):
     def _get_ref(self, dst, buffer, index):
         index = self.index if index == -1 else index
         return Ref(buffer, index, self.size, self.prog, dst, {})
+
+    def _get_chunk(self, index):
+        return self.prog.ranks[self.rank].buffers[self.buffer][index]
+
+    def _copy(self, buffer=Buffer.output, index=-1, step=-1, tb=-1, ch=0):
+        dst_chunkref = self._get_ref(self.rank, buffer, index)
+        depends = list(self.creator.values())
+        op = Op(Instruction.copy, self, dst_chunkref, depends, step)
+        self.prog.ranks[self.rank]._add_copy(tb, step, ch, op)
+        return dst_chunkref
 
     def split(self, num):
         assert (self.size % num == 0), f'Trying to split a chunk of {self.size} elements into {num} parts'
@@ -323,25 +338,9 @@ class Ref(ChunkRef):
         self.prog.ranks[dst]._add_recv(recvtb, step, ch, receiveOp)
         return dst_chunkref
     
-    # def wait(self, steps):
-    #     # TODO: fix this - I don't think we need this anymore?
-    #     future = Ref(self.prog, self.proc, )
-    #     self.prog._add_op(TransferOp(OpCode.Wait, self, future))
-    #     return future
-
-    def _copy(self, buffer=Buffer.output, index=-1, step=-1, tb=-1, ch=0):
-        dst_chunkref = self._get_ref(self.rank, buffer, index)
-        depends = list(self.creator.values())
-        op = Op(Instruction.copy, self, dst_chunkref, depends, step)
-        self.prog.ranks[self.rank]._add_copy(tb, step, ch, op)
-        return dst_chunkref
-
     def reduce(self, other):
         # TODO: do something
         return self
-
-    def _get_chunk(self, index):
-        return self.prog.ranks[self.rank].buffers[self.buffer][index]
 
     def get_origin_index(self, index=0):
         return self._get_chunk(index + self.index).origin_index
