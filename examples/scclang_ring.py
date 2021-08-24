@@ -140,7 +140,6 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances):
     s = 0 # Setting steps is hacky right now - actually specifies the relative ordering
     with SCCLProgram("hierarchical_all_to_all", topology, 'alltoall', instances):
         # Allocate scratch buffers for the local gathers - 2 scratch buffers for each node-node pair
-        scratch_size = gpus_per_node * gpus_per_node * instances
         for n1 in range(num_nodes):
             for n2 in range(num_nodes):
                 if n1 != n2:
@@ -148,8 +147,8 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances):
                     h2 = CrossNodeRouter(n2, n1)
                     r1 = RankFromNodeGpuPair(n1, h1)
                     r2 = RankFromNodeGpuPair(n2, h2)
-                    Rank(r1).create_scratch((n1, n2), scratch_size) # Sender's buffer
-                    Rank(r2).create_scratch((n1, n2), scratch_size) # Receiver's buffer
+                    Rank(r1).create_scratch((n1, n2)) # Sender's buffer
+                    Rank(r2).create_scratch((n1, n2)) # Receiver's buffer
         ib_chunks = {}
 
         # Local Gathers
@@ -171,12 +170,12 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances):
                                 next = RankFromNodeGpuPair(n1, h1)
                                 scratch_key = (n1, n2)
                                 scratch_index = (g1 * gpus_per_node + g2) * instances + ch
-                                c = c.send(next, step=s, buffer=scratch_key, index=scratch_index, ch=ch)
+                                c = c.send(next, step=s, buffer=scratch_key, index=scratch_index, ch=0)
                                 AddChunk(ib_chunks, scratch_key, c)
                             elif (g1 != g2):
-                                c.send(r2, buffer=Buffer.output, index=r1*instances+ch, step=s, ch=ch) # this should be coalesced with the first send above
+                                c.send(r2, buffer=Buffer.output, index=r1*instances+ch, step=s, ch=0) # this should be coalesced with the first send above
                             else:
-                                c.send(r1, step=s, buffer=Buffer.output, index=r1*instances+ch, ch=ch) # copy input to output.
+                                c.send(r1, step=s, buffer=Buffer.output, index=r1*instances+ch, ch=0) # copy input to output.
                             s += 1
 
 
@@ -188,7 +187,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances):
             # TODO: Not a great way of dividing up this big send across multiple channels
             chunks = ib_chunk.split(instances)
             for ch, chunk in enumerate(chunks):
-                chunk = chunk.send(next2, step=s, buffer=key, ch=ch)
+                chunk = chunk.send(next2, step=s, buffer=key, ch=ch+1)
                 cs = chunk.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):
                     origin_index = c.get_origin_index()

@@ -91,7 +91,9 @@ class SCCLProgram:
         return False
 
     def lower(self):
-        gpu_prgms = [rank.lower() for rank in self.ranks]
+        for rank in self.ranks:
+            rank.lower_buffers()
+        gpu_prgms = [rank.lower_tbs() for rank in self.ranks]
         return Program(self.name, gpu_prgms)
 
     def __enter__(self):
@@ -116,22 +118,29 @@ def Check():
     return _curr().check()
 
 class BufferSlice:
-    def __init__(self, buf, size, offset):
+    def __init__(self, buf):
         self.buf = buf
-        self.offset = offset
-        self.chunks = [None] * size
+        self.offset = -1
+        self.chunks = {}
 
     def get_index(self, index):
+        assert (self.offset > -1), 'set_offset needs to be called first'
         return self.offset + index
 
     def get_buffer(self):
         return self.buf
 
-    def __getitem__(self, key):
-        return self.chunks[key]
+    def size(self):
+        return len(self.chunks)
+
+    def set_offset(self, offset):
+        self.offset = offset
+
+    def __getitem__(self, index):
+        return self.chunks[index]
     
-    def __setitem__(self, key, value):
-        self.chunks[key] = value
+    def __setitem__(self, index, value):
+        self.chunks[index] = value
 
 
 
@@ -143,17 +152,17 @@ class Process:
         self.tbs = {}
         self.tb_mapping = {}
         self.tb_count = 0
-        self.scratch_offset = 0
+        # self.scratch_offset = 0
 
     # Returns a reference to the chunk located at index of the input buffer.
     def input(self, index, size=1):
         # chunk = self.buffers[Buffer.input][index]
         return Ref(Buffer.input, index, size, self.prog, self.rank, {})
 
-    def create_scratch(self, name, size):
+    def create_scratch(self, name):
         assert (name not in self.buffers), f'Scratch buffer, {name}, already created'
-        self.buffers[name] = BufferSlice(Buffer.scratch, size, self.scratch_offset)
-        self.scratch_offset += size
+        self.buffers[name] = BufferSlice(Buffer.scratch)
+        # self.scratch_offset += size
 
     def _get_tbid(self, inst, other_rank, ch):
         key = (inst, other_rank, ch)
@@ -230,7 +239,15 @@ class Process:
             return ChunkRef(buffer, index, chunk.size)
         return chunk
 
-    def lower(self):
+    # Assigns each scratch buffer an offset into the global scratch buffer
+    def lower_buffers(self):
+        offset = 0
+        for key, buf in self.buffers.items():
+            if key is not Buffer.input and key is not Buffer.output:
+                buf.set_offset(offset)
+                offset += buf.size()
+
+    def lower_tbs(self):
         for tb in self.tbs.values():
             # Sort Ops by step
             # Index scratch buffers
