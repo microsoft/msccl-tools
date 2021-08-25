@@ -96,6 +96,4 @@ def register_a100_plans():
                             tbindex+=1
                 xml += ('  </gpu>') + '\n'
         xml += ('</algo>') + '\n'
-        return xml, {
-            # TODO: NCCL environment variables
-        }
+        return xml

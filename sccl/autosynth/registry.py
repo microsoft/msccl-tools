@@ -45,7 +45,7 @@ def _register_ef_provider(desc, fun, collective, machine_type, machines, sizes, 
 
 def register_ef_file(path, collective, machine_type, num_machines, sizes=None, priority=1):
     def provide_ef_path(machines, size):
-        return path, {}
+        return path
     _register_ef_provider(f'load {path}', provide_ef_path, collective,
                          machine_type, lambda x: x == num_machines, sizes, priority)
 
@@ -53,12 +53,12 @@ def register_ef_file(path, collective, machine_type, num_machines, sizes=None, p
 def register_synthesis_plan(collective, machine_type, machines=lambda x: True, sizes=None, priority=0):
     def decorator(fun):
         def wrapped(machines, size):
-            ef, env = fun(machines, size)
+            ef = fun(machines, size)
             fd, path = tempfile.mkstemp()
             with os.fdopen(fd, 'w') as f:
                 f.write(ef)
             atexit.register(os.remove, path)
-            return path, env
+            return path
         _register_ef_provider(f'call {fun.__name__}', wrapped, collective,
                              machine_type, machines, sizes, priority)
         # Return the original function to not break other usage

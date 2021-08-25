@@ -35,16 +35,23 @@ def init(num_machines, machine_type, *collectives):
             print(f'SCCL: Plan for {description} is {desc}')
             plans_and_sizes.append((plan, size))
 
-    envs = {}
+    paths = None
+    max_min_channels = 0
     for plan, size in plans_and_sizes:
-        path, env = plan(num_machines, size)
-        if 'SCCL_XML_FILE' in envs:
-            envs['SCCL_XML_FILE'] += ',' + path
-        else:
-            envs['SCCL_XML_FILE'] = path
-        envs.update(env)
-
-    os.environ.update(envs)
+        path = plan(num_machines, size)
+        min_channels = _extract_min_channels(path)
+        if min_channels:
+            max_min_channels = max(max_min_channels, min_channels)
+            if paths:
+                paths += f',{path}'
+            else:
+                paths = path
+    if paths:
+        os.environ.update({
+            'SCCL_XML_FILE': paths,
+            'NCCL_MIN_NCHANNELS': str(max_min_channels),
+            'NCCL_NET_SHARED_BUFFERS': '0'
+        })
 
 
 def _candidate_filter(m, s):
@@ -58,6 +65,34 @@ def _candidate_filter(m, s):
 def _candidate_sort_key(candidate):
     _, _, _, _, priority = candidate
     return priority
+
+
+def _extract_min_channels(path):
+    algo_pattern = re.compile('<algo[^>]*>')
+    nchannels_pattern = re.compile('nchannels=["\'](\\d+)["\']')
+    with open(path) as f:
+        # Try with the first line
+        first_line = f.readline()
+        match = algo_pattern.search(first_line)
+        if match:
+            tag_match = nchannels_pattern.search(match.group(0))
+            if not tag_match:
+                print(f'SCCL: Skipping algorithm, could not read nchannels from <algo/> tag in {path}')
+                return None
+            return int(tag_match.group(1))
+        # Try again with the whole file
+        f.seek(0)
+        whole_file = f.read()
+        match = algo_pattern.search(whole_file)
+        if match:
+            tag_match = nchannels_pattern.search(match.group(0))
+            if not tag_match:
+                print(f'SCCL: Skipping algorithm, could not read nchannels from <algo/> tag in {path}')
+                return None
+            return int(tag_match.group(1))
+        else:
+            print(f'SCCL: Skipping algorithm, could not find <algo/> tag in {path}')
+            return None
 
 
 def ndv2_perm(self): # pragma: no cover
@@ -96,7 +131,7 @@ def _select_isomorphism(self, isomorphisms, verbose=True): # pragma: no cover
                         f'inspector-topo had a failure:\n{topo_detect.stdout}\n{topo_detect.stderr}')
                 topo_detect_output = topo_detect.stdout.decode('utf-8')
                 g = re.search(
-                    "GPU pair shared with NIC appears to be (\d) and (\d)", topo_detect_output)
+                    'GPU pair shared with NIC appears to be (\\d) and (\\d)', topo_detect_output)
                 if g is None:
                     raise RuntimeError(
                         f'expected to detect a pair of GPUs connected to IB but something went wrong!')

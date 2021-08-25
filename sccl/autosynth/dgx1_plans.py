@@ -18,8 +18,4 @@ def register_dgx1_plans():
         scatter_algo = solve_least_steps(dgx1(), scatter_coll)
         algo = synthesize_gather_scatter_distributed_alltoall(
             machines, gather_algo, scatter_algo)
-        ef = ncclize(algo, old_format=True, use_scratch=True, instances=8)
-        return (ef, {
-            'NCCL_NET_SHARED_BUFFERS': '0',
-            'NCCL_MIN_NCHANNELS': str(algo.nchannels)
-        })
+        return ncclize(algo, old_format=True, use_scratch=True, instances=8)
