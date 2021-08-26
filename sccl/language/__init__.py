@@ -5,6 +5,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from sccl.language.ir import *
+import sccl.collectives as collectives
 
 # Initializes input buffer for an alltoall
 def alltoall_init_buffers(prog, instances):
@@ -59,6 +60,42 @@ def allgather_expected_output(prog):
                 correct = False
     return correct
 
+def allreduce_init_buffers(prog, instances):
+    num_ranks = prog.topo.num_nodes()
+    chunks_per_node = num_ranks * instances
+    for r in range(num_ranks):
+        input_buffer = []
+        output_buffer = [None] * chunks_per_node
+        for c in range(chunks_per_node):
+            input_buffer.append(Chunk(r, c))
+        buffers = {Buffer.input : input_buffer, 
+                Buffer.output : output_buffer}
+        prog.ranks.append(Process(prog, r, buffers))
+            
+
+def allreduce_expected_output(prog, instances):
+    num_ranks = prog.topo.num_nodes()
+    chunks_per_node = num_ranks * instances
+    expected_chunks = []
+
+    for c in range(chunks_per_node):
+        chunk = ReduceChunk([])
+        for r in range(num_ranks):
+            chunk.reduce(Chunk(r, c))
+        expected_chunks.append(chunk)
+
+    correct = True
+    for r in range(num_ranks):
+        output = prog.ranks[r].buffers[Buffer.input]
+        for c in range(chunks_per_node):
+            chunk = output[c]
+            if chunk is None or chunk != expected_chunks[c]:
+                print(f'Rank {r} chunk {c} is incorrect should be {expected_chunks[c]} given {chunk}')
+                correct = False
+    return correct
+
+
+
 
 _current_program = None
 def _curr():
@@ -79,6 +116,8 @@ class SCCLProgram:
             alltoall_init_buffers(self, instances)
         elif self.collective == 'allgather':
             allgather_init_buffers(self)
+        elif self.collective == 'allreduce':
+            allreduce_init_buffers(self, instances)
 
     # Returns a Process corresponding to rank number
     def rank(self, rank):
@@ -91,6 +130,8 @@ class SCCLProgram:
             return alltoall_expected_output(self, self.instances)
         elif self.collective == 'allgather':
             return allgather_expected_output(self)
+        elif self.collective == 'allreduce':
+            return allreduce_expected_output(self, self.instances)
         return False
 
     # Lower program to XML
@@ -169,7 +210,6 @@ class Process:
         return tbid
 
     def _add_send(self, tbid, step, ch, op):
-        # print(f'Send {op.dst.index} from {op.src.rank} to {op.dst.rank} {tbid} {step}')
         assert(op.inst == Instruction.send)
         sendto = op.dst.rank
         if tbid == -1:
@@ -224,9 +264,33 @@ class Process:
             tb = self.tbs[tbid]
             tb.ops[step] = op
 
+    # Actually a receive reduce copy.
+    def _add_reduce(self, tbid, step, ch, op):
+        receivefrom = op.src.rank
+        if tbid == -1:
+            tbid = self._get_tbid(Instruction.recv, receivefrom, ch) # TODO: recv and rrc share tb
+        recvd_chunkref = op.dst
+        recvd_chunkref.creator[tbid] = op
+
+        # Update buffer with reduced chunk
+        reduce_chunk = self.buffers[op.dst.buffer][op.dst.index]
+        other_chunk = self.prog.ranks[op.src.rank].buffers[op.src.buffer][op.src.index]
+        self.buffers[op.dst.buffer][op.dst.index] = other_chunk.reduce(reduce_chunk)
+
+        # Update tbs
+        if tbid not in self.tbs:
+            self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops={step: op})
+        else:
+            tb = self.tbs[tbid]
+            assert (tb.recv == -1 or tb.recv == receivefrom), \
+                   f'Rank {self.rank}: Threadblock {tbid} is already set to receive from {tb.recv}, trying to receive from {receivefrom}'
+            tb.recv = receivefrom
+            assert step not in tb.ops, f'Step {step} in rank {self.rank} tbid {tbid}'
+            tb.ops[step] = op
+
+
     # Returns a reference to the chunk located at index of the input buffer.
     def input(self, index, size=1):
-        # chunk = self.buffers[Buffer.input][index]
         return Ref(Buffer.input, index, size, self.prog, self.rank, {})
 
     # Creates a scratch buffer with a name
@@ -268,6 +332,42 @@ class Process:
 class Chunk:
     origin_rank: int # Rank the chunk initially started at
     origin_index: int # Index the chunk initially started at
+
+    def reduce(self, chunk):
+        r = ReduceChunk([self, chunk])
+        return r
+
+    def __eq__(self, other):
+        return self.origin_rank == other.origin_rank and self.origin_index == other.origin_index
+
+    def __lt__(self, other):
+        return self.origin_rank < other.origin_rank or \
+               (self.origin_rank == other.origin_rank and self.origin_index < other.origin_index)
+
+@dataclass
+class ReduceChunk:
+    chunks: list # List of chunks reduced
+
+    def reduce(self, chunk):
+        if type(chunk) is Chunk:  
+            self.chunks.append(chunk)
+        elif type(chunk) is ReduceChunk:
+            self.chunks = self.chunks + chunk.chunks
+        else:
+            print('Trying to reduce with nothing?', "chunk:", chunk, "self:", self)
+        return self
+
+    def sort(self):
+        self.chunks.sort()
+
+    # Two reduce chunks are equal if they contain the same list of
+    # chunks being reduced
+    # Assume commutativity so order does not matter (TODO: check)
+    def __eq__(self, other):
+        self.sort()
+        other.sort()
+        return self.chunks == other.chunks
+
 
 @dataclass
 class Ref(ChunkRef):
@@ -338,9 +438,14 @@ class Ref(ChunkRef):
         self.prog.ranks[dst]._add_recv(recvtb, step, ch, receiveOp)
         return dst_chunkref
     
-    def reduce(self, other):
-        # TODO: do something
-        return self
+    def reduce(self, dst, buffer, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
+        # TODO: wip
+        dst_chunkref = self._get_ref(dst, buffer, index)
+        sendOp = Op(Instruction.send, self, dst_chunkref, list(self.creator.values()), step)
+        self.prog.ranks[self.rank]._add_send(sendtb, step, ch, sendOp)
+        rrcOp = Op(Instruction.recv_reduce_copy, self, dst_chunkref, [], step)
+        self.prog.ranks[dst]._add_reduce(recvtb, step, ch, rrcOp)
+        return dst_chunkref
 
     def get_origin_index(self, index=0):
         return self._get_chunk(index + self.index).origin_index
