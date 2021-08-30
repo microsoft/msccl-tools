@@ -89,11 +89,9 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
                 # Local scatter
                 cs = chunk.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):
-                    # Access the chunk's origin rank and index to determine its final rank and index.
-                    origin_index = c.get_origin_index()
-                    origin_rank = c.get_origin_rank()
-                    final_rank = origin_index // instances
-                    index = origin_rank * instances + origin_index % instances
+                    # Access the chunk's destination rank and index to route it to its final place
+                    final_rank = c.get_dst_rank()
+                    index = c.get_dst_index()
                     c.send(final_rank, step=s, buffer=Buffer.output, index=index, ch=1)
                     s +=1
 

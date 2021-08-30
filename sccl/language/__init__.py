@@ -15,7 +15,7 @@ def alltoall_init_buffers(prog, instances):
         input_buffer = [None] * chunks_per_node
         output_buffer = [None] * chunks_per_node
         for index in range(chunks_per_node):
-            chunk = Chunk(r, index)
+            chunk = Chunk(r, index, index//instances, index % instances + r*instances)
             input_buffer[index] = chunk
         buffers = {Buffer.input : input_buffer, 
                    Buffer.output : output_buffer}
@@ -162,6 +162,7 @@ def XML():
 def Check():
     return _curr().check()
 
+# Scratch buffer slice with manual indexing
 class BufferSlice:
     def __init__(self, buf):
         self.buf = buf
@@ -169,7 +170,7 @@ class BufferSlice:
         self.chunks = {}
 
     # Returns the global index into the scratch buffer
-    def get_index(self, index):
+    def get_global_index(self, index):
         assert (self.offset > -1), 'set_offset needs to be called first'
         return self.offset + index
 
@@ -187,7 +188,6 @@ class BufferSlice:
     
     def __setitem__(self, index, value):
         self.chunks[index] = value
-
 
 
 class Process:
@@ -303,7 +303,7 @@ class Process:
         if chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
             rank = self.prog.ranks[chunk.rank]
             buffer = rank.buffers[chunk.buffer].get_buffer()
-            index = rank.buffers[chunk.buffer].get_index(chunk.index)
+            index = rank.buffers[chunk.buffer].get_global_index(chunk.index)
             return ChunkRef(buffer, index, chunk.size)
         return chunk
 
@@ -332,6 +332,8 @@ class Process:
 class Chunk:
     origin_rank: int # Rank the chunk initially started at
     origin_index: int # Index the chunk initially started at
+    dst_rank: int
+    dst_index: int
 
     def reduce(self, chunk):
         r = ReduceChunk([self, chunk])
@@ -431,6 +433,7 @@ class Ref(ChunkRef):
         if dst == self.rank:
             return self._copy(buffer, index, step, sendtb, ch)
         # Direct send
+        assert (self.prog.topo.link(self.rank, dst)), f'No link from {self.rank} to {dst}'
         dst_chunkref = self._get_ref(dst, buffer, index)
         sendOp =  Op(Instruction.send, self, dst_chunkref, list(self.creator.values()), step)
         self.prog.ranks[self.rank]._add_send(sendtb, step, ch, sendOp)
@@ -452,3 +455,9 @@ class Ref(ChunkRef):
 
     def get_origin_rank(self, index=0):
         return self._get_chunk(index + self.index).origin_rank
+
+    def get_dst_index(self, index=0):
+        return self._get_chunk(index + self.index).dst_index
+
+    def get_dst_rank(self, index=0):
+        return self._get_chunk(index + self.index).dst_rank
