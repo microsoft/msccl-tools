@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 from lxml import etree as ET
 from dataclasses import dataclass, field
 from enum import Enum
@@ -37,6 +40,7 @@ class Instruction(Enum):
     recv_copy_send = 'rcs'
     recv_reduce_send = 'rrs'
     recv_reduce_copy = 'rrc'
+    recv_reduce_copy_send = 'rrcs'
     copy = 'cpy'
     reduce = 're'
 
@@ -59,6 +63,9 @@ class ChunkRef:
     index: int
     size: int
 
+    def __hash__(self):
+        return hash(self.buffer) + hash(self.index) + hash(self.size)
+
 
 @dataclass
 class Op:
@@ -67,6 +74,7 @@ class Op:
     dst: ChunkRef
     depends: list = field(default_factory=list)
     step: int = -1# TODO: fix this - relative step not the actual step
+    overwritten: bool = False # Is the result of this op later overwritten
 
     def cnt(self):
         if self.src:
@@ -89,7 +97,8 @@ class Op:
 _local_src_insts = {Instruction.send, Instruction.copy, Instruction.reduce}
 # Instructions where dst is on local GPU
 _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.recv_reduce_send,
-                    Instruction.recv_reduce_copy, Instruction.copy, Instruction.reduce}
+                    Instruction.recv_reduce_copy, Instruction.copy, Instruction.reduce,
+                    Instruction.recv_reduce_copy_send}
 
 
 def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True):

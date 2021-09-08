@@ -14,13 +14,7 @@ def allreduce(num_nodes, instances):
     remote_bw = 1
     topology = distributed_fully_connected(local_topology, num_nodes, remote_bw)
     size = topology.num_nodes()
-    local_ring_order = [0, 4, 6, 7, 5, 1, 3, 2] # Reductions will happen locally within a node in this order.
-
-    def AddChunk(ib_chunks, key, c):
-        if key in ib_chunks: 
-            ib_chunks[key] = ib_chunks[key].group(c)
-        else:
-            ib_chunks[key] = c
+    local_ring_order = [1,3,2,6,7,5,4,0] # Reductions will happen locally within a node in this order.
 
     def rank(n, g):
         return local_ring_order[g] + n * num_local_gpus
@@ -28,67 +22,37 @@ def allreduce(num_nodes, instances):
     with SCCLProgram("allreduce_ring_dgx1", topology, 'allreduce', instances):
         s = 0
 
-        # Chunks travels around local rings being reduced (local_gpus-1 hops)
-        num_chunks = instances * num_local_gpus * instances
+        # Chunks travels around local rings being reduced (local_gpus-1 hops) starting at local gpu 1
+        # At the end of the most reduced chunk ends up on local gpu 0 every each node
         for n in range(num_nodes):
-            for g in range(num_local_gpus):
-                for n2 in range(num_nodes):
-                    for ch in range(instances):
-                        r = rank(n, g)
-                        chunk_index = rank(n2, g)*instances + ch
-                        c = Rank(r).input(chunk_index)
-                        next_index = (g+1) % num_local_gpus
-                        next = rank(n, next_index % num_local_gpus)
-                        while next != r:
-                            c = c.reduce(next, buffer=Buffer.input, index=chunk_index, step=s, ch=ch)
-                            next_index = (next_index + 1) % num_local_gpus
-                            next = rank(n, next_index)
-                            s += 1
+            r = rank(n, 0) # Start at local gpu 1 (index 0 in local_ring_order)
+            c = Rank(r).input(0)
+            for g in range(1, 8):
+                next = rank(n, g)
+                c = c.reduce(next, buffer=Buffer.input, index=0, step=s)
+                s += 1
 
-        # Send the partly reduced chunk around the ring      
-        # After this step every chunk on each node will contain the partial reduction of the local nodes chunk
+        # At this point gpu0 and gpu8 have the two most reduced chunks
+        # 1 IB send to fully reduce chunk + 1 IB send to update other node 
+        c = Rank(0).input(0)
+        # c = c.send(9, buffer=Buffer.input, index=0, step=s)
+        # s+=1
+        c = c.reduce(8, buffer=Buffer.input, index=0, step=s) # Completely reduced chunk on node 1, gpu 0
+        s += 1
+        c = c.send(0, buffer=Buffer.input, index=0, step=s) # Completely reduced chunk on node 0, gpu0
+        s += 1
+
+        #  Propagate the fully reduced chunks
         for n in range(num_nodes):
-            for g in range(num_local_gpus):
-                for n2 in range(num_nodes):
-                    for ch in range(instances):
-                        r = rank(n, g)
-                        next = rank(n, (g-1)%num_local_gpus)
-                        index = r*instances + ch
-                        chunk_index = rank(n2, g) * instances + ch
-                        c = Rank(next).input(chunk_index)
-                        next_index = (g) % num_local_gpus
-                        next = rank(n, next_index)
-                        while next_index != (g - 1) % num_local_gpus:
-                            c = c.send(next, buffer=Buffer.input, index=chunk_index, step=s, ch=ch)
-                            next_index = (next_index + 1) % num_local_gpus
-                            next = rank(n, next_index)
-                            s += 1
+            r = rank(n, 7) 
+            c = Rank(r).input(0)
+            for g in range(0, 7):
+                next = rank(n, g)
+                c = c.send(next, buffer=Buffer.input, index=0, step=s)
+                s += 1
 
-        # Reduce chunks across IB with other nodes
-        # Update fully reduced chunks locally
-        # TODO: only works with 2 nodes
-        if num_nodes > 1:
-            s=1000
-            c = Rank(0).input(0, size*instances)
-            c = c.reduce(8, step=s, index=0, buffer=Buffer.input)
-            s+=1
-            c.send(0, step=s, index=0, buffer=Buffer.input)
-            s +=1
 
-            # Final round of sending the fully reduced chunks around the ring
-            for n in range(num_nodes):
-                for ch in range(instances):
-                    g = 0
-                    r = rank(n, g)
-                    next = rank(n, g)
-                    c = Rank(next).input(0, size*instances)
-                    next_index = (g+1) % num_local_gpus
-                    next = rank(n, next_index)
-                    while next_index != g:
-                        c = c.send(next, buffer=Buffer.input, index=0, step=s, ch=ch)
-                        next_index = (next_index + 1) % num_local_gpus
-                        next = rank(n, next_index)
-                        s += 1
+            
 
         XML()
         Check()

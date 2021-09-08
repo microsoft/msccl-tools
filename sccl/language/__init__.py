@@ -63,7 +63,7 @@ def allgather_expected_output(prog):
 
 def allreduce_init_buffers(prog, instances):
     num_ranks = prog.topo.num_nodes()
-    chunks_per_node = num_ranks * instances
+    chunks_per_node = instances
     for r in range(num_ranks):
         input_buffer = []
         output_buffer = [None] * chunks_per_node
@@ -77,7 +77,7 @@ def allreduce_init_buffers(prog, instances):
 
 def allreduce_expected_output(prog, instances):
     num_ranks = prog.topo.num_nodes()
-    chunks_per_node = num_ranks * instances
+    chunks_per_node = instances
     expected_chunks = []
 
     for c in range(chunks_per_node):
@@ -243,7 +243,12 @@ class Process:
         # Update buffer with received chunks, update dependencies for those chunks
         for i in range(op.src.size):
             self.buffers[op.dst.buffer][op.dst.index+i] = self.prog.ranks[op.src.rank].buffers[op.src.buffer][op.src.index+i]
-            self.dependencies[(op.dst.buffer, op.dst.index+i)] = {tbid: op}
+            # If receiving into a slot with an existing chunk - mark the chunk's creator op as overwritten
+            dependence_key = (op.dst.buffer, op.dst.index+i)
+            # TODO: Fis overwritten flag
+            # if dependence_key in self.dependencies:
+                # self.dependencies[dependence_key].overwritten = True
+            self.dependencies[dependence_key] = {tbid: op}
 
         # Update tbs
         if tbid not in self.tbs:
@@ -532,3 +537,6 @@ class Ref(ChunkRef):
 
     def get_dst_rank(self, index=0):
         return self._get_chunk(index + self.index).dst_rank
+
+    def print_chunk_info(self, index=0):
+        print(self._get_chunk(index + self.index)) 
