@@ -124,6 +124,9 @@ class PathEncodingBase(object):
         else:
             overlap = 0
 
+        _add_relay_relaxation()
+        _add_symmetry()
+
         # Correctness
         for chunk in collective.chunks():
             for rank in collective.ranks():

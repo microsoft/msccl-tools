@@ -23,6 +23,7 @@ class KnownTopologies:
             'DGX2': self._fixed_topo(lambda: topologies.hub_and_spoke(16)),
             'NVLinkOnly': self._fixed_topo(topologies.nvlink_only),
             'custom': self._custom_topo(),
+            'DGX2Cluster': self._sized_topo(topologies.dgx2_cluster),
         }
         self.parser.add_argument(f'topology{tag}', type=str, choices=self.constructors.keys(), help=f'topology {tag}')
         self.parser.add_argument(f'--topology-file{tag}', type=Path, default=None, help=f'a serialized topology', metavar=f'FILE')
