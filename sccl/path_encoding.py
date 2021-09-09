@@ -38,6 +38,83 @@ class PathEncodingBase(object):
         self.collective = collective
 
     def _encode(self, s, instance, collective):
+        def _add_relay_relaxation():
+            copies = self.topology.copies
+            num_nodes = self.topology.num_nodes()
+            num_chunks = self.collective.num_chunks
+            num_local_nodes = self.topology.num_nodes() // copies
+            num_local_chunks = self.collective.num_chunks // copies
+            chunk_per_node = num_local_chunks // num_local_nodes
+
+            for c in self.collective.chunks():
+                pair_set = defaultdict(set)
+                for r1 in self.collective.pre_on(c):
+                    for r2 in self.collective.post_on(c):
+                        snd_node = r1 // num_local_nodes
+                        rcv_node = r2 // num_local_nodes
+                        other_node = -1
+                        if snd_node != rcv_node:
+                            if "DGX2" in self.topology.name:
+                                relays = [[1,3,5,7,9,11,13,15],[0,2,4,6,8,10,12,14]]
+                                snd_gpu = snd_node * num_local_nodes + relays[0][((r1%num_local_nodes)//2)]
+                                rcv_gpu = rcv_node * num_local_nodes + relays[1][((r1%num_local_nodes)//2)]
+                                pair_set[(snd_node,rcv_node)].add((snd_gpu,rcv_gpu))
+                            else:
+                                assert False
+                for (snode, rnode) in pair_set:
+                    if len(pair_set[snode,rnode]):
+                        s.add(PbGe([(_send(c, src, r), 1) for (src,r) in pair_set[(snode,rnode)]], 1))
+                # Set rest of the source to destination IB sends to 0
+                for src1 in range(num_local_nodes):
+                    for r1 in range(num_local_nodes):
+                        for i in range(copies):
+                            for j in range(copies):
+                                if i == j:
+                                    continue
+                                src = src1 + i * num_local_nodes
+                                r = r1 + j * num_local_nodes
+                                if (src,r) not in pair_set[(i,j)]:
+                                    s.add(_send(c,src,r) == False)
+
+        def _add_symmetry():
+            copies = self.topology.copies
+            num_nodes = self.topology.num_nodes()
+            num_chunks = self.collective.num_chunks
+            num_local_nodes = self.topology.num_nodes() // copies
+            num_local_chunks = self.collective.num_chunks // copies
+            chunk_per_node = num_local_chunks // num_local_nodes
+
+            # allgather symmetry
+            if "Allgather" in self.collective.name:
+                # print("Added allgather symmetry")
+                for c in range(num_local_chunks):
+                    for r in range(num_nodes):
+                        for src in self.topology.sources(r):
+                            for l in range(1):
+                                for i in range(1,copies):
+                                    r_copy = (r + i*num_local_nodes) % num_nodes
+                                    src_copy = (src + i*num_local_nodes) % num_nodes
+                                    c_copy = c + i*num_local_chunks
+                                    s.add(_send(c,src,r) == _send(c_copy, src_copy, r_copy))
+
+                        for i in range(1,copies):
+                            r_copy = (r + i*num_local_nodes) % num_nodes
+                            c_copy = c + i*num_local_chunks
+                            s.add(_start(c,r) == _start(c_copy, r_copy))
+                if "DGX2" in self.topology.name:
+                    print("Adding DGX2 symmetry")
+                    sym_factor = 2
+                    for c in self.collective.chunks():
+                        copy = c // num_local_chunks
+                        for r in range(num_local_nodes):
+                            for src in range(num_local_nodes):
+                                r_sym = (r + sym_factor)%16
+                                src_sym = (src + sym_factor)%16
+                                c_sym = copy*num_local_chunks + (c%num_local_chunks+sym_factor)%16
+                                for l in range(1):
+                                    s.add(_send(c,src,r) == _send(c_copy, src_copy, r_copy))
+                                    s.add(_start(c,r) == _start(c_copy, r_copy))
+
         # Calculate how much iterations of the algorithm overlap if pipelining is specified
         if instance.pipeline != None:
             # TODO: move this check into Instance
