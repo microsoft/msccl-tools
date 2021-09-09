@@ -85,7 +85,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
             # IB send divided across multiple parallel channels
             chunks = ib_chunk.split(ib_channels)
             for ch, chunk in enumerate(chunks):
-                chunk = chunk.send(scatter_rank, step=s, buffer=buffer_key, ch=ch)
+                chunk = chunk.send(scatter_rank, step=s, index=0, buffer=buffer_key, ch=ch)
                 # Local scatter
                 cs = chunk.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):

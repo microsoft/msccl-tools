@@ -74,6 +74,7 @@ class Op:
     dst: ChunkRef
     depends: list = field(default_factory=list)
     step: int = -1# TODO: fix this - relative step not the actual step
+    tb: int = -1 # TODO do we need this
     overwritten: bool = False # Is the result of this op later overwritten
 
     def cnt(self):

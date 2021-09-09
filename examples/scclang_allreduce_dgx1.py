@@ -34,17 +34,20 @@ def allreduce(num_nodes, instances):
 
         # At this point gpu0 and gpu8 have the two most reduced chunks
         # 1 IB send to fully reduce chunk + 1 IB send to update other node 
-        c = Rank(0).input(0)
-        # c = c.send(9, buffer=Buffer.input, index=0, step=s)
-        # s+=1
-        c = c.reduce(8, buffer=Buffer.input, index=0, step=s) # Completely reduced chunk on node 1, gpu 0
+        c0 = Rank(0).input(0)
+        c0 = c0.send(9, buffer=Buffer.input, index=0, step=s)
+        s+=1
+        c1 = Rank(8).input(0)
+        c1 = c1.send(1, buffer=Buffer.input, index=0, step=s)
         s += 1
-        c = c.send(0, buffer=Buffer.input, index=0, step=s) # Completely reduced chunk on node 0, gpu0
+
+        c0 = c0.reduce(8, buffer=Buffer.input, index=0, step=s) # Completely reduced chunk on node 1, gpu0
+        c1 = c1.reduce(0, buffer=Buffer.input, index=0, step=s) # Completely reduced chunk on node 0, gpu0
         s += 1
 
         #  Propagate the fully reduced chunks
         for n in range(num_nodes):
-            r = rank(n, 7) 
+            r = rank(n, -1) 
             c = Rank(r).input(0)
             for g in range(0, 7):
                 next = rank(n, g)
