@@ -47,6 +47,12 @@ class Collective:
         else:
             return None
 
+    def pre_on(self, chunk):
+        return self._chunks[chunk].precondition
+
+    def post_on(self, chunk):
+        return self._chunks[chunk].postcondition
+
     def has_triggers(self):
         return len(self._triggers) > 0
 
