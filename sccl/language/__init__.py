@@ -248,7 +248,6 @@ class Process:
         if tbid == -1:
             tbid = self._get_tbid(Instruction.recv, receivefrom, ch)
         recvd_chunkref = op.dst
-        # recvd_chunkref.creator[tbid] = op
 
         # Fill in op dependence 
         op.tb = tbid
@@ -326,7 +325,6 @@ class Process:
         if tbid == -1:
             tbid = self._get_tbid(Instruction.copy, receivefrom, ch) # TODO: copy and reduce share tb
         recvd_chunkref = op.dst
-        recvd_chunkref.creator[tbid] = op
 
         # Fill in op dependence 
         op.tb = tbid
@@ -354,7 +352,6 @@ class Process:
     def _get_dependences(self, buffer, start_index, size):
         # Get and merge dependencies for each index
         # If multiple dependencies for same tb keep the one with the highest step
-        # TODO: might leave in the extra dependencies so we can split tbs later 
         depends = {}
         for i in range(size):
             index = start_index + i
