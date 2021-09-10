@@ -24,35 +24,36 @@ def allreduce(num_nodes, instances):
 
         # Chunks travels around local rings being reduced (local_gpus-1 hops) starting at local gpu 1
         # At the end of the most reduced chunk ends up on local gpu 0 every each node
-        for n in range(num_nodes):
-            r = rank(n, 0) # Start at local gpu 1 (index 0 in local_ring_order)
-            c = Rank(r).input(0)
-            for g in range(1, 8):
-                next = rank(n, g)
-                c = c.reduce(next, buffer=Buffer.input, index=0, step=s)
-                s += 1
+        for ch in range(instances):
+            for n in range(num_nodes):
+                r = rank(n, 0) # Start at local gpu 1 (index 0 in local_ring_order)
+                c = Rank(r).input(ch)
+                for g in range(1, 8):
+                    next = rank(n, g)
+                    c = c.reduce(next, buffer=Buffer.input, index=ch, step=s, ch=ch)
+                    s += 1
 
-        # At this point gpu0 and gpu8 have the two most reduced chunks
-        # 1 IB send to fully reduce chunk + 1 IB send to update other node 
-        c0 = Rank(0).input(0)
-        c0 = c0.send(9, buffer=Buffer.input, index=0, step=s)
-        s+=1
-        c1 = Rank(8).input(0)
-        c1 = c1.send(1, buffer=Buffer.input, index=0, step=s)
-        s += 1
+            # At this point gpu0 and gpu8 have the two most reduced chunks
+            # 1 IB send to fully reduce chunk + 1 IB send to update other node 
+            c0 = Rank(0).input(0)
+            c0 = c0.send(9, buffer=Buffer.input, index=ch, step=s, ch=ch)
+            s+=1
+            c1 = Rank(8).input(0)
+            c1 = c1.send(1, buffer=Buffer.input, index=ch, step=s, ch=ch)
+            s += 1
 
-        c0 = c0.reduce(8, buffer=Buffer.input, index=0, step=s) # Completely reduced chunk on node 1, gpu0
-        c1 = c1.reduce(0, buffer=Buffer.input, index=0, step=s) # Completely reduced chunk on node 0, gpu0
-        s += 1
+            c0 = c0.reduce(8, buffer=Buffer.input, index=ch, step=s, ch=ch) # Completely reduced chunk on node 1, gpu0
+            c1 = c1.reduce(0, buffer=Buffer.input, index=ch, step=s, ch=ch) # Completely reduced chunk on node 0, gpu0
+            s += 1
 
-        #  Propagate the fully reduced chunks
-        for n in range(num_nodes):
-            r = rank(n, -1) 
-            c = Rank(r).input(0)
-            for g in range(0, 7):
-                next = rank(n, g)
-                c = c.send(next, buffer=Buffer.input, index=0, step=s)
-                s += 1
+            #  Propagate the fully reduced chunks
+            for n in range(num_nodes):
+                r = rank(n, -1) 
+                c = Rank(r).input(ch)
+                for g in range(0, 7):
+                    next = rank(n, g)
+                    c = c.send(next, buffer=Buffer.input, index=ch, step=s, ch=ch)
+                    s += 1
 
 
             
