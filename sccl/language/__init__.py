@@ -5,6 +5,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from sccl.language.ir import *
+from sccl.language.passes import *
 import sccl.collectives as collectives
 
 # Initializes input buffer for an alltoall
@@ -113,6 +114,7 @@ class SCCLProgram:
         self.collective = collective       
         self.ranks = []
         self.instances = instances
+        self.run_opt = True # Runs optimization passes
         # Initialize the input buffers
         if self.collective == 'alltoall':
             alltoall_init_buffers(self, instances)
@@ -139,6 +141,8 @@ class SCCLProgram:
     # Lower program to XML
     def lower(self):
         for rank in self.ranks:
+            if self.run_opt:
+                rank.optimize()
             rank.lower_buffers()
         gpu_prgms = [rank.lower_tbs() for rank in self.ranks]
         return Program(self.name, gpu_prgms)
@@ -223,6 +227,7 @@ class Process:
         # Update tb and assign to a default tb if not given
         if tbid == -1:
             tbid = self._get_tbid(Instruction.send, sendto, ch)
+
         if tbid not in self.tbs:
             self.tbs[tbid] = Threadblock(ch, send=sendto, ops={step: op})
         else:
@@ -382,6 +387,18 @@ class Process:
         assert (name not in self.buffers), f'Scratch buffer, {name}, already created'
         self.buffers[name] = BufferSlice(Buffer.scratch)
 
+    # Runs optimization pass over slot_ops
+    def optimize(self):
+        for k, ops in self.slot_ops.items():
+            rrcs_rrs(ops, self.tbs)
+            rcs(ops, self.tbs)
+            
+
+        # if self.rank == 0:
+        #     print("FINAL GPU 0")
+        #     print(self.tbs)
+        #     print(" ")
+
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
         if chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
@@ -467,6 +484,9 @@ class Ref(ChunkRef):
     rank: int
     missing: set = field(default_factory=set)
 
+    def __repr__(self):
+        return f'Ref(Buffer:{self.buffer}, Index:{self.index}, Size:{self.size}, Rank:{self.rank})'
+
     def _end(self):
         return self.index + self.size
 
@@ -509,6 +529,10 @@ class Ref(ChunkRef):
 
     def send(self, dst, buffer, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
         assert (len(self.missing) == 0), f'Trying to send an incomplete concatenation. Missing indices {self.missing}'
+        # TEMP TODO FIX: can't run optimization passes with multi chunk sends currently
+        if self.size > 1:
+            self.prog.run_opt = False
+
         # Local copy
         if dst == self.rank:
             return self._copy(buffer, index, step, sendtb, ch)

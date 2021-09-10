@@ -75,7 +75,6 @@ class Op:
     depends: list = field(default_factory=list)
     step: int = -1# TODO: fix this - relative step not the actual step
     tb: int = -1 # TODO do we need this
-    overwritten: bool = False # Is the result of this op later overwritten
 
     def cnt(self):
         if self.src:
@@ -92,6 +91,16 @@ class Op:
 
     def __hash__(self):
         return id(self)
+
+    def _print_no_dep(self):
+        return f'(Op({self.inst}, {self.src}, {self.dst}, step:{self.step}, tb:{self.tb})'
+
+    def __repr__(self):
+        if len(self.depends) > 0:
+            dep = self.depends[0]._print_no_dep()
+        else:
+            dep = '[]'
+        return f'Op({self.inst}, {self.src}, {self.dst}, step:{self.step}, tb:{self.tb}, dep={dep})'
 
 
 # Instructions where src is on local GPU
