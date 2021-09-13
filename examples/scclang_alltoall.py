@@ -65,16 +65,16 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
                                 # Gather chunks destined for cross node ranks in scratch to route through IB
                                 gather_rank, _ = CrossNodeGpus(n1, n2)
                                 buffer_key = (n1, n2)
-                                buffer_index = (g1 * gpus_per_node + g2) * instances + ch
+                                # buffer_index = (g1 * gpus_per_node + g2) * instances + ch
                                 # Send chunk to the gather_rank. Send returns a chunk reference to the 
                                 # receiver's chunk
-                                c = c.send(gather_rank, step=s, buffer=buffer_key, index=buffer_index, ch=0)
+                                c = c.send(gather_rank, step=s, buffer=buffer_key, ch=0)
                                 # Group the chunks using a particular IB pair into one large chunk reference
                                 AddChunk(ib_chunks, buffer_key, c) 
                             else:
                                 # Directly send chunks destined for ranks within the node or
                                 # copy chunks destined for current rank into the output buffer
-                                c.send(r2, step=s, buffer=Buffer.output, index=r1*instances+ch, ch=0)
+                                c.send(r2, step=s, buffer=Buffer.output, index=c.get_dst_index(), ch=0)
                             s += 1
 
 
@@ -85,7 +85,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
             # IB send divided across multiple parallel channels
             chunks = ib_chunk.split(ib_channels)
             for ch, chunk in enumerate(chunks):
-                chunk = chunk.send(scatter_rank, step=s, index=0, buffer=buffer_key, ch=ch)
+                chunk = chunk.send(scatter_rank, step=s, buffer=buffer_key, ch=ch)
                 # Local scatter
                 cs = chunk.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):

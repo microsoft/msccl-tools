@@ -172,7 +172,8 @@ def Check():
 class BufferSlice:
     def __init__(self, buf):
         self.buf = buf
-        self.offset = -1
+        self.offset = -1 # Offset into the global scratch buffer
+        self.index = 0 # Current index of chunks added
         self.chunks = {}
 
     # Returns the global index into the scratch buffer
@@ -188,6 +189,11 @@ class BufferSlice:
 
     def set_offset(self, offset):
         self.offset = offset
+
+    def get_next_index(self, size):
+        index = self.index
+        self.index += size
+        return index
 
     def __getitem__(self, index):
         return self.chunks[index]
@@ -392,12 +398,6 @@ class Process:
         for k, ops in self.slot_ops.items():
             rrcs_rrs(ops, self.tbs)
             rcs(ops, self.tbs)
-            
-
-        # if self.rank == 0:
-        #     print("FINAL GPU 0")
-        #     print(self.tbs)
-        #     print(" ")
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
@@ -527,18 +527,25 @@ class Ref(ChunkRef):
         return Ref(self.buffer, first.index, end - first.index, self.prog, self.rank, missing) # Broken
         
 
-    def send(self, dst, buffer, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
+    def send(self, dst, buffer=None, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
         assert (len(self.missing) == 0), f'Trying to send an incomplete concatenation. Missing indices {self.missing}'
         # TEMP TODO FIX: can't run optimization passes with multi chunk sends currently
         if self.size > 1:
             self.prog.run_opt = False
 
+        # If index is not specified assume it is going to the same place in the next gpu
+        if index == -1 and buffer == None:
+            index = self.index
+            buffer = self.buffer # TODO: eventually change this dst buffer depending if it is inplace/outofplace
+        elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
+            index = self.prog.ranks[dst].buffers[buffer].get_next_index(self.size)
+
         # Local copy
         if dst == self.rank:
             return self._copy(buffer, index, step, sendtb, ch)
+
         # Direct send
         assert (self.prog.topo.link(self.rank, dst)), f'No link from {self.rank} to {dst}'
-       
         dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
         sendOp =  Op(Instruction.send, self, dst_chunkref, {}, step)
         self.prog.ranks[self.rank]._add_send(sendtb, step, ch, sendOp)
