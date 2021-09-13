@@ -13,15 +13,13 @@ def allgather_ring(size):
             # Get the chunk at rank r, input[r]
             c = Rank(r).input(0)
             # Copy chunk to the output buffer
-            c = c.send(r, step=0, sendtb=0, buffer=Buffer.output, index=r)
+            c = c.send(r, sendtb=0, buffer=Buffer.output, index=r)
 
             next = (r + 1) % size
-            hops = 0
             while next != r:
                 # For each rank in the ring, send the chunk to the next rank
-                c = c.send(next, step=hops, sendtb=1, recvtb=2, buffer=Buffer.output)
+                c = c.send(next, sendtb=1, recvtb=2, buffer=Buffer.output)
                 next = (next + 1) % size
-                hops += 1
         XML()
         Check()
 

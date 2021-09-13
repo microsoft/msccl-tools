@@ -20,7 +20,6 @@ def allreduce(num_nodes, instances):
         return local_ring_order[g] + n * num_local_gpus
         
     with SCCLProgram("allreduce_ring_dgx1", topology, 'allreduce', instances):
-        s = 0
 
         # Chunks travels around local rings being reduced (local_gpus-1 hops) starting at local gpu 1
         # At the end of the most reduced chunk ends up on local gpu 0 every each node
@@ -30,22 +29,17 @@ def allreduce(num_nodes, instances):
                 c = Rank(r).input(ch)
                 for g in range(1, 8):
                     next = rank(n, g)
-                    c = c.reduce(next, buffer=Buffer.input, index=ch, step=s, ch=ch, sendtb=0+3*ch, recvtb=0+3*ch)
-                    s += 1
+                    c = c.reduce(next, buffer=Buffer.input, index=ch, ch=ch, sendtb=0+3*ch, recvtb=0+3*ch)
 
             # At this point gpu0 and gpu8 have the two most reduced chunks
             # 1 IB send to fully reduce chunk + 1 IB send to update other node 
             c0 = Rank(0).input(ch)
-            c0 = c0.send(9, buffer=Buffer.input, index=ch, step=s, ch=ch, sendtb=0+3*ch, recvtb=0+3*ch)
-            s+=1
+            c0 = c0.send(9, buffer=Buffer.input, index=ch, ch=ch, sendtb=0+3*ch, recvtb=0+3*ch)
             c1 = Rank(8).input(ch)
-            c1 = c1.send(1, buffer=Buffer.input, index=ch, step=s, ch=ch, sendtb=0+3*ch, recvtb=0+3*ch)
-            s += 1
+            c1 = c1.send(1, buffer=Buffer.input, index=ch, ch=ch, sendtb=0+3*ch, recvtb=0+3*ch)
 
-            c0 = c0.reduce(8, buffer=Buffer.input, index=ch, step=s, ch=ch, sendtb=2+3*ch, recvtb=2+3*ch) # Completely reduced chunk on node 1, gpu0
-            s += 1
-            c1 = c1.reduce(0, buffer=Buffer.input, index=ch, step=s, ch=ch, sendtb=2+3*ch, recvtb=2+3*ch) # Completely reduced chunk on node 0, gpu0
-            s += 1
+            c0 = c0.reduce(8, buffer=Buffer.input, index=ch, ch=ch, sendtb=2+3*ch, recvtb=2+3*ch) # Completely reduced chunk on node 1, gpu0
+            c1 = c1.reduce(0, buffer=Buffer.input, index=ch, ch=ch, sendtb=2+3*ch, recvtb=2+3*ch) # Completely reduced chunk on node 0, gpu0
 
             #  Propagate the fully reduced chunks going backwards around the ring
             for n in range(num_nodes):
@@ -53,8 +47,7 @@ def allreduce(num_nodes, instances):
                 c = Rank(r).input(ch)
                 for g in range(6, -1, -1):
                     next = rank(n, g)
-                    c = c.send(next, buffer=Buffer.input, index=ch, step=s, ch=ch, sendtb=2+3*ch, recvtb=2+3*ch)
-                    s += 1
+                    c = c.send(next, buffer=Buffer.input, index=ch, ch=ch, sendtb=2+3*ch, recvtb=2+3*ch)
 
         XML()
         Check()

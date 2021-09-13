@@ -226,7 +226,7 @@ class Process:
             self.tb_count += 1
         return tbid
 
-    def _add_send(self, tbid, step, ch, op):
+    def _add_send(self, tbid, ch, op):
         assert(op.inst == Instruction.send)
         sendto = op.dst.rank
 
@@ -235,17 +235,17 @@ class Process:
             tbid = self._get_tbid(Instruction.send, sendto, ch)
 
         if tbid not in self.tbs:
-            self.tbs[tbid] = Threadblock(ch, send=sendto, ops={step: op})
+            self.tbs[tbid] = Threadblock(ch, send=sendto, ops=[op])
         else:
             tb = self.tbs[tbid]
             assert (tb.send == -1 or tb.send == sendto), \
                 f'Rank {self.rank}: Threadblock {tbid} is already set to send to {tb.send}, trying to send to {sendto}'
             tb.send = sendto
-            assert step not in tb.ops, f'Step {step} already in rank {self.rank} tbid {tbid}'
-            tb.ops[step] = op
+            tb.ops.append(op)
 
         # Fill in op dependence 
         op.tb = tbid
+        op.step = len(self.tbs[tbid].ops)-1
         op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
         
         # Update slot_ops 
@@ -253,16 +253,12 @@ class Process:
             self._update_slot_ops(op.src.buffer, op.src.index, op, tbid)
 
         
-    def _add_recv(self, tbid, step, ch, op):
+    def _add_recv(self, tbid, ch, op):
         assert(op.inst == Instruction.recv)
         receivefrom = op.src.rank
         if tbid == -1:
             tbid = self._get_tbid(Instruction.recv, receivefrom, ch)
         recvd_chunkref = op.dst
-
-        # Fill in op dependence 
-        op.tb = tbid
-        op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
 
         # Update buffer with received chunks, update dependencies for those chunks
         for i in range(op.src.size):
@@ -272,23 +268,23 @@ class Process:
 
         # Update tbs
         if tbid not in self.tbs:
-            self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops={step: op})
+            self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops=[op])
         else:
             tb = self.tbs[tbid]
             assert (tb.recv == -1 or tb.recv == receivefrom), \
                    f'Rank {self.rank}: Threadblock {tbid} is already set to receive from {tb.recv}, trying to receive from {receivefrom}'
             tb.recv = receivefrom
-            assert step not in tb.ops, f'Step {step} in rank {self.rank} tbid {tbid}'
-            tb.ops[step] = op
-
-    def _add_copy(self, tbid, step, ch, op):
-        assert(op.inst == Instruction.copy)
-        if tbid == -1:
-            tbid = self._get_tbid(Instruction.copy, -1, ch)
+            tb.ops.append(op)
 
         # Fill in op dependence 
         op.tb = tbid
+        op.step = len(self.tbs[tbid].ops)-1
         op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
+
+    def _add_copy(self, tbid, ch, op):
+        assert(op.inst == Instruction.copy)
+        if tbid == -1:
+            tbid = self._get_tbid(Instruction.copy, -1, ch)
 
         # Update buffer copied chunks and dependencies
         for i in range(op.src.size):
@@ -297,21 +293,22 @@ class Process:
         
         # Update tbs
         if tbid not in self.tbs:
-            self.tbs[tbid] = Threadblock(ch, ops={step: op})
+            self.tbs[tbid] = Threadblock(ch, ops=[op])
         else:
             tb = self.tbs[tbid]
-            tb.ops[step] = op
+            tb.ops.append(op)
+        
+        # Fill in op dependence 
+        op.tb = tbid
+        op.step = len(self.tbs[tbid].ops)-1
+        op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
 
-    def _add_receive_reduce_copy(self, tbid, step, ch, op):
+    def _add_receive_reduce_copy(self, tbid, ch, op):
         receivefrom = op.src.rank
         # TODO: rrc and recv share a tb
         if tbid == -1:
             tbid = self._get_tbid(Instruction.recv, receivefrom, ch) 
         recvd_chunkref = op.dst
-
-        # Fill in op dependence 
-        op.tb = tbid
-        op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
 
         # Update buffer with reduced chunks and dependencies for each chunk
         for i in range(op.src.size):
@@ -322,24 +319,24 @@ class Process:
 
         # Update tbs
         if tbid not in self.tbs:
-            self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops={step: op})
+            self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops=[op])
         else:
             tb = self.tbs[tbid]
             assert (tb.recv == -1 or tb.recv == receivefrom), \
                    f'Rank {self.rank}: Threadblock {tbid} is already set to receive from {tb.recv}, trying to receive from {receivefrom}'
             tb.recv = receivefrom
-            assert step not in tb.ops, f'Step {step} in rank {self.rank} tbid {tbid}'
-            tb.ops[step] = op
+            tb.ops.append(op)
 
-    def _add_reduce(self, tbid, step, ch, op):
+        # Fill in op dependence 
+        op.tb = tbid
+        op.step = len(self.tbs[tbid].ops)-1
+        op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
+
+    def _add_reduce(self, tbid, ch, op):
         receivefrom = op.src.rank
         if tbid == -1:
             tbid = self._get_tbid(Instruction.copy, receivefrom, ch) # TODO: copy and reduce share tb
         recvd_chunkref = op.dst
-
-        # Fill in op dependence 
-        op.tb = tbid
-        op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
 
         # Update buffer with reduced chunk and dependences
         for i in range(op.src.size):
@@ -350,14 +347,18 @@ class Process:
 
         # Update tbs
         if tbid not in self.tbs:
-            self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops={step: op})
+            self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops=[op])
         else:
             tb = self.tbs[tbid]
             assert (tb.recv == -1 or tb.recv == receivefrom), \
                    f'Rank {self.rank}: Threadblock {tbid} is already set to receive from {tb.recv}, trying to receive from {receivefrom}'
             tb.recv = receivefrom
-            assert step not in tb.ops, f'Step {step} in rank {self.rank} tbid {tbid}'
-            tb.ops[step] = op
+            tb.ops.append(op)
+
+        # Fill in op dependence 
+        op.tb = tbid
+        op.step = len(self.tbs[tbid].ops)-1
+        op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
                 
     # TODO: This might be broken
     def _get_dependences(self, buffer, start_index, size):
@@ -421,12 +422,9 @@ class Process:
         for tb in self.tbs.values():
             # Sort Ops by step
             # Index scratch buffers
-            tb_ops = []
-            for _, op in sorted(tb.ops.items()):
+            for op in tb.ops:
                 op.src = self.lower_chunk(op.src)
                 op.dst = self.lower_chunk(op.dst)
-                tb_ops.append(op)
-            tb.ops = tb_ops
         return Gpu(self.rank, self.tbs.values())
 
 @dataclass
@@ -493,10 +491,10 @@ class Ref(ChunkRef):
     def _get_chunk(self, index):
         return self.prog.ranks[self.rank].buffers[self.buffer][index]
 
-    def _copy(self, buffer=Buffer.output, index=-1, step=-1, tb=-1, ch=0):
+    def _copy(self, buffer=Buffer.output, index=-1, tb=-1, ch=0):
         dst_chunkref = self.prog.ranks[self.rank].get_ref(buffer, index, self.size)
-        op = Op(Instruction.copy, self, dst_chunkref, {}, step)
-        self.prog.ranks[self.rank]._add_copy(tb, step, ch, op)
+        op = Op(Instruction.copy, self, dst_chunkref, {})
+        self.prog.ranks[self.rank]._add_copy(tb, ch, op)
         return dst_chunkref
 
     def split(self, num):
@@ -527,7 +525,7 @@ class Ref(ChunkRef):
         return Ref(self.buffer, first.index, end - first.index, self.prog, self.rank, missing) # Broken
         
 
-    def send(self, dst, buffer=None, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
+    def send(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=0):
         assert (len(self.missing) == 0), f'Trying to send an incomplete concatenation. Missing indices {self.missing}'
         # TEMP TODO FIX: can't run optimization passes with multi chunk sends currently
         if self.size > 1:
@@ -542,36 +540,36 @@ class Ref(ChunkRef):
 
         # Local copy
         if dst == self.rank:
-            return self._copy(buffer, index, step, sendtb, ch)
+            return self._copy(buffer, index, sendtb, ch)
 
         # Direct send
         assert (self.prog.topo.link(self.rank, dst)), f'No link from {self.rank} to {dst}'
         dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
-        sendOp =  Op(Instruction.send, self, dst_chunkref, {}, step)
-        self.prog.ranks[self.rank]._add_send(sendtb, step, ch, sendOp)
-        receiveOp = Op(Instruction.recv, self, dst_chunkref, {}, step)
-        self.prog.ranks[dst]._add_recv(recvtb, step, ch, receiveOp)
+        sendOp =  Op(Instruction.send, self, dst_chunkref, {})
+        self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
+        receiveOp = Op(Instruction.recv, self, dst_chunkref, {})
+        self.prog.ranks[dst]._add_recv(recvtb, ch, receiveOp)
         return dst_chunkref
 
-    def _local_reduce(self, buffer, index, step, tb, ch):
+    def _local_reduce(self, buffer, index, tb, ch):
         # TODO: Test this out
         dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
-        op = Op(Instruction.reduce, self, dst_chunkref, {}, step)
-        self.prog.ranks[self.rank]._add_reduce(tb, step, ch, op)
+        op = Op(Instruction.reduce, self, dst_chunkref, {})
+        self.prog.ranks[self.rank]._add_reduce(tb, ch, op)
         return dst_chunkref
     
-    def reduce(self, dst, buffer, index=-1, step=-1, sendtb=-1, recvtb=-1, ch=0):
+    def reduce(self, dst, buffer, index=-1, sendtb=-1, recvtb=-1, ch=0):
         # TODO: wip - would want to decide wether to use a rrc, rrs, rrcs based on what is happening next...
         # (rrc -> send) => replace with rrs if chunk is not fully reduced, else replace with rrcs
         # Local reduce
         if dst == self.rank:
-            return self._local_reduce(buffer, index, step, sendtb, ch)
+            return self._local_reduce(buffer, index, sendtb, ch)
         # Receive reduce copy   
         dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
-        sendOp = Op(Instruction.send, self, dst_chunkref, {}, step)
-        self.prog.ranks[self.rank]._add_send(sendtb, step, ch, sendOp)
-        rrcOp = Op(Instruction.recv_reduce_copy, self, dst_chunkref, {}, step)
-        self.prog.ranks[dst]._add_receive_reduce_copy(recvtb, step, ch, rrcOp)
+        sendOp = Op(Instruction.send, self, dst_chunkref, {})
+        self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
+        rrcOp = Op(Instruction.recv_reduce_copy, self, dst_chunkref, {})
+        self.prog.ranks[dst]._add_receive_reduce_copy(recvtb, ch, rrcOp)
         return dst_chunkref
 
     def get_origin_index(self, index=0):

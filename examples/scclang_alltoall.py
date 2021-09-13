@@ -35,7 +35,6 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
         
 
     topology = fully_connected(num_ranks)
-    s = 0 # Setting steps is hacky right now - used to specify the relative ordering within a tb
     
     with SCCLProgram("hierarchical_all_to_all", topology, 'alltoall', instances):
         # Allocate scratch buffers to gather chunks to be sent over IB
@@ -68,14 +67,13 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
                                 # buffer_index = (g1 * gpus_per_node + g2) * instances + ch
                                 # Send chunk to the gather_rank. Send returns a chunk reference to the 
                                 # receiver's chunk
-                                c = c.send(gather_rank, step=s, buffer=buffer_key, ch=0)
+                                c = c.send(gather_rank, buffer=buffer_key, ch=0)
                                 # Group the chunks using a particular IB pair into one large chunk reference
                                 AddChunk(ib_chunks, buffer_key, c) 
                             else:
                                 # Directly send chunks destined for ranks within the node or
                                 # copy chunks destined for current rank into the output buffer
-                                c.send(r2, step=s, buffer=Buffer.output, index=c.get_dst_index(), ch=0)
-                            s += 1
+                                c.send(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=0)
 
 
         # IB Send and local scatters
@@ -85,15 +83,14 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
             # IB send divided across multiple parallel channels
             chunks = ib_chunk.split(ib_channels)
             for ch, chunk in enumerate(chunks):
-                chunk = chunk.send(scatter_rank, step=s, buffer=buffer_key, ch=ch)
+                chunk = chunk.send(scatter_rank, buffer=buffer_key, ch=ch)
                 # Local scatter
                 cs = chunk.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):
                     # Access the chunk's destination rank and index to route it to its final place
                     final_rank = c.get_dst_rank()
                     index = c.get_dst_index()
-                    c.send(final_rank, step=s, buffer=Buffer.output, index=index, ch=1)
-                    s +=1
+                    c.send(final_rank, buffer=Buffer.output, index=index, ch=1)
 
         XML() # Prints the XML
         Check()
