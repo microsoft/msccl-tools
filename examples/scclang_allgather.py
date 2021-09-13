@@ -3,11 +3,12 @@
 
 from sccl.language import *
 from sccl.topologies import *
-from sccl.collectives import *
+from sccl.language.collectives import AllGather
 
 def allgather_ring(size):
     topology = fully_connected(size)
-    with SCCLProgram("allgather_ring", topology, 'allgather'):
+    collective = AllGather(size, 1, False)
+    with SCCLProgram("allgather_ring", topology, collective, 1):
         # Loop over each chunk's root
         for r in range(size):
             # Get the chunk at rank r, input[r]
@@ -18,7 +19,7 @@ def allgather_ring(size):
             next = (r + 1) % size
             while next != r:
                 # For each rank in the ring, send the chunk to the next rank
-                c = c.send(next, sendtb=1, recvtb=2, buffer=Buffer.output)
+                c = c.send(next, sendtb=1, recvtb=2, buffer=Buffer.output, index=r)
                 next = (next + 1) % size
         XML()
         Check()

@@ -6,7 +6,7 @@ import argparse
 from sccl.language import *
 from sccl.topologies.distributed import *
 from sccl.topologies.nvidia import *
-from sccl.collectives import *
+from sccl.language.collectives import AllReduce
 
 def allreduce(num_nodes, instances):
     local_topology = dgx1()
@@ -14,12 +14,13 @@ def allreduce(num_nodes, instances):
     remote_bw = 1
     topology = distributed_fully_connected(local_topology, num_nodes, remote_bw)
     size = topology.num_nodes()
+    collective = AllReduce(size, instances, True)
     local_ring_order = [1,3,2,6,7,5,4,0] # Reductions will happen locally within a node in this order.
 
     def rank(n, g):
         return local_ring_order[g] + n * num_local_gpus
         
-    with SCCLProgram("allreduce_ring_dgx1", topology, 'allreduce', instances):
+    with SCCLProgram("allreduce_ring_dgx1", topology, collective, instances):
 
         # Chunks travels around local rings being reduced (local_gpus-1 hops) starting at local gpu 1
         # At the end of the most reduced chunk ends up on local gpu 0 every each node

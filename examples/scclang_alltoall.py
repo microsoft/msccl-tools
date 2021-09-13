@@ -5,8 +5,7 @@ import argparse
 
 from sccl.language import *
 from sccl.topologies import *
-from sccl.collectives import *
-
+from sccl.language.collectives import AllToAll
 
 def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
     num_ranks = num_nodes * gpus_per_node
@@ -35,8 +34,9 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
         
 
     topology = fully_connected(num_ranks)
+    collective = AllToAll(num_ranks, instances, False)
     
-    with SCCLProgram("hierarchical_all_to_all", topology, 'alltoall', instances):
+    with SCCLProgram("hierarchical_all_to_all", topology, collective, instances):
         # Allocate scratch buffers to gather chunks to be sent over IB
         # 2 scratch buffers for each node-node pair for the sender and receiver
         for n1 in range(num_nodes):

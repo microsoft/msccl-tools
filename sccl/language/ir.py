@@ -73,8 +73,8 @@ class Op:
     src: ChunkRef
     dst: ChunkRef
     depends: list = field(default_factory=list)
-    step: int = -1# TODO: fix this - relative step not the actual step
-    tb: int = -1 # TODO do we need this
+    step: int = -1 # Step in the TB
+    tb: int = -1 # TB this op is assigned to
 
     def cnt(self):
         if self.src:

@@ -8,98 +8,6 @@ from sccl.language.ir import *
 from sccl.language.passes import *
 import sccl.collectives as collectives
 
-# Initializes input buffer for an alltoall
-def alltoall_init_buffers(prog, instances):
-    num_ranks = prog.topo.num_nodes()
-    chunks_per_node = num_ranks * instances
-    for r in range(num_ranks):
-        input_buffer = [None] * chunks_per_node
-        output_buffer = [None] * chunks_per_node
-        for index in range(chunks_per_node):
-            chunk = Chunk(r, index, index//instances, index % instances + r*instances)
-            input_buffer[index] = chunk
-        buffers = {Buffer.input : input_buffer, 
-                   Buffer.output : output_buffer}
-        prog.ranks.append(Process(prog, r, buffers))
-            
-# Expected output buffer for alltoall
-def alltoall_expected_output(prog, instances):
-    num_ranks = prog.topo.num_nodes()
-    correct = True
-    for r in range(num_ranks):
-        output = prog.ranks[r].buffers[Buffer.output]
-        for i in range(num_ranks):
-            for ch in range(instances):
-                index = ch + i * instances
-                chunk = output[index]
-                expected_origin_index = ch + r * instances
-                if chunk is None or chunk.origin_rank != i or chunk.origin_index != expected_origin_index:
-                    print(f'Rank {r} chunk {index} is incorrect should be chunk({i},{expected_origin_index}) given {chunk}')
-                    correct = False
-    return correct
-
-# Initializes input buffer for an allgather
-def allgather_init_buffers(prog):
-    num_ranks = prog.topo.num_nodes()
-    for r in range(num_ranks):
-        # Chunk starts on rank r at index 0, ends up on all ranks (-1) at index r
-        input_buffer = [Chunk(r, 0, -1, r)]
-        output_buffer = [None] * num_ranks
-        buffers = {Buffer.input : input_buffer, 
-                   Buffer.output : output_buffer}
-        prog.ranks.append(Process(prog, r, buffers))
-            
-# Expected output buffer for allgather
-def allgather_expected_output(prog):
-    num_ranks = prog.topo.num_nodes()
-    correct = True
-    for r in range(num_ranks):
-        output = prog.ranks[r].buffers[Buffer.output]
-        for i in range(num_ranks):
-            chunk = output[i]
-            if chunk is None or chunk.origin_rank != i or chunk.origin_index != 0:
-                print(f'Rank {r} chunk {i} is incorrect should be ({i}, 0) given {chunk}')
-                correct = False
-    return correct
-
-def allreduce_init_buffers(prog, instances):
-    num_ranks = prog.topo.num_nodes()
-    chunks_per_node = instances
-    for r in range(num_ranks):
-        input_buffer = []
-        output_buffer = [None] * chunks_per_node
-        for c in range(chunks_per_node):
-            # TODO: Chunk starts at rank r index c, and ends on all ranks (-1) at index r, also reduced (?? how to indicate??)
-            input_buffer.append(Chunk(r, c, -1, c))
-        buffers = {Buffer.input : input_buffer, 
-                Buffer.output : output_buffer}
-        prog.ranks.append(Process(prog, r, buffers))
-            
-
-def allreduce_expected_output(prog, instances):
-    num_ranks = prog.topo.num_nodes()
-    chunks_per_node = instances
-    expected_chunks = []
-
-    for c in range(chunks_per_node):
-        chunk = ReduceChunk([])
-        for r in range(num_ranks):
-            chunk = chunk.reduce(Chunk(r, c))
-        expected_chunks.append(chunk)
-
-    correct = True
-    for r in range(num_ranks):
-        output = prog.ranks[r].buffers[Buffer.input]
-        for c in range(chunks_per_node):
-            chunk = output[c]
-            if chunk is None or chunk != expected_chunks[c]:
-                print(f'Rank {r} chunk {c} is incorrect should be {expected_chunks[c]} given {chunk}')
-                correct = False
-    return correct
-
-
-
-
 _current_program = None
 def _curr():
     global _current_program
@@ -116,12 +24,10 @@ class SCCLProgram:
         self.instances = instances
         self.run_opt = True # Runs optimization passes
         # Initialize the input buffers
-        if self.collective == 'alltoall':
-            alltoall_init_buffers(self, instances)
-        elif self.collective == 'allgather':
-            allgather_init_buffers(self)
-        elif self.collective == 'allreduce':
-            allreduce_init_buffers(self, instances)
+        num_ranks = topo.num_nodes()
+        rank_buffers = collective.init_buffers()
+        for r in range(num_ranks):
+            self.ranks.append(Process(self, r, rank_buffers[r]))
 
     # Returns a Process corresponding to rank number
     def rank(self, rank):
@@ -130,13 +36,7 @@ class SCCLProgram:
     # Checks that all chunks that should be on each rank
     # are present in the output buffer.
     def check(self):
-        if self.collective == 'alltoall':
-            return alltoall_expected_output(self, self.instances)
-        elif self.collective == 'allgather':
-            return allgather_expected_output(self)
-        elif self.collective == 'allreduce':
-            return allreduce_expected_output(self, self.instances)
-        return False
+        return self.collective.check(self)
 
     # Lower program to XML
     def lower(self):
