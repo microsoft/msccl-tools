@@ -13,7 +13,7 @@ class Collective():
 
     def check(self, prog):
         pass
-        
+
 
 class AllToAll(Collective):
 
@@ -53,9 +53,10 @@ class AllGather(Collective):
     def init_buffers(self):
         rank_buffers = []
         for r in range(self.num_ranks):
-            # Chunk starts on rank r at index 0, ends up on all ranks (-1) at index r
-            input_buffer = [Chunk(r, 0, -1, r)]
-            output_buffer = [None] * self.num_ranks
+            input_buffer = []
+            output_buffer = [None] * (self.num_ranks * self.instances)
+            for ch in range(self.instances):
+                input_buffer.append(Chunk(r, ch, -1, r*self.instances+ch))
             buffers = {Buffer.input : input_buffer, 
                     Buffer.output : output_buffer}
             rank_buffers.append(buffers)
@@ -64,13 +65,16 @@ class AllGather(Collective):
     # Expected output buffer for allgather
     def check(self, prog):
         correct = True
+        buf = Buffer.input if self.inplace else Buffer.output
         for r in range(self.num_ranks):
-            output = prog.ranks[r].buffers[Buffer.output]
+            output = prog.ranks[r].buffers[buf]
             for i in range(self.num_ranks):
-                chunk = output[i]
-                if chunk is None or chunk.origin_rank != i or chunk.origin_index != 0:
-                    print(f'Rank {r} chunk {i} is incorrect should be ({i}, 0) given {chunk}')
-                    correct = False
+                for ch in range(self.instances):
+                    index = i*self.instances + ch
+                    chunk = output[index]
+                    if chunk is None or chunk.origin_rank != i or chunk.origin_index != ch:
+                        print(f'Rank {r} chunk {index} is incorrect should be ({i}, {ch}) given {chunk}')
+                        correct = False
         return correct
 
             
@@ -111,4 +115,38 @@ class AllReduce(Collective):
         return correct
 
 
+class ReduceScatter(Collective):
 
+    def init_buffers(self):
+        rank_buffers = []
+        for r in range(self.num_ranks):
+            input_buffer = []
+            output_buffer = [None] * self.instances
+            for i in range(self.num_ranks):
+                for c in range(self.instances):
+                    input_buffer.append(Chunk(r, i*self.instances + c, i, c))
+            buffers = {Buffer.input : input_buffer, 
+                    Buffer.output : output_buffer}
+            rank_buffers.append(buffers)
+        return rank_buffers
+
+    def check(self, prog):
+        expected_chunks = []
+        buf = Buffer.input if self.inplace else Buffer.output
+
+        for c in range(self.num_ranks * self.instances):
+            chunk = ReduceChunk([])
+            for r in range(self.num_ranks):
+                chunk = chunk.reduce(Chunk(r, c))
+            expected_chunks.append(chunk)
+
+        correct = True
+        for r in range(self.num_ranks):
+            output = prog.ranks[r].buffers[buf]
+            for c in range(self.instances):
+                chunk = output[c]
+                correct_idx = r * self.instances + c
+                if chunk is None or chunk != expected_chunks[correct_idx]:
+                    print(f'Rank {r} chunk {c} is incorrect should be {expected_chunks[correct_idx]} given {chunk}')
+                    correct = False
+        return correct

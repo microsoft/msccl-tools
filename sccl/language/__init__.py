@@ -22,7 +22,7 @@ class SCCLProgram:
         self.collective = collective       
         self.ranks = []
         self.instances = instances
-        self.run_opt = True # Runs optimization passes
+        self.run_opt = False # Runs optimization passes
         # Initialize the input buffers
         num_ranks = topo.num_nodes()
         rank_buffers = collective.init_buffers()
@@ -179,7 +179,7 @@ class Process:
         # Fill in op dependence 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
+        op.depends = self._get_dependences(op.dst.buffer, op.dst.index, op.dst.size)
 
     def _add_copy(self, tbid, ch, op):
         assert(op.inst == Instruction.copy)
@@ -230,7 +230,7 @@ class Process:
         # Fill in op dependence 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
+        op.depends = self._get_dependences(op.dst.buffer, op.dst.index, op.dst.size)
 
     def _add_reduce(self, tbid, ch, op):
         receivefrom = op.src.rank
@@ -263,16 +263,16 @@ class Process:
     # TODO: This might be broken
     def _get_dependences(self, buffer, start_index, size):
         # Get and merge dependencies for each index
-        # If multiple dependencies for same tb keep the one with the highest step
         depends = {}
         for i in range(size):
             index = start_index + i
-            key = (buffer, index)
-            if key in self.slot_ops:
-                last_op = self.slot_ops[key][-1]
-                tb = last_op.tb
-                if tb not in depends or last_op.step > depends[tb].step:
-                    depends[tb] = last_op
+            slot = (buffer, index)
+            if slot in self.slot_ops:
+                for op in self.slot_ops[slot]:
+                    tb = op.tb
+                    # If multiple dependencies for same tb keep the one with the highest step
+                    if tb not in depends or op.step > depends[tb].step:
+                        depends[tb] = op
         return list(depends.values())
     
     def _update_slot_ops(self, buffer, index, op, tbid):
@@ -288,6 +288,9 @@ class Process:
     # Returns a reference to the chunk located at index of the input buffer.
     def input(self, index, size=1):
         return self.get_ref(Buffer.input, index, size)
+
+    def output(self, index, size=1):
+        return self.get_ref(Buffer.output, index, size)
 
     # Creates a scratch buffer with a name
     def create_scratch(self, name):
