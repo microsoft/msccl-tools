@@ -4,10 +4,12 @@
 from sccl.topologies import dgx1
 from sccl.isomorphisms import find_isomorphisms
 from sccl.autosynth.registry import synthesis_plans
+from lxml import etree as ET
 import re
 import subprocess
 import fcntl
 import os
+import tempfile
 import humanfriendly
 
 from sccl.autosynth.dgx1_plans import register_dgx1_plans
@@ -17,53 +19,103 @@ register_a100_plans()
 
 
 def init(num_machines, machine_type, *collectives):
-    plans_and_sizes = []
+    # Collect and sort all plans that match the collectives and sizes given by the user.
+    selected_plans = {}
     for collective in collectives:
-        name, size = collective
-        if isinstance(size, str):
-            size = humanfriendly.parse_size(size)
-        candidates = synthesis_plans[(name, machine_type)]
-        valid_candidates = filter(
-            _candidate_filter(num_machines, size), candidates)
-        sorted_candidates = sorted(valid_candidates, key=_candidate_sort_key)
-        description = f'{name} with size {humanfriendly.format_size(size)}'
-        if len(sorted_candidates) == 0:
-            print(
-                f'SCCL: No plan found for {description}. Falling back to NCCL baseline.')
+        name, sizes = collective
+        if isinstance(sizes, tuple):
+            lower, upper = sizes
+            if isinstance(lower, str):
+                lower = humanfriendly.parse_size(lower)
+            if isinstance(upper, str):
+                upper = humanfriendly.parse_size(upper)
+            sizes = (lower, upper)
         else:
-            desc, plan, _, _, _ = sorted_candidates[-1]
-            print(f'SCCL: Plan for {description} is {desc}')
-            plans_and_sizes.append((plan, size))
+            if isinstance(sizes, str):
+                sizes = humanfriendly.parse_size(sizes)
+            sizes = (sizes, sizes)
+        candidates = synthesis_plans[(name, machine_type)]
+        selected_plans[name] = _select_plans(name, candidates, num_machines, sizes)
 
-    paths = None
-    max_min_channels = 0
-    for plan, size in plans_and_sizes:
-        path = plan(num_machines, size)
-        min_channels = _extract_min_channels(path)
-        if min_channels:
-            max_min_channels = max(max_min_channels, min_channels)
-            if paths:
-                paths += f',{path}'
-            else:
-                paths = path
-    if paths:
+    if len(selected_plans) > 0:
+        # Execute the plans to find or synthesize the algorithms and format them in the XML format expected by SCCL-RT.
+        algos_elem = ET.Element('sccl_algos')
+        max_min_channels = 0
+        for collective_name, plans in selected_plans.items():
+            for plan, params in plans:
+                path = plan(num_machines)
+                min_channels = _extract_min_channels(path)
+                # Skip the algorithm if minimum channels could not be determined (corrupted XML for example)
+                if min_channels:
+                    max_min_channels = max(max_min_channels, min_channels)
+
+                    load_elem = ET.SubElement(algos_elem, 'load')
+                    load_elem.set('path', path)
+                    minsize, maxsize, proto = params
+                    load_elem.set('minsize', str(minsize))
+                    load_elem.set('maxsize', str(maxsize+1))
+                    load_elem.set('proto', proto)
+        ET.indent(algos_elem, space='  ')
+        
+        fd, path = tempfile.mkstemp()
+        with os.fdopen(fd, 'w') as f:
+            f.write(ET.tostring(algos_elem, encoding='unicode'))
         os.environ.update({
-            'SCCL_XML_FILE': paths,
+            'SCCL_CONFIG': path,
             'NCCL_MIN_NCHANNELS': str(max_min_channels),
             'NCCL_NET_SHARED_BUFFERS': '0'
         })
+    else:
+        print(f'SCCL: No algorithms were selected.')
 
 
-def _candidate_filter(m, s):
-    def fun(candidate):
-        _, _, machines, size_ranges, _ = candidate
-        size_matches = any(map(lambda x: x[0] <= s and s <= x[1], size_ranges))
-        return size_matches and machines(m)
-    return fun
+def _select_plans(name, candidates, num_machines, sizes):
+    candidate_intervals = [(sizes, [])]
+    valid_candidates = list(filter(lambda x: x[2](num_machines), candidates))
+    for candidate in valid_candidates:
+        csizes = candidate[3]
+        i = 0
+        while i < len(candidate_intervals):
+            ival = candidate_intervals[i]
+            isizes = ival[0]
+            if isizes[1] < csizes[0]:
+                i += 1
+                continue
+            if isizes[0] > csizes[1]:
+                break
+            if isizes[0] < csizes[0]:
+                del candidate_intervals[i]
+                candidate_intervals.insert(i, ((csizes[0], isizes[1]), ival[1]))
+                candidate_intervals.insert(i, ((isizes[0], csizes[0]-1), ival[1].copy()))
+                i += 1
+                continue
+            if isizes[1] > csizes [1]:
+                del candidate_intervals[i]
+                candidate_intervals.insert(i, ((csizes[1]+1, isizes[1]), ival[1]))
+                candidate_intervals.insert(i, ((isizes[0], csizes[1]), ival[1] + [candidate]))
+                break
+            ival[1].append(candidate)
+            csizes = (isizes[1]+1,csizes[1])
+            if csizes[0] > csizes[1]:
+                break
+    results = []
+    for isizes, candidates in candidate_intervals:
+        sorted_candidates = sorted(candidates, key=_candidate_sort_key)
+        description = f'{name} with sizes from {humanfriendly.format_size(isizes[0])} to {humanfriendly.format_size(isizes[1])}'
+        if len(sorted_candidates) == 0:
+            print(f'SCCL: No plan found for {description}. Falling back to NCCL baseline.')
+        else:
+            desc, plan, _, _, proto, _ = sorted_candidates[-1]
+            print(f'SCCL: Plan for {description} is {desc} with {proto} protocol.')
+            if len(results) > 0 and plan == results[-1][0] and isizes[0] == results[-1][1][1] + 1 and proto == results[-1][1][2]:
+                results[-1][1][1] = isizes[1]
+            else:
+                results.append((plan, [isizes[0], isizes[1], proto]))
+    return results
 
 
 def _candidate_sort_key(candidate):
-    _, _, _, _, priority = candidate
+    _, _, _, _, _, priority = candidate
     return priority
 
 
