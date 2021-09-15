@@ -37,19 +37,20 @@ class Pipeline(Collective):
         return correct
 
 
-def pipeline(num_nodes):
+def pipeline(num_nodes, instances):
     local_topology = dgx1()
     num_local_gpus = 8
-    instances = num_local_gpus
+    chunks = num_local_gpus
+    chunks_per_loop = chunks * instances
     remote_bw = 1
     size = num_local_gpus * num_nodes
     topology = fully_connected(size)
-    collective = Pipeline(size, instances, False, "pipeline")
+    collective = Pipeline(size, chunks, True, "custom")
 
     def rank(node, local_rank):
         return node * num_local_gpus + local_rank
     
-    with SCCLProgram("pipeline", topology, collective, instances):
+    with SCCLProgram("pipeline", topology, collective, chunks):
 
         # Allocate scratch space
         for n in range(num_nodes):
@@ -71,30 +72,31 @@ def pipeline(num_nodes):
 
                 # Cross node send
                 if g == num_local_gpus -1:
-                    for ch in range(instances):
+                    for ch in range(chunks):
                         c = Rank(num_local_gpus-1).input(ch)
                         if ch == 0:
-                            c = c.send(rank(n, ch), 'gather', 0, sendtb=ch, recvtb=0, ch=ch%2)
+                            c = c.send(rank(n, ch), 'gather', 0, ch=ch%2)
 
                         elif ch == num_local_gpus-1:
-                            c = c.send(rank(n+1, ch), 'scatter', 0, sendtb=ch, recvtb=0, ch=ch%2)
+                            c = c.send(rank(n+1, ch), 'scatter', 0, ch=ch%2)
                         else:
-                            c = c.send(rank(n, ch), 'gather', 0, sendtb=ch, recvtb=0, ch=ch%2)
-                            c = c.send(rank(n+1, ch), 'scatter', 0, sendtb=0, recvtb=0, ch=ch%2)
+                            c = c.send(rank(n, ch), 'gather', 0, ch=ch%2)
+                            c = c.send(rank(n+1, ch), 'scatter', 0, ch=ch%2)
                         
-                        c.send(r+1, Buffer.output, c.get_dst_index(), sendtb=0, recvtb=ch, ch=ch%2)
+                        c.send(r+1, Buffer.output, c.get_dst_index(), ch=ch%2)
                         
                 # Normal send
                 else:
-                    for ch in range(instances):
-                        c = Rank(r).input(ch)
-                        c.send(r+1, Buffer.output, ch, sendtb=10, recvtb=10, ch=2)
+                    c = Rank(r).input(0, chunks)
+                    c.send(r+1, Buffer.output, 0, ch=2)
         
         Check()
         XML()
 parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
+parser.add_argument('instances', type=int, help ='number of instances')
+
 args = parser.parse_args()
 
 assert args.num_nodes == 2, "Currently only working for two nodes"
-pipeline(args.num_nodes)
+pipeline(args.num_nodes, args.instances)
