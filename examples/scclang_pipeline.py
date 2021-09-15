@@ -73,7 +73,7 @@ def pipeline(num_nodes, instances):
                     # Cross node send
                     if g == num_local_gpus -1:
                         for ch in range(chunks):
-                            c = Rank(num_local_gpus-1).input(ch*instances + i)
+                            c = Rank(r).input(ch*instances + i)
                             if ch == 0:
                                 c = c.send(rank(n, ch), 'gather', i, ch=ch%2+i*2)
 
@@ -98,5 +98,4 @@ parser.add_argument('instances', type=int, help ='number of instances')
 
 args = parser.parse_args()
 
-assert args.num_nodes == 2, "Currently only working for two nodes"
 pipeline(args.num_nodes, args.instances)
