@@ -10,6 +10,8 @@ from collections import defaultdict
 @dataclass
 class Program:
     name: str
+    collective: str
+    inplace: bool
     gpus: list = field(default_factory=list)
 
 
@@ -184,6 +186,8 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
         algo_elem.set('nchunksperloop', str(
             max(max(buffer_sizes[(gpu.rank, Buffer.input)], buffer_sizes[(gpu.rank, Buffer.output)]) for gpu in program.gpus)))
     algo_elem.set('ngpus', str(len(program.gpus)))
+    algo_elem.set('coll', program.collective)
+    algo_elem.set('inplace', str(1 if program.inplace else 0))
     for gpu in program.gpus:
         gpu_elem = ET.SubElement(algo_elem, 'gpu')
         gpu_elem.set('id', str(gpu.rank))

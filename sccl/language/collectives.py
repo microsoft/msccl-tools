@@ -7,6 +7,7 @@ class Collective():
     num_ranks: int 
     instances: int
     inplace: bool
+    name: str
 
     def init_buffers(self):
         pass

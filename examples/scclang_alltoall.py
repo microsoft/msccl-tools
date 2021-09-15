@@ -34,7 +34,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
         
 
     topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, instances, False)
+    collective = AllToAll(num_ranks, instances, False, "alltoall")
     
     with SCCLProgram("hierarchical_all_to_all", topology, collective, instances):
         # Allocate scratch buffers to gather chunks to be sent over IB

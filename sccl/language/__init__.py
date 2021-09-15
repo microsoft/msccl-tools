@@ -45,7 +45,7 @@ class SCCLProgram:
                 rank.optimize()
             rank.lower_buffers()
         gpu_prgms = [rank.lower_tbs() for rank in self.ranks]
-        return Program(self.name, gpu_prgms)
+        return Program(self.name, self.collective.name, self.collective.inplace, gpu_prgms)
 
     def __enter__(self):
         global _current_program
