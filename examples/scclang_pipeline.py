@@ -41,16 +41,16 @@ def pipeline(num_nodes, instances):
     local_topology = dgx1()
     num_local_gpus = 8
     chunks = num_local_gpus
-    chunks_per_loop = chunks * instances
+    total_chunks_per_loop = chunks * instances
     remote_bw = 1
     size = num_local_gpus * num_nodes
     topology = fully_connected(size)
-    collective = Pipeline(size, chunks, True, "custom")
+    collective = Pipeline(size, total_chunks_per_loop, True, "custom")
 
     def rank(node, local_rank):
         return node * num_local_gpus + local_rank
     
-    with SCCLProgram("pipeline", topology, collective, chunks):
+    with SCCLProgram("pipeline", topology, collective, total_chunks_per_loop):
 
         # Allocate scratch space
         for n in range(num_nodes):
@@ -61,34 +61,34 @@ def pipeline(num_nodes, instances):
                 if n > 0: # Scatter scratch
                     Rank(r1).create_scratch('scatter') 
 
+        for i in range(instances):
+            for n in range(num_nodes):
+                for g in range(num_local_gpus):
+                    r = rank(n, g)
 
-        for n in range(num_nodes):
-            for g in range(num_local_gpus):
-                r = rank(n, g)
+                    # Do nothing for last gpu - end of pipeline
+                    if r == size - 1:
+                        continue
 
-                # Do nothing for last gpu - end of pipeline
-                if r == size - 1:
-                    continue
+                    # Cross node send
+                    if g == num_local_gpus -1:
+                        for ch in range(chunks):
+                            c = Rank(num_local_gpus-1).input(ch*instances + i)
+                            if ch == 0:
+                                c = c.send(rank(n, ch), 'gather', i, ch=ch%2+i*2)
 
-                # Cross node send
-                if g == num_local_gpus -1:
-                    for ch in range(chunks):
-                        c = Rank(num_local_gpus-1).input(ch)
-                        if ch == 0:
-                            c = c.send(rank(n, ch), 'gather', 0, ch=ch%2)
-
-                        elif ch == num_local_gpus-1:
-                            c = c.send(rank(n+1, ch), 'scatter', 0, ch=ch%2)
-                        else:
-                            c = c.send(rank(n, ch), 'gather', 0, ch=ch%2)
-                            c = c.send(rank(n+1, ch), 'scatter', 0, ch=ch%2)
-                        
-                        c.send(r+1, Buffer.output, c.get_dst_index(), ch=ch%2)
-                        
-                # Normal send
-                else:
-                    c = Rank(r).input(0, chunks)
-                    c.send(r+1, Buffer.output, 0, ch=2)
+                            elif ch == num_local_gpus-1:
+                                c = c.send(rank(n+1, ch), 'scatter', i, ch=ch%2+i*2)
+                            else:
+                                c = c.send(rank(n, ch), 'gather', i, ch=ch%2+i*2)
+                                c = c.send(rank(n+1, ch), 'scatter', i, ch=ch%2+i*2)
+                            
+                            c.send(r+1, Buffer.output, c.get_dst_index(), ch=ch%2+i*2)
+                            
+                    # Normal send
+                    else:
+                        c = Rank(r).input(i * chunks, chunks)
+                        c.send(r+1, Buffer.output, i * chunks, ch=g%2+i*2)
         
         Check()
         XML()
