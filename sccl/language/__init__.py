@@ -146,11 +146,11 @@ class Process:
         # Fill in op dependence 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
+        op.depends = self._get_dependences(op.inst, op.src.buffer, op.src.index, op.src.size)
         
         # Update slot_ops 
         for i in range(op.src.size):
-            self._update_slot_ops(op.src.buffer, op.src.index, op, tbid)
+            self._update_slot_ops(op.src.buffer, op.src.index+i, op, tbid)
 
         
     def _add_recv(self, tbid, ch, op):
@@ -159,12 +159,6 @@ class Process:
         if tbid == -1:
             tbid = self._get_tbid(Instruction.recv, receivefrom, ch)
         recvd_chunkref = op.dst
-
-        # Update buffer with received chunks, update dependencies for those chunks
-        for i in range(op.src.size):
-            self.buffers[op.dst.buffer][op.dst.index+i] = self.prog.ranks[op.src.rank].buffers[op.src.buffer][op.src.index+i]
-            dependence_key = (op.dst.buffer, op.dst.index+i)
-            self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
 
         # Update tbs
         if tbid not in self.tbs:
@@ -179,17 +173,17 @@ class Process:
         # Fill in op dependence 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.dst.buffer, op.dst.index, op.dst.size)
+        op.depends = self._get_dependences(op.inst, op.dst.buffer, op.dst.index, op.dst.size)
+
+         # Update buffer with received chunks, update dependencies for those chunks
+        for i in range(op.src.size):
+            self.buffers[op.dst.buffer][op.dst.index+i] = self.prog.ranks[op.src.rank].buffers[op.src.buffer][op.src.index+i]
+            self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
 
     def _add_copy(self, tbid, ch, op):
         assert(op.inst == Instruction.copy)
         if tbid == -1:
             tbid = self._get_tbid(Instruction.copy, -1, ch)
-
-        # Update buffer copied chunks and dependencies
-        for i in range(op.src.size):
-            self.buffers[op.dst.buffer][op.dst.index+i] = self.buffers[op.src.buffer][op.src.index+i]
-            self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
         
         # Update tbs
         if tbid not in self.tbs:
@@ -201,7 +195,12 @@ class Process:
         # Fill in op dependence 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
+        op.depends = self._get_dependences(op.inst, op.src.buffer, op.src.index, op.src.size)
+
+        # Update buffer copied chunks and dependencies
+        for i in range(op.src.size):
+            self.buffers[op.dst.buffer][op.dst.index+i] = self.buffers[op.src.buffer][op.src.index+i]
+            self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
 
     def _add_receive_reduce_copy(self, tbid, ch, op):
         receivefrom = op.src.rank
@@ -209,13 +208,6 @@ class Process:
         if tbid == -1:
             tbid = self._get_tbid(Instruction.recv, receivefrom, ch) 
         recvd_chunkref = op.dst
-
-        # Update buffer with reduced chunks and dependencies for each chunk
-        for i in range(op.src.size):
-            reduce_chunk = self.buffers[op.dst.buffer][op.dst.index+i]
-            other_chunk = self.prog.ranks[op.src.rank].buffers[op.src.buffer][op.src.index+i]
-            self.buffers[op.dst.buffer][op.dst.index+i] = reduce_chunk.reduce(other_chunk)
-            self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
 
         # Update tbs
         if tbid not in self.tbs:
@@ -230,7 +222,14 @@ class Process:
         # Fill in op dependence 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.dst.buffer, op.dst.index, op.dst.size)
+        op.depends = self._get_dependences(op.inst, op.dst.buffer, op.dst.index, op.dst.size)
+
+        # Update buffer with reduced chunks and dependencies for each chunk
+        for i in range(op.src.size):
+            reduce_chunk = self.buffers[op.dst.buffer][op.dst.index+i]
+            other_chunk = self.prog.ranks[op.src.rank].buffers[op.src.buffer][op.src.index+i]
+            self.buffers[op.dst.buffer][op.dst.index+i] = reduce_chunk.reduce(other_chunk)
+            self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
 
     def _add_reduce(self, tbid, ch, op):
         receivefrom = op.src.rank
@@ -258,21 +257,32 @@ class Process:
         # Fill in op dependence 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.src.buffer, op.src.index, op.src.size)
+        op.depends = self._get_dependences(op.inst, op.src.buffer, op.src.index, op.src.size)
                 
-    # TODO: This might be broken
-    def _get_dependences(self, buffer, start_index, size):
+
+    def _get_dependences(self, inst, buffer, start_index, size):
         # Get and merge dependencies for each index
         depends = {}
         for i in range(size):
             index = start_index + i
             slot = (buffer, index)
             if slot in self.slot_ops:
-                for op in self.slot_ops[slot]:
-                    tb = op.tb
-                    # If multiple dependencies for same tb keep the one with the highest step
-                    if tb not in depends or op.step > depends[tb].step:
-                        depends[tb] = op
+                last_op = self.slot_ops[slot][-1]
+
+                if inst == Instruction.send:
+                    # If this is a send we depend on the last non-send op
+                    op_idx = len(self.slot_ops[slot])-1
+                    while last_op.inst is Instruction.send and op_idx > 0:
+                        op_idx -= 1
+                        last_op = self.slot_ops[slot][op_idx]
+                    if op_idx == -1:
+                        continue # No true dependency
+
+                # If we have multiple dependent ops from the same tb keep the one with the highest steps
+                tb = last_op.tb
+                if tb not in depends or last_op.step > depends[tb].step:
+                        depends[tb] = last_op
+
         return list(depends.values())
     
     def _update_slot_ops(self, buffer, index, op, tbid):

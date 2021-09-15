@@ -99,10 +99,12 @@ class Op:
 
     def __repr__(self):
         if len(self.depends) > 0:
-            dep = self.depends[0]._print_no_dep()
+            dep = ''
+            for i in range(len(self.depends)):
+                dep += self.depends[i]._print_no_dep()
         else:
-            dep = '[]'
-        return f'Op({self.inst}, {self.src}, {self.dst}, step:{self.step}, tb:{self.tb}, dep={dep})'
+            dep = ''
+        return f'Op({self.inst}, {self.src}, {self.dst}, step:{self.step}, tb:{self.tb}, dep=[{dep}])'
 
 
 # Instructions where src is on local GPU
