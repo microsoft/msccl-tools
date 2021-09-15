@@ -9,7 +9,6 @@ from sccl.topologies import *
 from sccl.language.collectives import Collective
 
 class Pipeline(Collective):
-    # Initial state gpu7->gpu8 
     def init_buffers(self):
         chunks_per_node = self.instances
         rank_buffers = []
@@ -25,6 +24,7 @@ class Pipeline(Collective):
         return rank_buffers
             
 
+    # Final state chunks on rank(i) end up on rank(i+1)
     def check(self, prog):
         correct = True
         for r in range(1, self.num_ranks):
@@ -44,7 +44,7 @@ def pipeline(num_nodes):
     remote_bw = 1
     size = num_local_gpus * num_nodes
     topology = fully_connected(size)
-    collective = Pipeline(size, instances, False)
+    collective = Pipeline(size, instances, False, "pipeline")
 
     def rank(node, local_rank):
         return node * num_local_gpus + local_rank
