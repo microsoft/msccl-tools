@@ -45,6 +45,7 @@ class Instruction(Enum):
     recv_reduce_copy_send = 'rrcs'
     copy = 'cpy'
     reduce = 're'
+    delete = 'd' 
 
     def __str__(self):
         return self.value
