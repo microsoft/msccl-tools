@@ -69,48 +69,21 @@ def delete_pass(tb):
         if tb.ops[s].inst == Instruction.delete:
             del tb.ops[s]
 
-# TODO: Fix this
-# Matching pattern rrc, s -> rrs rrc with multi count operations
-def multicount_rrcs(tb):
+# TODO: will only work for a very specific pattern...
+# Reorders rrs to occur before rrc in the same block
+def reorder_rrs_rrc(tb):
     ops = tb.ops
     last_rrc = -1
     for i in range(0, len(ops)):
         op = ops[i]
-        if op.inst == Instruction.recv_reduce_copy and last_rrc == -1:
+        if op.inst == Instruction.recv_reduce_copy and last_rrc == -1 and ops[last_rrc].src.index != ops[i].src.index:
             last_rrc = i
-        elif op.inst == Instruction.recv_reduce_send and last_rrc > -1:
-            temp = ops[last_rrc]
-            ops[last_rrc] = ops[i]
-            ops[i] = temp
-            last_rrc += 1
-
-
-            # print(op1)
-            # print(op2)
-            # op1_start = op1.dst.index
-            # op1_end = op1_start + op1.dst.size
-            # op2_start = op2.src.index
-            # op2_end = op2_start + op2.dst.size
-            # Check that the send operates on a subset of the rrc chunks
-            # if op2_start >= op1_start and op2_end <= op1_end:
-            #     new_rrc_size = op1.dst.size - op2.src.size
-            #     rrc_first = op2_start > op1_start # Determine if the first half chunks are for rrc or rrs
-            #     split_index = op2_start if rrc_first else op2_end
-
-            #     if rrc_first:
-            #         # Split into rrc and rrs
-            #         new_op1_src = ChunkRef(op1.src.buffer, op1.src.index, new_rrc_size)
-            #         new_op1_dst = ChunkRef(op1.dst.buffer, op1.dst.index, new_rrc_size)
-                    
-            #     else:
-            #         # Split into rrs and rrc
-            #         new_op1_src = ChunkRef(op1.src.buffer, op1.src.index, new_rrc_size)
-            #         new_op1_dst = ChunkRef(op1.dst.buffer, split_index, new_rrc_size)
-                
-            #     op2.inst = Instruction.recv_reduce_send
-            #     op1.src = new_op1_src
-            #     op1.dst = new_op1_dst
-            # print("   ", op1)
-            # print("   ", op2)
+        # elif op.inst == Instruction.recv_reduce_send and last_rrc > -1:
+        #     # Swap the rrc and rrs so that the rrs comes first.
+        #     temp = ops[last_rrc]
+        #     ops[last_rrc] = ops[i]
+        #     ops[i] = temp
+        #     last_rrc += 1
+        #     print(f'Reordered {ops[last_rrc-1]} and {ops[i]}')
 
 

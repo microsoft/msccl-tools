@@ -317,9 +317,10 @@ class Process:
             rrcs_rrs(ops, self.tbs)
             rcs(ops, self.tbs)
         # Delete ops that are no longer needed
+        # Instruction reordering within tbs=
         for _, tb in self.tbs.items():
-            multicount_rrcs(tb)
             delete_pass(tb)
+            reorder_rrs_rrc(tb)
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):

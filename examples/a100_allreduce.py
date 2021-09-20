@@ -23,26 +23,39 @@ def allreduce(instances):
             current_index = next_index.copy()
             for r in range(size):
                 next = r ^ pairs
-                offset = (count if r < next else 0) 
+                # if r == 0:
+                #     print(f"0 send on tb {sendtb} to {next}")
+                # if next == 0:
+                #     print(f"0 recducing on tb {recvtb} from {r}")
+                offset = (count if r <= next else 0) 
                 next_index[next] += offset
                 # Split the reduce into two separate reduces to enable an optimization
+                # Hack to get RRS before RRC
+                block = 2 ** pairs
+                reverse = (r // block) % block
                 for x in range(count):
+                    # if reverse == 0:
+                    #     x = count - 1 - x
                     index = current_index[r] + offset + i * logical_chunk + x
                     c = Rank(r).input(index)
-                    c.reduce(next, Buffer.input, index, ch=i*2, sendtb=sendtb+i*tb_per_channel, recvtb=recvtb+i*tb_per_channel)
+                    c.reduce(next, Buffer.input, index, ch=i, sendtb=sendtb+i*tb_per_channel, recvtb=recvtb+i*tb_per_channel)
                 
 
         # Propagates reduced chunks in reverse order 
         def propagate_ring(pairs, next_index, i, sendtb, recvtb):
             count = 8 // (2*pairs)
-            current_index = next_index.copy()
+            current_index = next_index.copy()            
             for r in range(size):
                 next = r ^ pairs
+                # if r == 0:
+                #     print(f"0 send on tb {sendtb} to {next}")
+                # if next == 0:
+                #     print(f"0 recv on tb {recvtb} from {r}")
                 offset = (count if r > next else 0) 
                 next_index[r] -= offset
                 index = current_index[r] + i*logical_chunk
                 c = Rank(r).input(index, count)
-                c.send(next, Buffer.input, index, ch=i*2+1, sendtb=sendtb+i*tb_per_channel, recvtb=recvtb+i*tb_per_channel)
+                c.send(next, Buffer.input, index, ch=i, sendtb=sendtb+i*tb_per_channel, recvtb=recvtb+i*tb_per_channel)
 
         for i in range(instances):
             next_index = [0] * 8
@@ -51,9 +64,9 @@ def allreduce(instances):
             reduce_ring(2, next_index, i, 1, 2)
             reduce_ring(4, next_index, i, 2, 3)
 
-            propagate_ring(4, next_index, i, 4, 5)
-            propagate_ring(2, next_index, i, 6, 7)
-            propagate_ring(1, next_index, i, 8, 9)
+            propagate_ring(4, next_index, i, 2, 3)
+            propagate_ring(2, next_index, i, 1, 2)
+            propagate_ring(1, next_index, i, 0, 1)
 
         XML()
         Check()
