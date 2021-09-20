@@ -73,17 +73,24 @@ def delete_pass(tb):
 # Matching pattern rrc, s -> rrs rrc with multi count operations
 def multicount_rrcs(tb):
     ops = tb.ops
-    for i in range(0, len(ops)-1):
-        op1 = ops[i]
-        op2 = ops[i+1]
-        
-        if op1.inst == Instruction.recv_reduce_copy and op2.inst == Instruction.send:
+    last_rrc = -1
+    for i in range(0, len(ops)):
+        op = ops[i]
+        if op.inst == Instruction.recv_reduce_copy and last_rrc == -1:
+            last_rrc = i
+        elif op.inst == Instruction.recv_reduce_send and last_rrc > -1:
+            temp = ops[last_rrc]
+            ops[last_rrc] = ops[i]
+            ops[i] = temp
+            last_rrc += 1
+
+
             # print(op1)
             # print(op2)
-            op1_start = op1.dst.index
-            op1_end = op1_start + op1.dst.size
-            op2_start = op2.src.index
-            op2_end = op2_start + op2.dst.size
+            # op1_start = op1.dst.index
+            # op1_end = op1_start + op1.dst.size
+            # op2_start = op2.src.index
+            # op2_end = op2_start + op2.dst.size
             # Check that the send operates on a subset of the rrc chunks
             # if op2_start >= op1_start and op2_end <= op1_end:
             #     new_rrc_size = op1.dst.size - op2.src.size
