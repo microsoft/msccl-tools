@@ -74,7 +74,7 @@ class AllGather(Collective):
                     index = i*self.instances + ch
                     chunk = output[index]
                     if chunk is None or chunk.origin_rank != i or chunk.origin_index != ch:
-                        print(f'Rank {r} chunk {index} is incorrect should be ({i}, {ch}) given {chunk}')
+                        print(f'Rank {r} chunk {index} is incorrect should be ({i}, {ch}) given ({chunk.origin_rank}, {chunk.origin_index})')
                         correct = False
         return correct
 

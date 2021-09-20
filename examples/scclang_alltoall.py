@@ -15,7 +15,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
     def RankFromNodeGpuPair(n, g):
         return n*gpus_per_node + g
 
-    # For cross node traffic from node n1 to node n2, returns the ranks 
+    # For cross node traffic from node n1 to node n2, returns the ranks g
     # gpus on n1 and n2 that handle that traffic.
     def CrossNodeGpus(n1, n2):
         def LocalRank(n1, n2):
@@ -34,7 +34,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
         
 
     topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, instances, False, "alltoall")
+    collective = AllToAll(num_ranks, instances, inplace=False, collective="alltoall")
     
     with SCCLProgram("hierarchical_all_to_all", topology, collective, instances):
         # Allocate scratch buffers to gather chunks to be sent over IB
@@ -67,13 +67,13 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
                                 # buffer_index = (g1 * gpus_per_node + g2) * instances + ch
                                 # Send chunk to the gather_rank. Send returns a chunk reference to the 
                                 # receiver's chunk
-                                c = c.send(gather_rank, buffer=buffer_key, ch=0)
+                                c = c.send(gather_rank, buffer=buffer_key, ch=ch)
                                 # Group the chunks using a particular IB pair into one large chunk reference
-                                AddChunk(ib_chunks, buffer_key, c) 
+                                AddChunk(ib_chunks, buffer_key, c) # TODO: MEghan: Clean this up
                             else:
                                 # Directly send chunks destined for ranks within the node or
                                 # copy chunks destined for current rank into the output buffer
-                                c.send(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=0)
+                                c.send(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch)
 
 
         # IB Send and local scatters
@@ -90,7 +90,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
                     # Access the chunk's destination rank and index to route it to its final place
                     final_rank = c.get_dst_rank()
                     index = c.get_dst_index()
-                    c.send(final_rank, buffer=Buffer.output, index=index, ch=1)
+                    c.send(final_rank, buffer=Buffer.output, index=index, ch=ch)
 
         XML() # Prints the XML
         Check()

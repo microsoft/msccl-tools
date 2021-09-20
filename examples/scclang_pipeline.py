@@ -38,7 +38,6 @@ class Pipeline(Collective):
 
 
 def pipeline(num_nodes, instances):
-    local_topology = dgx1()
     num_local_gpus = 8
     chunks = num_local_gpus
     total_chunks_per_loop = chunks * instances
@@ -75,20 +74,22 @@ def pipeline(num_nodes, instances):
                         for ch in range(chunks):
                             c = Rank(r).input(ch*instances + i)
                             if ch == 0:
-                                c = c.send(rank(n, ch), 'gather', i, ch=ch%2+i*2)
+                                c = c.send(rank(n, ch), 'gather', i, channel=ch%2+i*2)
+                                # No scatter needed
 
                             elif ch == num_local_gpus-1:
-                                c = c.send(rank(n+1, ch), 'scatter', i, ch=ch%2+i*2)
+                                # No gather already on gpu
+                                c = c.send(rank(n+1, ch), 'scatter', i, channel=ch%2+i*2)
                             else:
-                                c = c.send(rank(n, ch), 'gather', i, ch=ch%2+i*2)
-                                c = c.send(rank(n+1, ch), 'scatter', i, ch=ch%2+i*2)
+                                c = c.send(rank(n, ch), 'gather', i, channel=ch%2+i*2)
+                                c = c.send(rank(n+1, ch), 'scatter', i, channel=ch%2+i*2)
                             
-                            c.send(r+1, Buffer.output, c.get_dst_index(), ch=ch%2+i*2)
+                            c.send(r+1, Buffer.output, c.get_dst_index(), channel=ch%2+i*2)
                             
                     # Normal send
                     else:
                         c = Rank(r).input(i * chunks, chunks)
-                        c.send(r+1, Buffer.output, i * chunks, ch=g%2+i*2)
+                        c.send(r+1, Buffer.output, i * chunks, channel=g%2+i*2)
         
         Check()
         XML()

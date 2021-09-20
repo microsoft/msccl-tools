@@ -22,7 +22,7 @@ class SCCLProgram:
         self.collective = collective       
         self.ranks = []
         self.instances = instances
-        self.run_opt = False # Runs optimization passes
+        self.run_opt = True # Runs optimization passes
         # Initialize the input buffers
         num_ranks = topo.num_nodes()
         rank_buffers = collective.init_buffers()
@@ -41,6 +41,11 @@ class SCCLProgram:
     # Lower program to XML
     def lower(self):
         for rank in self.ranks:
+            # print(f'Rank {rank}')
+            # for slot, ops in rank.slot_ops.items():
+            #     print(f'  {slot}')
+            #     for op in ops:
+            #         print(f'    {op}')
             if self.run_opt:
                 rank.optimize()
             rank.lower_buffers()
@@ -257,8 +262,7 @@ class Process:
         # Fill in op dependence 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.inst, op.src.buffer, op.src.index, op.src.size)
-                
+        op.depends = self._get_dependences(op.inst, op.src.buffer, op.src.index, op.src.size)              
 
     def _get_dependences(self, inst, buffer, start_index, size):
         # Get and merge dependencies for each index
@@ -312,6 +316,10 @@ class Process:
         for k, ops in self.slot_ops.items():
             rrcs_rrs(ops, self.tbs)
             rcs(ops, self.tbs)
+        # Delete ops that are no longer needed
+        for _, tb in self.tbs.items():
+            multicount_rrcs(tb)
+            delete_pass(tb)
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
@@ -410,15 +418,6 @@ class Ref(ChunkRef):
         self.prog.ranks[self.rank]._add_copy(tb, ch, op)
         return dst_chunkref
 
-    def split(self, num):
-        assert (self.size % num == 0), f'Trying to split a chunk of {self.size} elements into {num} parts'
-        chunks = [None] * num
-        size = self.size // num
-        for i in range(num):
-            index = self.index + i * size
-            chunks[i] = Ref(self.buffer, index, size, self.prog, self.rank, {}) # TODO: Broken
-        return chunks
-
     # TODO: this is weird...
     def group(self, other):
         assert (self.rank == other.rank), f'Trying to concatenate chunks on ranks {self.rank} and {other.rank}'
@@ -440,10 +439,7 @@ class Ref(ChunkRef):
 
     def send(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=0):
         assert (len(self.missing) == 0), f'Trying to send an incomplete concatenation. Missing indices {self.missing}'
-        # TEMP TODO FIX: can't run optimization passes with multi chunk sends currently
-        if self.size > 1:
-            self.prog.run_opt = False
-
+ 
         # If index is not specified assume it is going to the same place in the next gpu
         if index == -1 and buffer == None:
             index = self.index
