@@ -13,7 +13,7 @@ def allreduce(instances):
     size = topology.num_nodes() #  Number of gpus
     logical_chunk = 8
     collective = AllReduce(size, instances*logical_chunk, True, "allreduce")
-    with SCCLProgram("allreduce_ndv2", topology, collective, instances*logical_chunk):
+    with SCCLProgram("allreduce_a100", topology, collective, instances*logical_chunk):
 
         # 1 reduction between pairs number of gpus 
         # Number of chunks reduced is depdendent on number of pairs

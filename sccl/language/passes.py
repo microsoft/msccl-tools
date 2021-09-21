@@ -70,29 +70,18 @@ def delete_pass(tb):
             del tb.ops[s]
 
 def clear_dependency(ops):
-    for i in range(0, len(ops)):
-        ops[i].depends = []
+    for op in ops:
+        op.depends = {}
 
-def update_slot_dependency(ops):
+def update_slot_dependency(ops):           
     for i in range(1, len(ops)):
-        ops[i].depends.append(ops[i-1])
-
-
-# TODO: will only work for a very specific pattern...
-# Reorders rrs to occur before rrc in the same block
-def reorder_rrs_rrc(tb):
-    ops = tb.ops
-    last_rrc = -1
-    for i in range(0, len(ops)):
+        last_op = ops[i-1]
         op = ops[i]
-        if op.inst == Instruction.recv_reduce_copy and last_rrc == -1 and ops[last_rrc].src.index != ops[i].src.index:
-            last_rrc = i
-        # elif op.inst == Instruction.recv_reduce_send and last_rrc > -1:
-        #     # Swap the rrc and rrs so that the rrs comes first.
-        #     temp = ops[last_rrc]
-        #     ops[last_rrc] = ops[i]
-        #     ops[i] = temp
-        #     last_rrc += 1
-        #     print(f'Reordered {ops[last_rrc-1]} and {ops[i]}')
+        # If we have multiple dependent ops from the same tb keep the one with the highest steps
+        tb = last_op.tb
+        depends = op.depends
+        if tb not in depends or last_op.step > depends[tb].step:
+                depends[tb] = last_op
+
 
 

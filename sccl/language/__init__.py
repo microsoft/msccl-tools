@@ -41,11 +41,11 @@ class SCCLProgram:
     # Lower program to XML
     def lower(self):
         for rank in self.ranks:
-            # print(f'Rank {rank}')
+            # print(f'Rank {rank.rank}')
             # for slot, ops in rank.slot_ops.items():
             #     print(f'  {slot}')
             #     for op in ops:
-            #         print(f'    {op}')
+                    # print(f'    {op}')
             if self.run_opt:
                 rank.optimize()
             rank.lower_buffers()
@@ -286,8 +286,6 @@ class Process:
                 tb = last_op.tb
                 if tb not in depends or last_op.step > depends[tb].step:
                         depends[tb] = last_op
-                        # if size == 4 and self.rank == 0:
-                        #     print(last_op)
 
         return list(depends.values())
     
@@ -327,6 +325,10 @@ class Process:
             clear_dependency(ops)
         for _, ops in self.slot_ops.items():
             update_slot_dependency(ops)
+        for _, ops in self.slot_ops.items():
+            for op in ops:
+                if type(op.depends) is dict:
+                    op.depends = list(op.depends.values())
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
