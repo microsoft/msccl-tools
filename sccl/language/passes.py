@@ -35,9 +35,9 @@ def rcs(ops, tbs):
     
     delete_operations(ops, tbs, delete_idx)
 
-    # Update the depends of ops - always depend on the ops ahead 
-    for i in range(1, len(ops)):
-        ops[i].depends = [ops[i-1]]
+    # # Update the depends of ops - always depend on the ops ahead 
+    # for i in range(1, len(ops)):
+    #     ops[i].depends = [ops[i-1]]
 
 
 def rrcs_rrs(ops, tbs):
@@ -58,9 +58,9 @@ def rrcs_rrs(ops, tbs):
     
     delete_operations(ops, tbs, delete_idx)
 
-    # Update the depends of ops - always depend on the ops ahead 
-    for i in range(1, len(ops)):
-        ops[i].depends = [ops[i-1]]
+    # # Update the depends of ops - always depend on the ops ahead 
+    # for i in range(1, len(ops)):
+    #     ops[i].depends = [ops[i-1]]
 
 # Performs the deletion of operations that are marked delete
 def delete_pass(tb):
@@ -68,6 +68,15 @@ def delete_pass(tb):
     for s in range(steps, -1, -1):
         if tb.ops[s].inst == Instruction.delete:
             del tb.ops[s]
+
+def clear_dependency(ops):
+    for i in range(0, len(ops)):
+        ops[i].depends = []
+
+def update_slot_dependency(ops):
+    for i in range(1, len(ops)):
+        ops[i].depends.append(ops[i-1])
+
 
 # TODO: will only work for a very specific pattern...
 # Reorders rrs to occur before rrc in the same block

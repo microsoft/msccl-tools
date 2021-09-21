@@ -23,10 +23,6 @@ def allreduce(instances):
             current_index = next_index.copy()
             for r in range(size):
                 next = r ^ pairs
-                # if r == 0:
-                #     print(f"0 send on tb {sendtb} to {next}")
-                # if next == 0:
-                #     print(f"0 recducing on tb {recvtb} from {r}")
                 offset = (count if r <= next else 0) 
                 next_index[next] += offset
                 # Split the reduce into two separate reduces to enable an optimization
@@ -34,8 +30,8 @@ def allreduce(instances):
                 block = 2 ** pairs
                 reverse = (r // block) % block
                 for x in range(count):
-                    # if reverse == 0:
-                    #     x = count - 1 - x
+                    if reverse == 0:
+                        x = count - 1 - x
                     index = current_index[r] + offset + i * logical_chunk + x
                     c = Rank(r).input(index)
                     c.reduce(next, Buffer.input, index, ch=i, sendtb=sendtb+i*tb_per_channel, recvtb=recvtb+i*tb_per_channel)
@@ -47,10 +43,6 @@ def allreduce(instances):
             current_index = next_index.copy()            
             for r in range(size):
                 next = r ^ pairs
-                # if r == 0:
-                #     print(f"0 send on tb {sendtb} to {next}")
-                # if next == 0:
-                #     print(f"0 recv on tb {recvtb} from {r}")
                 offset = (count if r > next else 0) 
                 next_index[r] -= offset
                 index = current_index[r] + i*logical_chunk

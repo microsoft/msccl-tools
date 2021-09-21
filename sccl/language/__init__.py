@@ -286,6 +286,8 @@ class Process:
                 tb = last_op.tb
                 if tb not in depends or last_op.step > depends[tb].step:
                         depends[tb] = last_op
+                        # if size == 4 and self.rank == 0:
+                        #     print(last_op)
 
         return list(depends.values())
     
@@ -320,7 +322,11 @@ class Process:
         # Instruction reordering within tbs=
         for _, tb in self.tbs.items():
             delete_pass(tb)
-            reorder_rrs_rrc(tb)
+        # Redo dependences
+        for _, ops in self.slot_ops.items():
+            clear_dependency(ops)
+        for _, ops in self.slot_ops.items():
+            update_slot_dependency(ops)
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
