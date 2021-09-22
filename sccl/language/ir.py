@@ -12,6 +12,7 @@ class Program:
     name: str
     collective: str
     inplace: bool
+    protocol: str
     gpus: list = field(default_factory=list)
 
 
@@ -182,7 +183,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     # Generate the XML structure
     algo_elem = ET.Element('algo')
     algo_elem.set('name', program.name)
-    algo_elem.set('proto', 'Simple')
+    algo_elem.set('proto', program.protocol)
     algo_elem.set('nchannels', str(
         1 + max(max(tb.channel for tb in gpu.threadblocks) for gpu in program.gpus)))
     if old_format:

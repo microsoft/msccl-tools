@@ -16,12 +16,15 @@ def _curr():
     return _current_program
 
 class SCCLProgram:
-    def __init__(self, name, topo, collective, instances):
+    def __init__(self, name, topo, collective, instances, protocol='Simple'):
         self.name = name
         self.topo = topo
         self.collective = collective       
         self.ranks = []
         self.instances = instances
+        self.protocol = protocol
+        assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
+            f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
         self.run_opt = True # Runs optimization passes
         # Initialize the input buffers
         num_ranks = topo.num_nodes()
@@ -50,7 +53,7 @@ class SCCLProgram:
                 rank.optimize()
             rank.lower_buffers()
         gpu_prgms = [rank.lower_tbs() for rank in self.ranks]
-        return Program(self.name, self.collective.name, self.collective.inplace, gpu_prgms)
+        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
 
     def __enter__(self):
         global _current_program

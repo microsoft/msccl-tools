@@ -14,7 +14,7 @@ def allreduce(ways, instances):
     logical_chunk = 8 * ways
     tb_per_channel = 12
     collective = AllReduce(size, instances*logical_chunk, True, "allreduce")
-    with SCCLProgram("allreduce_a100", topology, collective, instances*logical_chunk):
+    with SCCLProgram("allreduce_a100", topology, collective, instances*logical_chunk, 'LL128'):
 
         # 1 reduction between pairs of gpus of count
         def reduce_ring(pairs, count, next_index, lc, i, sendtb, recvtb):
@@ -28,12 +28,16 @@ def allreduce(ways, instances):
                 block = 2 ** pairs
                 reverse = (r // block) % block
                 for x in range(count):
+                    # Uncomment to get RRS before RRC - but buggy :(
                     # if reverse == 0:
                     #     x = count - 1 - x
                     index = current_index[r] + offset + i*logical_chunk + lc*8 + x
                     c = Rank(r).input(index)
                     c.reduce(next, Buffer.input, index, ch=lc + i * ways, sendtb=sendtb+i*tb_per_channel, recvtb=recvtb+i*tb_per_channel)
-                
+                # Uncomment this and comment out L30 for loop to send/reduce with counts > 1
+                # index = current_index[r] + offset + i*logical_chunk + lc*8 
+                # c = Rank(r).input(index, count)
+                # c.reduce(next, Buffer.input, index, ch=lc + i * ways, sendtb=sendtb+i*tb_per_channel, recvtb=recvtb+i*tb_per_channel)
 
         # Propagates reduced chunks in reverse order 
         def propagate_ring(pairs, count, next_index, lc, i, sendtb, recvtb):
