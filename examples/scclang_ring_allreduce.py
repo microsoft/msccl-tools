@@ -20,10 +20,10 @@ def allreduce(instances):
                 next = (r + 1) % size
                 while next != r:
                     # For each rank in the ring, send the chunk to the next rank
-                    c = c.reduce(next, Buffer.input, index, ch=i, sendtb=r*instances+i, recvtb=r*instances+i)
+                    c = c.reduce(next, Buffer.input, index, ch=r*instances+i, sendtb=r*instances+i, recvtb=r*instances+i)
                     next = (next + 1) % size
                 while next != (r-1) % size:
-                    c = c.send(next, Buffer.input, index, ch=i, sendtb=r*instances+i, recvtb=r*instances+i)
+                    c = c.send(next, Buffer.input, index, ch=r*instances+i, sendtb=r*instances+i, recvtb=r*instances+i)
                     next = (next + 1) % size
         XML()
         Check()
