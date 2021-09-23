@@ -257,9 +257,6 @@ class Process:
             self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops=[op])
         else:
             tb = self.tbs[tbid]
-            assert (tb.recv == -1 or tb.recv == receivefrom), \
-                   f'Rank {self.rank}: Threadblock {tbid} is already set to receive from {tb.recv}, trying to receive from {receivefrom}'
-            tb.recv = receivefrom
             tb.ops.append(op)
 
         # Fill in op dependence 
@@ -308,6 +305,9 @@ class Process:
 
     def output(self, index, size=1):
         return self.get_ref(Buffer.output, index, size)
+
+    def scratch(self, name, index, size=1):
+        return self.get_ref(name, index, size)
 
     # Creates a scratch buffer with a name
     def create_scratch(self, name):
@@ -474,7 +474,7 @@ class Ref(ChunkRef):
 
     def _local_reduce(self, buffer, index, tb, ch):
         # TODO: Test this out
-        dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
+        dst_chunkref = self.prog.ranks[self.rank].get_ref(buffer, index, self.size)
         op = Op(Instruction.reduce, self, dst_chunkref, {})
         self.prog.ranks[self.rank]._add_reduce(tb, ch, op)
         return dst_chunkref
