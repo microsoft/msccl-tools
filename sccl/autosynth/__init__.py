@@ -9,6 +9,7 @@ import re
 import subprocess
 import fcntl
 import os
+import math
 import tempfile
 import humanfriendly
 
@@ -29,6 +30,8 @@ def init(num_machines, machine_type, *collectives):
                 lower = humanfriendly.parse_size(lower)
             if isinstance(upper, str):
                 upper = humanfriendly.parse_size(upper)
+            if upper == None:
+                upper = math.inf
             sizes = (lower, upper)
         else:
             if isinstance(sizes, str):
@@ -52,8 +55,10 @@ def init(num_machines, machine_type, *collectives):
                     load_elem = ET.SubElement(algos_elem, 'load')
                     load_elem.set('path', path)
                     minsize, maxsize, proto = params
-                    load_elem.set('minsize', str(minsize))
-                    load_elem.set('maxsize', str(maxsize+1))
+                    if minsize != 0:
+                        load_elem.set('minsize', str(minsize))
+                    if maxsize != math.inf:
+                        load_elem.set('maxsize', str(maxsize+1))
                     load_elem.set('proto', proto)
         ET.indent(algos_elem, space='  ')
         
@@ -70,10 +75,13 @@ def init(num_machines, machine_type, *collectives):
 
 
 def _select_plans(name, candidates, num_machines, sizes):
-    candidate_intervals = [(sizes, [])]
+    candidate_intervals = [((0, math.inf), [])]
     valid_candidates = list(filter(lambda x: x[2](num_machines), candidates))
     for candidate in valid_candidates:
         csizes = candidate[3]
+        # Skip candidate if it does not overlap with user provided sizes
+        if csizes[0] > sizes[1] or sizes[0] > csizes[1]:
+            continue
         i = 0
         while i < len(candidate_intervals):
             ival = candidate_intervals[i]
@@ -100,6 +108,9 @@ def _select_plans(name, candidates, num_machines, sizes):
                 break
     results = []
     for isizes, candidates in candidate_intervals:
+        # Skip interval if it does not overlap with user provided sizes
+        if isizes[0] > sizes[1] or sizes[0] > isizes[1]:
+            continue
         sorted_candidates = sorted(candidates, key=_candidate_sort_key)
         description = f'{name} with sizes from {humanfriendly.format_size(isizes[0])} to {humanfriendly.format_size(isizes[1])}'
         if len(sorted_candidates) == 0:
