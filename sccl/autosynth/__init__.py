@@ -74,6 +74,13 @@ def init(num_machines, machine_type, *collectives):
         print(f'SCCL: No algorithms were selected.')
 
 
+def _format_size(size):
+    if size != math.inf:
+        return humanfriendly.format_size(size)
+    else:
+        return 'infinity'
+
+
 def _select_plans(name, candidates, num_machines, sizes):
     candidate_intervals = [((0, math.inf), [])]
     valid_candidates = list(filter(lambda x: x[2](num_machines), candidates))
@@ -112,7 +119,7 @@ def _select_plans(name, candidates, num_machines, sizes):
         if isizes[0] > sizes[1] or sizes[0] > isizes[1]:
             continue
         sorted_candidates = sorted(candidates, key=_candidate_sort_key)
-        description = f'{name} with sizes from {humanfriendly.format_size(isizes[0])} to {humanfriendly.format_size(isizes[1])}'
+        description = f'{name} with sizes from {_format_size(isizes[0])} to {_format_size(isizes[1])}'
         if len(sorted_candidates) == 0:
             print(f'SCCL: No plan found for {description}. Falling back to NCCL baseline.')
         else:
