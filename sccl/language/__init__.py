@@ -117,11 +117,9 @@ class Process:
         self.buffers = buffers
         self.tbs = {}
         self.tb_mapping = {}
+        self.send_channel_mapping = {} # sender rank -> channels used
+        self.recv_channel_mapping = {} # receiver rank -> channels used
         self.tb_count = 0
-
-        # Track all the dependencies for each slot in a buffer. 
-        # Initially all input chunks have no dependencies.
-        # TODO: Should we track all instructions per slot?
         self.slot_ops = {} # (buffer, idx) -> list of ops on this slot
 
     def _get_tbid(self, inst, other_rank, ch):
@@ -134,6 +132,25 @@ class Process:
             self.tb_count += 1
         return tbid
 
+    def _tb_addop(self, tbid, sendto, receivefrom, ch, op):
+        # Create a new threadblock if tbid doesn't exist
+        if tbid not in self.tbs:
+            self.tbs[tbid] = Threadblock(ch, sendto, receivefrom, ops=[op])
+
+        # Check it is valid to use this threadblock if already exists
+        else:
+            tb = self.tbs[tbid]
+            assert (sendto == -1 or tb.send == -1 or tb.send == sendto), \
+                f'Rank {self.rank}: Threadblock {tbid} is already set to send to {tb.send}, trying to send to {sendto}'
+            assert (receivefrom == -1 or tb.recv == -1 or tb.recv == receivefrom), \
+                   f'Rank {self.rank}: Threadblock {tbid} is already set to receive from {tb.recv}, trying to receive from {receivefrom}'
+            if tb.send != -1:
+                tb.send = sendto
+            if tb.recv != -1:
+                tb.recv = receivefrom
+            tb.ops.append(op)
+
+
     def _add_send(self, tbid, ch, op):
         assert(op.inst == Instruction.send)
         sendto = op.dst.rank
@@ -142,14 +159,7 @@ class Process:
         if tbid == -1:
             tbid = self._get_tbid(Instruction.send, sendto, ch)
 
-        if tbid not in self.tbs:
-            self.tbs[tbid] = Threadblock(ch, send=sendto, ops=[op])
-        else:
-            tb = self.tbs[tbid]
-            assert (tb.send == -1 or tb.send == sendto), \
-                f'Rank {self.rank}: Threadblock {tbid} is already set to send to {tb.send}, trying to send to {sendto}'
-            tb.send = sendto
-            tb.ops.append(op)
+        self._tb_addop(tbid, sendto, -1, ch, op)
 
         # Fill in op dependence 
         op.tb = tbid
@@ -169,14 +179,7 @@ class Process:
         recvd_chunkref = op.dst
 
         # Update tbs
-        if tbid not in self.tbs:
-            self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops=[op])
-        else:
-            tb = self.tbs[tbid]
-            assert (tb.recv == -1 or tb.recv == receivefrom), \
-                   f'Rank {self.rank}: Threadblock {tbid} is already set to receive from {tb.recv}, trying to receive from {receivefrom}'
-            tb.recv = receivefrom
-            tb.ops.append(op)
+        self._tb_addop(tbid, -1, receivefrom, ch, op)
 
         # Fill in op dependence 
         op.tb = tbid
@@ -218,14 +221,7 @@ class Process:
         recvd_chunkref = op.dst
 
         # Update tbs
-        if tbid not in self.tbs:
-            self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops=[op])
-        else:
-            tb = self.tbs[tbid]
-            assert (tb.recv == -1 or tb.recv == receivefrom), \
-                   f'Rank {self.rank}: Threadblock {tbid} is already set to receive from {tb.recv}, trying to receive from {receivefrom}'
-            tb.recv = receivefrom
-            tb.ops.append(op)
+        self._tb_addop(tbid, -1, receivefrom, ch, op)
 
         # Fill in op dependence 
         op.tb = tbid
@@ -431,6 +427,15 @@ class Ref(ChunkRef):
         self.prog.ranks[self.rank]._add_copy(tb, ch, op)
         return dst_chunkref
 
+    def split(self, num):
+        assert (self.size % num == 0), f'Trying to split a chunk of {self.size} elements into {num} parts'
+        chunks = [None] * num
+        size = self.size // num
+        for i in range(num):
+            index = self.index + i * size
+            chunks[i] = self.prog.ranks[self.rank].get_ref(self.buffer, index, size)
+        return chunks
+
     # TODO: this is weird...
     def group(self, other):
         assert (self.rank == other.rank), f'Trying to concatenate chunks on ranks {self.rank} and {other.rank}'
@@ -446,7 +451,6 @@ class Ref(ChunkRef):
         missing = set(range(first.index, end))
         missing.difference_update(set(range(first.index, first._end())).difference(first.missing))
         missing.difference_update(set(range(second.index, second._end())).difference(second.missing))
-        # print(first.index, first.size, second.index, second.size, missing)
         return Ref(self.buffer, first.index, end - first.index, self.prog, self.rank, missing) # Broken
         
 
@@ -474,15 +478,12 @@ class Ref(ChunkRef):
         return dst_chunkref
 
     def _local_reduce(self, buffer, index, tb, ch):
-        # TODO: Test this out
         dst_chunkref = self.prog.ranks[self.rank].get_ref(buffer, index, self.size)
         op = Op(Instruction.reduce, self, dst_chunkref, {})
         self.prog.ranks[self.rank]._add_reduce(tb, ch, op)
         return dst_chunkref
     
     def reduce(self, dst, buffer, index=-1, sendtb=-1, recvtb=-1, ch=0):
-        # TODO: wip - would want to decide wether to use a rrc, rrs, rrcs based on what is happening next...
-        # (rrc -> send) => replace with rrs if chunk is not fully reduced, else replace with rrcs
         # Local reduce
         if dst == self.rank:
             return self._local_reduce(buffer, index, sendtb, ch)
