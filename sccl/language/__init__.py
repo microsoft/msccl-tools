@@ -323,6 +323,7 @@ class Process:
         # Instruction reordering within tbs=
         for _, tb in self.tbs.items():
             delete_pass(tb)
+            prioritize_sends(tb)
         # Redo dependences
         for _, ops in self.slot_ops.items():
             clear_dependency(ops)

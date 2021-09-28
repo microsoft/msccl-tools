@@ -9,6 +9,21 @@ def same_tb(op1, op2):
 def same_count(op1, op2):
     return op1.cnt() == op2.cnt()
 
+def is_receive(op):
+    return op.inst == Instruction.recv or op.inst == Instruction.recv_copy_send or op.inst == Instruction.recv_reduce_copy or op.inst == Instruction.recv_reduce_send
+
+def chunks_overlap(chunk1, chunk2):
+    if chunk1.buffer == chunk2.buffer:
+        if chunk1.index < chunk2.index:
+            lower_chunk = chunk1
+            upper_chunk = chunk2
+        else:
+            lower_chunk = chunk2
+            upper_chunk = chunk1
+        if lower_chunk.index <= upper_chunk.index and (lower_chunk.index + lower_chunk.size -1) <= upper_chunk.index:
+            return True
+    return False
+
 def delete_operations(ops, tbs, delete_idx):
     delete_idx.sort(reverse=True)
     # Delete the ops
@@ -20,7 +35,6 @@ def delete_operations(ops, tbs, delete_idx):
 # Given the set of operations that operate over a particular slot (rank, buffer, idx) fixed
 # Try and replace operations with pipelined ops like receive copy send (rcs)
 # or receive reduce send (rrs) and receive reduce copy send (rrcs)
-# TODO: Only works if there are no multi chunk sends!!!!!!
 # Rules:
 # recv-copy-send 
 # recv(src, sbuf, si, _, _, _ ) send(_, _, _, dst, dbuf, di) -> recv_copy_send(src, sbuf, si, dst, dbuf, di)
@@ -34,11 +48,6 @@ def rcs(ops, tbs):
                 delete_idx.append(i+1)
     
     delete_operations(ops, tbs, delete_idx)
-
-    # # Update the depends of ops - always depend on the ops ahead 
-    # for i in range(1, len(ops)):
-    #     ops[i].depends = [ops[i-1]]
-
 
 def rrcs_rrs(ops, tbs):
     delete_idx = []
@@ -58,9 +67,16 @@ def rrcs_rrs(ops, tbs):
     
     delete_operations(ops, tbs, delete_idx)
 
-    # # Update the depends of ops - always depend on the ops ahead 
-    # for i in range(1, len(ops)):
-    #     ops[i].depends = [ops[i-1]]
+# Within a tb reorder sends before receives if they are independent of each other
+def prioritize_sends(tb):
+    steps = len(tb.ops)
+    for i in range(1, steps):
+        prev = tb.ops[i-1]
+        current = tb.ops[i]
+        if current.inst == Instruction.send and is_receive(prev) and chunks_overlap(current.src, prev.dst):
+            tb.ops[i-1] = current
+            tb.ops[i] = prev
+
 
 # Performs the deletion of operations that are marked delete
 def delete_pass(tb):

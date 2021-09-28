@@ -73,7 +73,10 @@ class AllGather(Collective):
                 for ch in range(self.instances):
                     index = i*self.instances + ch
                     chunk = output[index]
-                    if chunk is None or chunk.origin_rank != i or chunk.origin_index != ch:
+                    if chunk is None:
+                        print(f'Rank {r} chunk {index} is incorrect should be ({i}, {ch}) given None')
+                        correct = False
+                    elif chunk.origin_rank != i or chunk.origin_index != ch:
                         print(f'Rank {r} chunk {index} is incorrect should be ({i}, {ch}) given ({chunk.origin_rank}, {chunk.origin_index})')
                         correct = False
         return correct
@@ -98,6 +101,7 @@ class AllReduce(Collective):
     def check(self, prog):
         chunks_per_node = self.instances
         expected_chunks = []
+        buf = Buffer.input if self.inplace else Buffer.output
 
         for c in range(chunks_per_node):
             chunk = ReduceChunk([])
@@ -107,11 +111,11 @@ class AllReduce(Collective):
 
         correct = True
         for r in range(self.num_ranks):
-            output = prog.ranks[r].buffers[Buffer.input]
+            output = prog.ranks[r].buffers[buf]
             for c in range(chunks_per_node):
                 chunk = output[c]
                 if chunk is None or chunk != expected_chunks[c]:
-                    print(f'Rank {r} chunk {c} is incorrect should be {expected_chunks[c]} given {chunk}')
+                    print(f'Rank {r} chunk {c} is incorrect should be ReduceChunk index {c} from all ranks, given {chunk}')
                     correct = False
         return correct
 
@@ -148,6 +152,6 @@ class ReduceScatter(Collective):
                 chunk = output[c]
                 correct_idx = r * self.instances + c
                 if chunk is None or chunk != expected_chunks[correct_idx]:
-                    print(f'Rank {r} chunk {c} is incorrect should be {expected_chunks[correct_idx]} given {chunk}')
+                    print(f'Rank {r} chunk {c} is incorrect should be index {correct_idx} from all ranks given {chunk}')
                     correct = False
         return correct
