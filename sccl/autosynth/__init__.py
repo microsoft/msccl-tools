@@ -56,9 +56,9 @@ def init(num_machines, machine_type, *collectives):
                     load_elem.set('path', path)
                     minsize, maxsize, proto = params
                     if minsize != 0:
-                        load_elem.set('minsize', str(minsize))
+                        load_elem.set('minbytes', str(minsize))
                     if maxsize != math.inf:
-                        load_elem.set('maxsize', str(maxsize+1))
+                        load_elem.set('maxbytes', str(maxsize+1))
                     load_elem.set('proto', proto)
         ET.indent(algos_elem, space='  ')
         
