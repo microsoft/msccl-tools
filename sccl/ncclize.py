@@ -288,7 +288,7 @@ class ChannelPolicy(Enum):
     def __str__(self):
         return self.value
 
-def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchTopology, pretty_print = True, old_format=False, use_scratch=False, merge_contiguous=True, greedy_scratch_sorting=False, instances=1, logging=False):
+def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchTopology, pretty_print = True, use_scratch=False, merge_contiguous=True, greedy_scratch_sorting=False, instances=1, logging=False):
     '''
     Generate the XML format used by the NCCL SCCL backend.
 
@@ -626,8 +626,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     algo_elem.set('ngpus', str(len(gpus)))
     algo_elem.set('inplace', '0')
     algo_elem.set('coll', algorithm.collective.runtime_name)
-    if old_format:
-        algo_elem.set('nchunksperloop', str(max(max(gpu.input_chunks, gpu.output_chunks) for gpu in gpus.values())))
+    algo_elem.set('nchunksperloop', str(max(max(gpu.input_chunks, gpu.output_chunks) for gpu in gpus.values())))
     for rank, gpu in gpus.items():
         gpu_elem = ET.SubElement(algo_elem, 'gpu')
         gpu_elem.set('id', str(rank))
@@ -641,8 +640,8 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             tb_elem.set('recv', str(tb.recv))
             tb_elem.set('chan', str(tb.channel))
             for op in tb.ops:
-                op_elem = ET.SubElement(tb_elem, 'op' if not old_format else 'step')
-                op_elem.set('step' if not old_format else 's', str(op.idx))
+                op_elem = ET.SubElement(tb_elem, 'step')
+                op_elem.set('s', str(op.idx))
                 op_elem.set('type', op.op_type)
 
                 # The NCCL backend currently wants scratch at the end of output
@@ -654,43 +653,29 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
                         op.dst_buffer = 'o'
                         op.dst_offset += gpu.output_chunks
 
-                if old_format:
-                    if op.src_buffer is not None:
-                        op_elem.set('srcbuf', op.src_buffer)
-                        op_elem.set('srcoff', str(op.src_offset))
-                    else:
-                        op_elem.set('srcbuf', 'i')
-                        op_elem.set('srcoff', '-1')
-                    if op.dst_buffer is not None:
-                        op_elem.set('dstbuf', op.dst_buffer)
-                        op_elem.set('dstoff', str(op.dst_offset))
-                    else:
-                        op_elem.set('dstbuf', 'o')
-                        op_elem.set('dstoff', '-1')
+                if op.src_buffer is not None:
+                    op_elem.set('srcbuf', op.src_buffer)
+                    op_elem.set('srcoff', str(op.src_offset))
                 else:
-                    if op.is_send:
-                        if op.src_buffer is not None:
-                            op_elem.set('buf', op.src_buffer)
-                            op_elem.set('off', str(op.src_offset))
-                        if op.dst_buffer is not None:
-                            op_elem.set('rbuf', op.dst_buffer)
-                            op_elem.set('roff', str(op.dst_offset))
-                    else:
-                        if op.dst_buffer is not None:
-                            op_elem.set('buf', op.dst_buffer)
-                            op_elem.set('off', str(op.dst_offset))
-                if op.cnt > 1 or old_format:
-                    op_elem.set('cnt', str(op.cnt))
+                    op_elem.set('srcbuf', 'i')
+                    op_elem.set('srcoff', '-1')
+                if op.dst_buffer is not None:
+                    op_elem.set('dstbuf', op.dst_buffer)
+                    op_elem.set('dstoff', str(op.dst_offset))
+                else:
+                    op_elem.set('dstbuf', 'o')
+                    op_elem.set('dstoff', '-1')
+                op_elem.set('cnt', str(op.cnt))
                 assert len(op.depends) <= 1
                 if len(op.depends) == 1:
                     op_elem.set('depid', str(op.depends[0].block_rbid))
                     op_elem.set('deps', str(op.depends[0].idx))
-                elif old_format:
+                else:
                     op_elem.set('depid', '-1')
                     op_elem.set('deps', '-1')
                 if op.has_dependence:
                     op_elem.set('hasdep', '1')
-                elif old_format:
+                else:
                     op_elem.set('hasdep', '0')
 
     if pretty_print:
