@@ -62,45 +62,10 @@ def allreduce_ring(instances, channels):
         XML()
         Check()
 
-def allreduce_pairs(instances):
-    size = 8
-    topology = fully_connected(size)
-    collective = AllReduce(size, 7 * instances, True, "allreduce")
-    with SCCLProgram("allreduce_pairs", topology, collective, size * instances, protocol="LL128"):
-        
-        for r in range(size):
-            for r1 in range(size):
-                Rank(r).create_scratch(f'scratch{r1}') 
-
-        for i in range(instances):
-            index = 7 * i
-            for r1 in range(size):
-                for r2 in range(size):
-                    if r1 != r2:
-                        c = Rank(r1).input(index, 7)
-                        c = c.send(r2, f'scratch{r1}', index, ch=i, sendtb=r2*instances + i, recvtb=r1 * instances + i)
-
-        for i in range(instances):
-            for r1 in range(size):
-                for r2 in range(size):
-                    for chunk in range(0, 7):
-                        if r1 != r2:
-                            index = chunk * instances + i
-                            c = Rank(r1).scratch(f'scratch{r2}', index)
-                            c.reduce(r1, Buffer.input, index, ch=i, sendtb=r2 * instances + i)
-                
-        XML()
-        Check()
-
-
 
 parser = argparse.ArgumentParser()
-parser.add_argument('version', type=int, help='which version to run, 0 = ring 1 = allpairs')
 parser.add_argument('channels', type=int, help='Number of channels to use for 1 instance of the ring [1-8]')
 parser.add_argument('instances', type=int, help='number of instances')
-
 args = parser.parse_args()
-if args.version == 0:
-    allreduce_ring(args.instances, args.channels)
-else:
-    allreduce_pairs(args.instances)
+
+allreduce_ring(args.instances, args.channels)

@@ -17,7 +17,7 @@ def allreduce(ways, instances):
     with SCCLProgram("allreduce_a100", topology, collective, instances*logical_chunk, 'LL128'):
 
         # 1 reduction between pairs of gpus of count
-        def reduce_ring(pairs, count, next_index, lc, i, sendtb, recvtb):
+        def reduce_tree(pairs, count, next_index, lc, i, sendtb, recvtb):
             current_index = next_index.copy()
             for r in range(size):
                 next = r ^ pairs
@@ -40,7 +40,7 @@ def allreduce(ways, instances):
                 # c.reduce(next, Buffer.input, index, ch=lc + i * ways, sendtb=sendtb+i*tb_per_channel, recvtb=recvtb+i*tb_per_channel)
 
         # Propagates reduced chunks in reverse order 
-        def propagate_ring(pairs, count, next_index, lc, i, sendtb, recvtb):
+        def propagate_tree(pairs, count, next_index, lc, i, sendtb, recvtb):
             current_index = next_index.copy()            
             for r in range(size):
                 next = r ^ pairs
@@ -52,42 +52,42 @@ def allreduce(ways, instances):
 
         for i in range(instances):
             next_index = [0] * 8
-            reduce_ring(1, 4, next_index, 0, i, 0, 1)
-            reduce_ring(2, 2, next_index, 0, i, 1, 2)
-            reduce_ring(4, 1, next_index, 0, i, 2, 3)
+            reduce_tree(1, 4, next_index, 0, i, 0, 1)
+            reduce_tree(2, 2, next_index, 0, i, 1, 2)
+            reduce_tree(4, 1, next_index, 0, i, 2, 3)
 
-            propagate_ring(4, 1, next_index, 0, i, 2, 3)
-            propagate_ring(2, 2, next_index, 0, i, 1, 2)
-            propagate_ring(1, 4, next_index, 0, i, 0, 1)
+            propagate_tree(4, 1, next_index, 0, i, 2, 3)
+            propagate_tree(2, 2, next_index, 0, i, 1, 2)
+            propagate_tree(1, 4, next_index, 0, i, 0, 1)
 
             if ways > 1:
                 next_index = [0] * 8
                 lc = 1
-                reduce_ring(2, 4, next_index, lc, i, 4, 5)
-                reduce_ring(4, 2, next_index, lc, i, 5, 6)
-                reduce_ring(1, 1, next_index, lc, i, 6, 7)
+                reduce_tree(2, 4, next_index, lc, i, 4, 5)
+                reduce_tree(4, 2, next_index, lc, i, 5, 6)
+                reduce_tree(1, 1, next_index, lc, i, 6, 7)
 
                 
-                propagate_ring(1, 1, next_index, lc, i, 6, 7)
-                propagate_ring(4, 2, next_index, lc, i, 5, 6)
-                propagate_ring(2, 4, next_index, lc, i, 4, 5)
+                propagate_tree(1, 1, next_index, lc, i, 6, 7)
+                propagate_tree(4, 2, next_index, lc, i, 5, 6)
+                propagate_tree(2, 4, next_index, lc, i, 4, 5)
 
             if ways > 2:
                 next_index = [0] * 8
                 lc = 2
-                reduce_ring(4, 4, next_index, lc, i, 8, 9)
-                reduce_ring(1, 2, next_index, lc, i, 9, 10)
-                reduce_ring(2, 1, next_index, lc, i, 10, 11)
+                reduce_tree(4, 4, next_index, lc, i, 8, 9)
+                reduce_tree(1, 2, next_index, lc, i, 9, 10)
+                reduce_tree(2, 1, next_index, lc, i, 10, 11)
 
-                propagate_ring(2, 1, next_index, lc, i, 10, 11)
-                propagate_ring(1, 2, next_index, lc, i, 9, 10)
-                propagate_ring(4, 4, next_index, lc, i, 8, 9)
+                propagate_tree(2, 1, next_index, lc, i, 10, 11)
+                propagate_tree(1, 2, next_index, lc, i, 9, 10)
+                propagate_tree(4, 4, next_index, lc, i, 8, 9)
 
         XML()
         Check()
 
 parser = argparse.ArgumentParser()
-parser.add_argument('ways', type=int, help='number of parallel ways to perform reduction min:1 max:3')
+parser.add_argument('ways', type=int, help='number of parallel trees to perform reduction min:1 max:3')
 parser.add_argument('instances', type=int, help='number of instances')
 args = parser.parse_args()
 assert args.ways >=0 and args.ways <= 3
