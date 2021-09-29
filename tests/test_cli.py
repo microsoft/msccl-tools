@@ -72,6 +72,7 @@ def test_ncclize():
         assert 0 == os.system('sccl ncclize algo.json -f --no-merge-contiguous')
         assert 0 == os.system('sccl solve instance Star Alltoall --nodes 4 --steps 2 --rounds 4 -o algo_scratch.json')
         assert 0 == os.system('sccl ncclize algo_scratch.json -f --remap-scratch')
+        assert 0 == os.system('sccl ncclize algo_scratch.json -f --greedy-scratch-sorting')
 
 def test_custom_topology_and_collective():
     with in_tempdir():
