@@ -15,7 +15,7 @@ synthesis_plans = defaultdict(list)
 
 def _register_ef_provider(desc, fun, collective, machine_type, machines, sizes, protocol, priority):
     if sizes == None:
-        sizes == (0, math.inf)
+        sizes = (0, math.inf)
     else:
         lower, upper = sizes
         if isinstance(lower, str):
