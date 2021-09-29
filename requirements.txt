@@ -2,6 +2,7 @@ dataclasses; python_version < "3.7"
 z3-solver
 argcomplete
 lxml
+humanfriendly
 pytest
 pytest-cov
 pytest-xdist

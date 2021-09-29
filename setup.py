@@ -5,18 +5,22 @@ from setuptools import setup, find_packages
 
 setup(
     name='sccl',
-    version='2.0.0',
+    version='2.2.0',
     packages=find_packages(),
     entry_points={
         'console_scripts': [
             'sccl = sccl.__main__:main',
         ],
     },
+    scripts = [
+        'sccl/autosynth/sccl_ndv2_launcher.sh'
+    ],
     install_requires=[
         'dataclasses; python_version < "3.7"',
         'z3-solver',
         'argcomplete',
         'lxml',
+        'humanfriendly'
     ],
     python_requires='>=3.6',
 )
