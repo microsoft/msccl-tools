@@ -336,6 +336,10 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         _remap_scratch_into_input_output(liveness, gpus, logging)
     elif greedy_scratch_sorting:
         _greedy_scratch_sort(algorithm, gpus)
+    else:
+        # Sort scratch mappings in an attempt to make more of them contiguous (this is of course a heuristic).
+        for gpu in gpus.values():
+            gpu.scratch = { addr: idx for idx, addr in enumerate(sorted(gpu.scratch)) }
 
     # Add any copies from input to output that weren't already added
     for rank, gpu in gpus.items():
