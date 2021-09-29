@@ -34,11 +34,6 @@ class _Threadblock:
     ops: list = field(default_factory=list)
 
 @dataclass
-class _Copy:
-    input_offset: int
-    output_offset: int
-
-@dataclass
 class _Op:
     gpu: int
     peer: int
@@ -367,6 +362,14 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         combine_copies(gpu.precopies)
         combine_copies(gpu.postcopies)
 
+    # Expand copies by instances if necessary
+    if instances > 1:
+        for rank, gpu in gpus.items():
+            for copy in itertools.chain(gpu.precopies, gpu.postcopies):
+                copy.src_offset *= instances
+                copy.dst_offset *= instances
+                copy.cnt *= instances
+
     def get_buffer_and_offset(gpu, addr):
         # Map an address to one of the named buffers
         if addr in gpu.inputs:
@@ -420,6 +423,14 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     writers = defaultdict(list)
     # Track all the reads since the last write to each buffer index
     readers = defaultdict(list)
+
+    # Initialize readers and writers for precopies
+    for rank, gpu in gpus.items():
+        for op in gpu.precopies:
+            for i in range(op.cnt):
+                readers[(rank,op.src_buffer,op.src_offset+i)].append(op)
+                writers[(rank,op.dst_buffer,op.dst_offset+i)].append(op)
+
     for step_idx, step in enumerate(algorithm.steps):
         new_writers = defaultdict(list)
         new_readers = defaultdict(list)
@@ -511,16 +522,18 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         for key, deps in new_readers.items():
             readers[key].extend(deps)
 
+    # Add dependencies for postcopies
+    for rank, gpu in gpus.items():
+        for op in gpu.postcopies:
+            for i in range(op.cnt):
+                op.depends.extend(writers[(rank,op.src_buffer,op.src_offset+i)])
+                op.depends.extend(readers[(rank,op.dst_buffer,op.dst_offset+i)])
+                op.depends.extend(writers[(rank,op.dst_buffer,op.dst_offset+i)])
+
     # Fixup everything to match the instanced sends when multiple instances are generated
     if instances > 1:
         for rank, gpu in gpus.items():
-            # Expand copies
-            for copy in itertools.chain(gpu.precopies, gpu.postcopies):
-                copy.src_offset *= instances
-                copy.dst_offset *= instances
-                copy.cnt *= instances
-
-            # Multiply the other metadata with instances
+            # Multiply metadata with instances
             def expand_mappings(mappings):
                 return { addr * instances + i: idx * instances + i for addr, idx in mappings.items() for i in range(instances) }
             gpu.inputs = expand_mappings(gpu.inputs)
@@ -574,16 +587,6 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         cpy_tb = _Threadblock(0)
         cpy_tb.rbid = len(gpu.threadblocks)
         cpy_tb.steps = gpu.precopies + gpu.postcopies
-        if len(gpu.precopies) > 0:
-            end_pre =  gpu.precopies[-1]
-            for tb in gpu.threadblocks:
-                if len(tb.steps) > 0:
-                    tb.steps[0].depends.append(end_pre)
-        if len(gpu.postcopies) > 0:
-            start_post = gpu.postcopies[0]
-            for tb in gpu.threadblocks:
-                if len(tb.steps) > 0:
-                    start_post.depends.append(tb.steps[-1])
         gpu.threadblocks.append(cpy_tb)
 
     # Filter out dependencies within the same threadblock and mark all ops that have a dependence on them
