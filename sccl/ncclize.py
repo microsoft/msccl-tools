@@ -288,7 +288,7 @@ class ChannelPolicy(Enum):
     def __str__(self):
         return self.value
 
-def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchTopology, pretty_print = True, use_scratch=False, merge_contiguous=True, greedy_scratch_sorting=False, instances=1, logging=False):
+def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchTopology, pretty_print = True, use_scratch=True, merge_contiguous=True, greedy_scratch_sorting=False, instances=1, logging=False):
     '''
     Generate the XML format used by the NCCL SCCL backend.
 
