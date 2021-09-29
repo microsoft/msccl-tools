@@ -21,7 +21,7 @@ def _sccl_object_hook(o):
         return Step(o['rounds'], sends)
     if o['sccl_type'] == 'collective':
         triggers = { (int(r), int(c)): v for r, rmap in o['triggers'].items() for c, v in rmap.items() }
-        return Collective(o['name'], o['nodes'], o['chunks'], triggers)
+        return Collective(o['name'], o['nodes'], o['chunks'], triggers, o['runtime_name'])
     if o['sccl_type'] == 'chunk':
         pre = set(o['pre'])
         post = set(o['post'])
@@ -71,6 +71,7 @@ class SCCLEncoder(json.JSONEncoder):
                 'nodes': o.num_nodes,
                 'chunks': o._chunks,
                 'triggers': triggers,
+                'runtime_name': o.runtime_name,
             }
         if isinstance(o, Chunk):
             return {

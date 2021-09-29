@@ -11,12 +11,13 @@ class Chunk:
     address: int
 
 class Collective:
-    def __init__(self, name, num_nodes, chunks, triggers = {}):
+    def __init__(self, name, num_nodes, chunks, triggers = {}, runtime_name= 'custom'):
         self.name = name
         self.num_nodes = num_nodes
         self.num_chunks = len(chunks)
         self._chunks = chunks
         self._triggers = triggers
+        self.runtime_name = runtime_name
 
         self.is_combining = False
         addresses_seen = set()
@@ -67,7 +68,7 @@ class Collective:
         name = f'{self.name},chunks={div}'
         return Collective(name, self.num_nodes, new_chunks)
 
-def build_collective(name, num_nodes, num_chunks, precondition, postcondition, address = lambda c: c, trigger = lambda r, c: None):
+def build_collective(name, num_nodes, num_chunks, precondition, postcondition, address = lambda c: c, trigger = lambda r, c: None, runtime_name = 'custom'):
     chunks = []
     for chunk in range(num_chunks):
         chunk_precondition = set(rank for rank in range(num_nodes) if precondition(rank, chunk))
@@ -75,7 +76,7 @@ def build_collective(name, num_nodes, num_chunks, precondition, postcondition, a
         chunk_address = address(chunk)
         chunks.append(Chunk(chunk_precondition, chunk_postcondition, chunk_address))
     triggers = {(rank, chunk): trigger(rank, chunk) for rank in range(num_nodes) for chunk in range(num_chunks) if trigger(rank, chunk) != None}
-    return Collective(name, num_nodes, chunks, triggers)
+    return Collective(name, num_nodes, chunks, triggers, runtime_name)
 
 # Common pre- and postconditions
 def _scattered(num_nodes, chunks = 1):
@@ -108,10 +109,10 @@ def gather(num_nodes, root):
     return build_collective(f'Gather(n={num_nodes},root={root})', num_nodes, num_nodes, _scattered(num_nodes), _root(root))
 
 def allgather(num_nodes):
-    return build_collective(f'Allgather(n={num_nodes})', num_nodes, num_nodes, _scattered(num_nodes), _all)
+    return build_collective(f'Allgather(n={num_nodes})', num_nodes, num_nodes, _scattered(num_nodes), _all, runtime_name='allgather')
 
 def alltoall(num_nodes):
-    return build_collective(f'Alltoall(n={num_nodes})', num_nodes, num_nodes * num_nodes, _scattered(num_nodes), _transpose(num_nodes))
+    return build_collective(f'Alltoall(n={num_nodes})', num_nodes, num_nodes * num_nodes, _scattered(num_nodes), _transpose(num_nodes), runtime_name='alltoall')
 
 # Combining collectives
 
@@ -125,10 +126,10 @@ def reduce(num_nodes, root):
     return build_collective(f'Reduce(n={num_nodes},root={root})', num_nodes, num_nodes, _scattered(num_nodes), _root(root), _single_scattered(num_nodes))
 
 def allreduce(num_nodes):
-    return build_collective(f'Allreduce(n={num_nodes})', num_nodes, num_nodes, _scattered(num_nodes), _all, _single_scattered(num_nodes))
+    return build_collective(f'Allreduce(n={num_nodes})', num_nodes, num_nodes, _scattered(num_nodes), _all, _single_scattered(num_nodes), runtime_name='allreduce')
 
 def reduce_scatter(num_nodes):
-    return build_collective(f'ReduceScatter(n={num_nodes})', num_nodes, num_nodes * num_nodes, _scattered(num_nodes), _transpose(num_nodes), _single_scattered(num_nodes))
+    return build_collective(f'ReduceScatter(n={num_nodes})', num_nodes, num_nodes * num_nodes, _scattered(num_nodes), _transpose(num_nodes), _single_scattered(num_nodes), runtime_name='reduce_scatter')
 
 def scan(num_nodes):
     def postcondition(rank, chunk):
