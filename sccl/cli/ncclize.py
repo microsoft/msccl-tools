@@ -13,8 +13,8 @@ def make_handle_ncclize(cmd_parsers):
     remap_scratch_grp.add_argument('--no-remap-scratch', action='store_false', dest='remap_scratch', help='don\'t remap scratch buffer indices into free input/output indices')
     cmd.add_argument('--no-merge-contiguous', action='store_true', help='don\'t merge sends/receives from/to contiguous memory')
     cmd.add_argument('--no-pretty-print', action='store_true', help='don\'t pretty print the generated XML')
-    cmd.add_argument('--greedy-scratch-sorting', action='store_false', help='sort scratch buffer indices greedily to increase contiguous operations')
-    cmd.add_argument('--no-scratch', action='store_false', help='use extra space at the end of output buffer instead of the scratch buffer')
+    cmd.add_argument('--greedy-scratch-sorting', action='store_true', help='sort scratch buffer indices greedily to increase contiguous operations')
+    cmd.add_argument('--no-scratch', action='store_true', help='use extra space at the end of output buffer instead of the scratch buffer')
     cmd.add_argument('--channel-policy', type=ChannelPolicy, choices=list(ChannelPolicy), default=ChannelPolicy.MatchTopology, help='channel allocation policy')
     cmd.add_argument('--instances', type=int, default=1, help='number of interleaved instances of the algorithm to make')
 
