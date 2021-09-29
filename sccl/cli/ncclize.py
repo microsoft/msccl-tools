@@ -14,6 +14,7 @@ def make_handle_ncclize(cmd_parsers):
     cmd.add_argument('--no-merge-contiguous', action='store_true', help='don\'t merge sends/receives from/to contiguous memory')
     cmd.add_argument('--no-pretty-print', action='store_true', help='don\'t pretty print the generated XML')
     cmd.add_argument('--old-format', action='store_true', help='use the old format')
+    cmd.add_argument('--greedy-scratch-sorting', action='store_false', help='sort scratch buffer indices greedily to increase contiguous operations')
     cmd.add_argument('--use-scratch', action='store_true', help='use the scratch buffer instead of extra space at the end of output buffer')
     cmd.add_argument('--channel-policy', type=ChannelPolicy, choices=list(ChannelPolicy), default=ChannelPolicy.MatchTopology, help='channel allocation policy')
     cmd.add_argument('--instances', type=int, default=1, help='number of interleaved instances of the algorithm to make')
@@ -33,6 +34,7 @@ def make_handle_ncclize(cmd_parsers):
                 old_format=args.old_format,
                 use_scratch=args.use_scratch,
                 merge_contiguous=not args.no_merge_contiguous,
+                greedy_scratch_sorting=args.greedy_scratch_sorting,
                 instances=args.instances,
                 logging=True)
 
