@@ -117,8 +117,8 @@ class Process:
         self.buffers = buffers
         self.tbs = {}
         self.tb_mapping = {}
-        self.send_channel_mapping = {} # sender rank -> channels used
-        self.recv_channel_mapping = {} # receiver rank -> channels used
+        self.send_channel_mapping = {} # sender rank -> channels -> tbid
+        self.recv_channel_mapping = {} # receiver rank -> channels -> tbid
         self.tb_count = 0
         self.slot_ops = {} # (buffer, idx) -> list of ops on this slot
 
@@ -126,15 +126,37 @@ class Process:
         key = (inst, other_rank, ch)
         if key in self.tb_mapping:
             tbid = self.tb_mapping[key]
-        else:
+        else: # TODO: Currently can mix default tb assignment and manual tb assignment which will break
             self.tb_mapping[key] = self.tb_count
             tbid = self.tb_count
             self.tb_count += 1
         return tbid
 
     def _tb_addop(self, tbid, sendto, receivefrom, ch, op):
+        def check_tb_channels():
+            # Check this channel isn't being used by another tb to send to the same rank
+            if sendto != -1:
+                if sendto not in self.send_channel_mapping:
+                    self.send_channel_mapping[sendto] = {ch:tbid}
+                else:
+                    senders_channels = self.send_channel_mapping[sendto]
+                    assert ch not in senders_channels or senders_channels[ch] == tbid, \
+                        f'Cannot assign threadblock {tbid} to channel {ch}. Already being used by threadblock {senders_channels[ch]} to send to rank {sendto}'
+                    self.send_channel_mapping[sendto][ch] = tbid
+                
+            # Check this channel isn't being used by another tb to receive from the same rank
+            if receivefrom != -1:
+                if receivefrom not in self.recv_channel_mapping:
+                    self.recv_channel_mapping[receivefrom] = {ch:tbid}
+                else:
+                    receivers_channels = self.recv_channel_mapping[receivefrom]
+                    assert ch not in receivers_channels or receivers_channels[ch] == tbid, \
+                        f'Cannot assign threadblock {tbid} on channel {ch}. Already being used by threadblock {receivers_channels[ch]} to receive from {receivefrom}'
+                    self.recv_channel_mapping[receivefrom][ch] = tbid
+            
         # Create a new threadblock if tbid doesn't exist
         if tbid not in self.tbs:
+            check_tb_channels()
             self.tbs[tbid] = Threadblock(ch, sendto, receivefrom, ops=[op])
 
         # Check it is valid to use this threadblock if already exists
@@ -144,9 +166,11 @@ class Process:
                 f'Rank {self.rank}: Threadblock {tbid} is already set to send to {tb.send}, trying to send to {sendto}'
             assert (receivefrom == -1 or tb.recv == -1 or tb.recv == receivefrom), \
                    f'Rank {self.rank}: Threadblock {tbid} is already set to receive from {tb.recv}, trying to receive from {receivefrom}'
-            if tb.send != -1:
+            check_tb_channels()
+            # Update existing threadblocks if adding a sender/receiver when one previously didn't exist
+            if tb.send == -1 and sendto != -1:
                 tb.send = sendto
-            if tb.recv != -1:
+            if tb.recv == -1 and receivefrom != -1:
                 tb.recv = receivefrom
             tb.ops.append(op)
 
@@ -215,7 +239,6 @@ class Process:
 
     def _add_receive_reduce_copy(self, tbid, ch, op):
         receivefrom = op.src.rank
-        # TODO: rrc and recv share a tb
         if tbid == -1:
             tbid = self._get_tbid(Instruction.recv, receivefrom, ch) 
         recvd_chunkref = op.dst
@@ -238,7 +261,7 @@ class Process:
     def _add_reduce(self, tbid, ch, op):
         receivefrom = op.src.rank
         if tbid == -1:
-            tbid = self._get_tbid(Instruction.copy, receivefrom, ch) # TODO: copy and reduce share tb
+            tbid = self._get_tbid(Instruction.copy, receivefrom, ch)
         recvd_chunkref = op.dst
 
         # Update buffer with reduced chunk and dependences
@@ -316,7 +339,7 @@ class Process:
             rrcs_rrs(ops, self.tbs)
             rcs(ops, self.tbs)
         # Delete ops that are no longer needed
-        # Instruction reordering within tbs=
+        # Instruction reordering within tbs
         for _, tb in self.tbs.items():
             delete_pass(tb)
             prioritize_sends(tb)
@@ -399,7 +422,6 @@ class ReduceChunk:
 
     # Two reduce chunks are equal if they contain the same list of
     # chunks being reduced
-    # Assume commutativity so order does not matter (TODO: check)
     def __eq__(self, other):
         self.sort()
         other.sort()
@@ -460,7 +482,7 @@ class Ref(ChunkRef):
         # If index is not specified assume it is going to the same place in the next gpu
         if index == -1 and buffer == None:
             index = self.index
-            buffer = self.buffer # TODO: eventually change this dst buffer depending if it is inplace/outofplace
+            buffer = self.buffer
         elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
             index = self.prog.ranks[dst].buffers[buffer].get_next_index(self.size)
 
