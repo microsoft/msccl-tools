@@ -113,6 +113,8 @@ def _select_plans(name, candidates, num_machines, sizes):
             csizes = (isizes[1]+1,csizes[1])
             if csizes[0] > csizes[1]:
                 break
+            if csizes[0] == math.inf:
+                break
     results = []
     for isizes, candidates in candidate_intervals:
         # Skip interval if it does not overlap with user provided sizes
