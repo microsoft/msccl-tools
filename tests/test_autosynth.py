@@ -10,12 +10,12 @@ def test_sccl_init(capsys):
     sccl.init(4, 'not_a_machine_type', ('alltoall', 0))
     out, err = capsys.readouterr()
     assert 'No plan found' in out
-    sccl.init(2, 'dgx1', ('alltoall', '1MB'))
+    sccl.init(2, 'ndv2', ('alltoall', '1MB'))
     out, err = capsys.readouterr()
-    assert 'synthesize_dgx1_relay_alltoall' in out
-    sccl.init(9, 'a100', ('alltoall', '1MB'))
+    assert 'synthesize_ndv2_relay_alltoall' in out
+    sccl.init(9, 'ndv4', ('alltoall', '1MB'))
     out, err = capsys.readouterr()
-    assert 'synthesize_a100_hierarchical_alltoall' in out
+    assert 'synthesize_ndv4_hierarchical_alltoall' in out
 
 
 def test_register_plan():

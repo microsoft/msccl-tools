@@ -9,9 +9,9 @@ from sccl.autosynth.registry import register_synthesis_plan
 from sccl.ncclize import ncclize
 
 
-def register_dgx1_plans():
-    @register_synthesis_plan('alltoall', 'dgx1', machines=lambda x: x >= 2)
-    def synthesize_dgx1_relay_alltoall(machines):
+def register_ndv2_plans():
+    @register_synthesis_plan('alltoall', 'ndv2', machines=lambda x: x >= 2)
+    def synthesize_ndv2_relay_alltoall(machines):
         gather_coll = gather(8, 0)
         scatter_coll = scatter(8, 1)
         gather_algo = solve_least_steps(dgx1(), gather_coll)
