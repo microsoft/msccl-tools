@@ -13,10 +13,10 @@ import math
 import tempfile
 import humanfriendly
 
-from sccl.autosynth.dgx1_plans import register_dgx1_plans
-from sccl.autosynth.a100_plans import register_a100_plans
-register_dgx1_plans()
-register_a100_plans()
+from sccl.autosynth.ndv2_plans import register_ndv2_plans
+from sccl.autosynth.ndv4_plans import register_ndv4_plans
+register_ndv2_plans()
+register_ndv4_plans()
 
 
 def init(num_machines, machine_type, *collectives):

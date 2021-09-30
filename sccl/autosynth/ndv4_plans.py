@@ -3,9 +3,9 @@
 
 from sccl.autosynth.registry import register_synthesis_plan
 
-def register_a100_plans():
-    @register_synthesis_plan('alltoall', 'a100', machines=lambda x: x == 9)
-    def synthesize_a100_hierarchical_alltoall(machines):
+def register_ndv4_plans():
+    @register_synthesis_plan('alltoall', 'ndv4', machines=lambda x: x == 9)
+    def synthesize_ndv4_hierarchical_alltoall(machines):
         xml = ""
         nnodes = 9
         assert(machines == nnodes)
