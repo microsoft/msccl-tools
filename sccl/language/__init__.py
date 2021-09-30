@@ -295,7 +295,7 @@ class Process:
                 if inst == Instruction.send:
                     # If this is a send we depend on the last non-send op
                     op_idx = len(self.slot_ops[slot])-1
-                    while last_op.inst is Instruction.send and op_idx > 0:
+                    while last_op.inst is Instruction.send and op_idx >= 0:
                         op_idx -= 1
                         last_op = self.slot_ops[slot][op_idx]
                     if op_idx == -1:
@@ -342,7 +342,7 @@ class Process:
         # Instruction reordering within tbs
         for _, tb in self.tbs.items():
             delete_pass(tb)
-            prioritize_sends(tb)
+            # prioritize_sends(tb)
         # Redo dependences
         for _, ops in self.slot_ops.items():
             clear_dependency(ops)

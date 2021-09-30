@@ -10,7 +10,7 @@ def same_count(op1, op2):
     return op1.cnt() == op2.cnt()
 
 def is_receive(op):
-    return op.inst == Instruction.recv or op.inst == Instruction.recv_copy_send or op.inst == Instruction.recv_reduce_copy or op.inst == Instruction.recv_reduce_send
+    return op.inst == Instruction.recv or op.inst == Instruction.recv_reduce_copy
 
 def chunks_overlap(chunk1, chunk2):
     if chunk1.buffer == chunk2.buffer:
@@ -20,7 +20,7 @@ def chunks_overlap(chunk1, chunk2):
         else:
             lower_chunk = chunk2
             upper_chunk = chunk1
-        if lower_chunk.index <= upper_chunk.index and (lower_chunk.index + lower_chunk.size -1) <= upper_chunk.index:
+        if lower_chunk.index <= upper_chunk.index and (lower_chunk.index + lower_chunk.size -1) >= upper_chunk.index:
             return True
     return False
 
@@ -68,14 +68,14 @@ def rrcs_rrs(ops, tbs):
     delete_operations(ops, tbs, delete_idx)
 
 # Within a tb reorder sends before receives if they are independent of each other
-def prioritize_sends(tb):
-    steps = len(tb.ops)
-    for i in range(1, steps):
-        prev = tb.ops[i-1]
-        current = tb.ops[i]
-        if current.inst == Instruction.send and is_receive(prev) and chunks_overlap(current.src, prev.dst):
-            tb.ops[i-1] = current
-            tb.ops[i] = prev
+# def prioritize_sends(tb):
+#     steps = len(tb.ops)
+#     for i in range(1, steps):
+#         prev = tb.ops[i-1]
+#         current = tb.ops[i]
+#         if current.inst == Instruction.send and is_receive(prev) and not chunks_overlap(current.src, prev.dst):
+#             tb.ops[i-1] = current
+#             tb.ops[i] = prev
 
 
 # Performs the deletion of operations that are marked delete
@@ -91,13 +91,26 @@ def clear_dependency(ops):
 
 def update_slot_dependency(ops):           
     for i in range(1, len(ops)):
-        last_op = ops[i-1]
+        dep_op = ops[i-1]
         op = ops[i]
+        
+        # Send's depend on the most recent recv-type instruction
+        # Avoid serializing sends that can happen in parallel.
+        if op.inst == Instruction.send:
+            # If this is a send we depend on the last non-send op
+            dep_op_idx = i-1
+            while dep_op.inst is Instruction.send and dep_op_idx >= 0:
+                dep_op_idx -= 1
+                prev_op = ops[dep_op_idx]
+            if dep_op_idx == -1:
+                continue # No true dependency
+
         # If we have multiple dependent ops from the same tb keep the one with the highest steps
-        tb = last_op.tb
         depends = op.depends
-        if tb not in depends or last_op.step > depends[tb].step:
-                depends[tb] = last_op
+        tb = dep_op.tb
+        if tb not in depends or dep_op.step > depends[tb].step:
+            depends[tb] = dep_op
+
 
 
 
