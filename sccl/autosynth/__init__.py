@@ -36,7 +36,7 @@ def init(num_machines, machine_type, *collectives):
         else:
             if isinstance(sizes, str):
                 sizes = humanfriendly.parse_size(sizes)
-            sizes = (sizes, sizes)
+            sizes = (sizes, sizes+1)
         candidates = synthesis_plans[(name, machine_type)]
         selected_plans[name] = _select_plans(name, candidates, num_machines, sizes)
 
@@ -58,7 +58,7 @@ def init(num_machines, machine_type, *collectives):
                     if minsize != 0:
                         load_elem.set('minbytes', str(minsize))
                     if maxsize != math.inf:
-                        load_elem.set('maxbytes', str(maxsize+1))
+                        load_elem.set('maxbytes', str(maxsize))
                     load_elem.set('proto', proto)
         ET.indent(algos_elem, space='  ')
         
@@ -87,38 +87,38 @@ def _select_plans(name, candidates, num_machines, sizes):
     for candidate in valid_candidates:
         csizes = candidate[3]
         # Skip candidate if it does not overlap with user provided sizes
-        if csizes[0] > sizes[1] or sizes[0] > csizes[1]:
+        if csizes[0] >= sizes[1] or sizes[0] >= csizes[1]:
             continue
         i = 0
         while i < len(candidate_intervals):
             ival = candidate_intervals[i]
             isizes = ival[0]
-            if isizes[1] < csizes[0]:
+            if isizes[1] <= csizes[0]:
                 i += 1
                 continue
-            if isizes[0] > csizes[1]:
+            if isizes[0] >= csizes[1]:
                 break
             if isizes[0] < csizes[0]:
                 del candidate_intervals[i]
                 candidate_intervals.insert(i, ((csizes[0], isizes[1]), ival[1]))
-                candidate_intervals.insert(i, ((isizes[0], csizes[0]-1), ival[1].copy()))
+                candidate_intervals.insert(i, ((isizes[0], csizes[0]), ival[1].copy()))
                 i += 1
                 continue
             if isizes[1] > csizes [1]:
                 del candidate_intervals[i]
-                candidate_intervals.insert(i, ((csizes[1]+1, isizes[1]), ival[1]))
+                candidate_intervals.insert(i, ((csizes[1], isizes[1]), ival[1]))
                 candidate_intervals.insert(i, ((isizes[0], csizes[1]), ival[1] + [candidate]))
                 break
             ival[1].append(candidate)
-            csizes = (isizes[1]+1,csizes[1])
-            if csizes[0] > csizes[1]:
+            csizes = (isizes[1],csizes[1])
+            if csizes[0] >= csizes[1]:
                 break
             if csizes[0] == math.inf:
                 break
     results = []
     for isizes, candidates in candidate_intervals:
         # Skip interval if it does not overlap with user provided sizes
-        if isizes[0] > sizes[1] or sizes[0] > isizes[1]:
+        if isizes[0] >= sizes[1] or sizes[0] >= isizes[1]:
             continue
         sorted_candidates = sorted(candidates, key=_candidate_sort_key)
         description = f'{name} with sizes from {_format_size(isizes[0])} to {_format_size(isizes[1])}'
