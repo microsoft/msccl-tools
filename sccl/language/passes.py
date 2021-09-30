@@ -45,38 +45,38 @@ def rcs(ops, tbs):
             if ops[i].inst == Instruction.recv and ops[i+1].inst == Instruction.send and same_tb(ops[i], ops[i+1]) and same_count(ops[i], ops[i+1]):
                 ops[i].inst = Instruction.recv_copy_send
                 ops[i].dst = ops[i+1].dst
+                ops[i].next = ops[i+1].next
                 delete_idx.append(i+1)
     
     delete_operations(ops, tbs, delete_idx)
 
 def rrcs_rrs(ops, tbs):
     delete_idx = []
+
+    # RRC/S -> RRS
     if len(ops) >= 3:
         for i in range(0, len(ops)-2):
             if ops[i].inst == Instruction.recv_reduce_copy and ops[i+1].inst == Instruction.send and ops[i+2].inst == Instruction.recv and same_tb(ops[i], ops[i+1]) and same_count(ops[i], ops[i+1]):
                 ops[i].inst = Instruction.recv_reduce_send
                 ops[i].dst = ops[i+1].dst
+                ops[i].next = ops[i+1].next
                 delete_idx.append(i+1)
 
+    # RRC/S -> RRCS
     if len(ops) >= 2:
         for i in range(0, len(ops)-1):
             if ops[i].inst == Instruction.recv_reduce_copy and ops[i+1].inst == Instruction.send and same_tb(ops[i], ops[i+1]) and same_count(ops[i], ops[i+1]):
+                # print("REPLACE")
+                # print("  ", ops[i], ops[i].prev, ops[i].next)
+                # print("  ", ops[i+1], ops[i+1].prev, ops[i+1].next)
                 ops[i].inst = Instruction.recv_reduce_copy_send
                 ops[i].dst = ops[i+1].dst
+                ops[i].next = ops[i+1].next
+                # print("  ", ops[i], ops[i].prev, ops[i].next)
                 delete_idx.append(i+1)
+
     
     delete_operations(ops, tbs, delete_idx)
-
-# Within a tb reorder sends before receives if they are independent of each other
-# def prioritize_sends(tb):
-#     steps = len(tb.ops)
-#     for i in range(1, steps):
-#         prev = tb.ops[i-1]
-#         current = tb.ops[i]
-#         if current.inst == Instruction.send and is_receive(prev) and not chunks_overlap(current.src, prev.dst):
-#             tb.ops[i-1] = current
-#             tb.ops[i] = prev
-
 
 # Performs the deletion of operations that are marked delete
 def delete_pass(tb):
@@ -110,6 +110,8 @@ def update_slot_dependency(ops):
         tb = dep_op.tb
         if tb not in depends or dep_op.step > depends[tb].step:
             depends[tb] = dep_op
+
+
 
 
 

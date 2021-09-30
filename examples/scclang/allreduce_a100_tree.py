@@ -28,9 +28,8 @@ def allreduce(ways, instances):
                 block = 2 ** pairs
                 reverse = (r // block) % block
                 for x in range(count):
-                    # Uncomment to get RRS before RRC - but buggy :(
-                    # if reverse == 0:
-                    #     x = count - 1 - x
+                    if reverse == 0:
+                        x = count - 1 - x
                     index = current_index[r] + offset + i*logical_chunk + lc*8 + x
                     c = Rank(r).input(index)
                     c.reduce(next, Buffer.input, index, ch=lc + i * ways, sendtb=sendtb+i*tb_per_channel, recvtb=recvtb+i*tb_per_channel)

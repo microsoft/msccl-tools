@@ -5,6 +5,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from sccl.language.ir import *
+from sccl.language.misc import *
 from sccl.language.passes import *
 import sccl.collectives as collectives
 
@@ -283,30 +284,33 @@ class Process:
         op.step = len(self.tbs[tbid].ops)-1
         op.depends = self._get_dependences(op.inst, op.src.buffer, op.src.index, op.src.size)              
 
+    # TODO: Can we remove this and replace with a later pass?
     def _get_dependences(self, inst, buffer, start_index, size):
         # Get and merge dependencies for each index
         depends = {}
-        for i in range(size):
-            index = start_index + i
-            slot = (buffer, index)
-            if slot in self.slot_ops:
-                last_op = self.slot_ops[slot][-1]
+        # for i in range(size):
+        #     index = start_index + i
+        #     slot = (buffer, index)
+        #     if slot in self.slot_ops:
+        #         last_op = self.slot_ops[slot][-1]
 
-                if inst == Instruction.send:
-                    # If this is a send we depend on the last non-send op
-                    op_idx = len(self.slot_ops[slot])-1
-                    while last_op.inst is Instruction.send and op_idx >= 0:
-                        op_idx -= 1
-                        last_op = self.slot_ops[slot][op_idx]
-                    if op_idx == -1:
-                        continue # No true dependency
+        #         if inst == Instruction.send:
+        #             # If this is a send we depend on the last non-send op
+        #             op_idx = len(self.slot_ops[slot])-1
+        #             while last_op.inst is Instruction.send and op_idx >= 0:
+        #                 op_idx -= 1
+        #                 last_op = self.slot_ops[slot][op_idx]
+        #             if op_idx == -1:
+        #                 continue # No true dependency
 
-                # If we have multiple dependent ops from the same tb keep the one with the highest steps
-                tb = last_op.tb
-                if tb not in depends or last_op.step > depends[tb].step:
-                        depends[tb] = last_op
+        #         # If we have multiple dependent ops from the same tb keep the one with the highest steps
+        #         tb = last_op.tb
+        #         if tb not in depends or last_op.step > depends[tb].step:
+        #                 depends[tb] = last_op
 
         return list(depends.values())
+
+    
     
     def _update_slot_ops(self, buffer, index, op, tbid):
         key = (buffer, index)
@@ -334,15 +338,16 @@ class Process:
         self.buffers[name] = BufferSlice(Buffer.scratch)
 
     # Runs optimization pass over slot_ops
+    # TODO: This is now doing more than optimization...
     def optimize(self):
         for k, ops in self.slot_ops.items():
             rrcs_rrs(ops, self.tbs)
             rcs(ops, self.tbs)
         # Delete ops that are no longer needed
         # Instruction reordering within tbs
-        for _, tb in self.tbs.items():
+        for tbid, tb in self.tbs.items():
             delete_pass(tb)
-            # prioritize_sends(tb)
+            self.order_ops_in_tb(tbid)
         # Redo dependences
         for _, ops in self.slot_ops.items():
             clear_dependency(ops)
@@ -352,6 +357,52 @@ class Process:
             for op in ops:
                 if type(op.depends) is dict:
                     op.depends = list(op.depends.values())
+
+    # If chunks are sent from one threadblock x to threadblock y they are received in the same order
+    # This is required to avoid deadlock. 
+    # tb:x send(a), send(b) -> tb:y recv(a), recv(b)
+    # Currently the order is defined by programmer, but we need place RRCS/RRS/RCS instructions
+    # appropriately to avoid deadlock
+    # TODO: Eventually want to order operations automatically based off priority
+    # TODO: Does this terminate?
+    def order_ops_in_tb(self, tbid):
+        tb = self.tbs[tbid]
+        other_tbs = {} # TBs this TB communicates with (r, tb) -> step of last op
+        # Gather all unique TBs this TB communicates with
+        rerun = False
+        for op in tb.ops:
+            for prev in op.prev:
+                other_tbs[(prev.rank, prev.tb)] = (-1, -1)
+            for next in op.next:
+                other_tbs[(next.rank, next.tb)] = (-1, -1)
+        # Check that the ordering of everything is preserved
+        for i in range(len(tb.ops)):
+            op = tb.ops[i]
+            for prev in op.prev:
+                other_tb_step, this_tb_step = other_tbs[(prev.rank, prev.tb)] 
+                if other_tb_step >= prev.step:
+                    rerun = True
+                    # Reorder this operation
+                    tb.ops[i] = tb.ops[this_tb_step]
+                    tb.ops[this_tb_step] = op
+                    tb.ops[i].step = i
+                    tb.ops[this_tb_step].step = this_tb_step
+                other_tbs[(prev.rank, prev.tb)] = (prev.step, op.step)
+
+            for next in op.next:
+                other_tb_step, this_tb_step = other_tbs[(next.rank, next.tb)]
+                if other_tb_step >= next.step:
+                    rerun = True
+                    # Reorder this operation
+                    tb.ops[i] = tb.ops[this_tb_step]
+                    tb.ops[this_tb_step] = op
+                    tb.ops[i].step = i
+                    tb.ops[this_tb_step].step = this_tb_step
+                other_tbs[(next.rank, next.tb)] = (next.step, op.step)
+        if rerun:
+            self.order_ops_in_tb(tbid)
+            
+
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
@@ -433,6 +484,7 @@ class Ref(ChunkRef):
     prog: SCCLProgram
     rank: int
     missing: set = field(default_factory=set)
+    creator: list = field(default_factory=list) # The operation(s) that created this chunk on this rank
 
     def __repr__(self):
         return f'Ref(Buffer:{self.buffer}, Index:{self.index}, Size:{self.size}, Rank:{self.rank})'
@@ -445,7 +497,7 @@ class Ref(ChunkRef):
 
     def _copy(self, buffer=Buffer.output, index=-1, tb=-1, ch=0):
         dst_chunkref = self.prog.ranks[self.rank].get_ref(buffer, index, self.size)
-        op = Op(Instruction.copy, self, dst_chunkref, {})
+        op = Op(Instruction.copy, self.rank, self, dst_chunkref, {})
         self.prog.ranks[self.rank]._add_copy(tb, ch, op)
         return dst_chunkref
 
@@ -493,15 +545,19 @@ class Ref(ChunkRef):
         # Direct send
         assert (self.prog.topo.link(self.rank, dst)), f'No link from {self.rank} to {dst}'
         dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
-        sendOp =  Op(Instruction.send, self, dst_chunkref, {})
+        sendOp =  Op(Instruction.send, self.rank, self, dst_chunkref, {})
         self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
-        receiveOp = Op(Instruction.recv, self, dst_chunkref, {})
+        receiveOp = Op(Instruction.recv, dst, self, dst_chunkref, {})
+        sendOp.prev = sendOp.prev + self.creator
+        dst_chunkref.creator.append(receiveOp)
+        sendOp.next.append(receiveOp)
+        receiveOp.prev.append(sendOp)
         self.prog.ranks[dst]._add_recv(recvtb, ch, receiveOp)
         return dst_chunkref
 
     def _local_reduce(self, buffer, index, tb, ch):
         dst_chunkref = self.prog.ranks[self.rank].get_ref(buffer, index, self.size)
-        op = Op(Instruction.reduce, self, dst_chunkref, {})
+        op = Op(Instruction.reduce, self.rank, self, dst_chunkref, {})
         self.prog.ranks[self.rank]._add_reduce(tb, ch, op)
         return dst_chunkref
     
@@ -511,9 +567,13 @@ class Ref(ChunkRef):
             return self._local_reduce(buffer, index, sendtb, ch)
         # Receive reduce copy   
         dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
-        sendOp = Op(Instruction.send, self, dst_chunkref, {})
+        sendOp = Op(Instruction.send, self.rank, self, dst_chunkref, {})
         self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
-        rrcOp = Op(Instruction.recv_reduce_copy, self, dst_chunkref, {})
+        rrcOp = Op(Instruction.recv_reduce_copy, dst, self, dst_chunkref, {})
+        sendOp.prev = sendOp.prev + self.creator
+        dst_chunkref.creator.append(rrcOp)
+        sendOp.next.append(rrcOp)
+        rrcOp.prev.append(sendOp)
         self.prog.ranks[dst]._add_receive_reduce_copy(recvtb, ch, rrcOp)
         return dst_chunkref
 

@@ -74,11 +74,14 @@ class ChunkRef:
 @dataclass
 class Op:
     inst: Instruction
+    rank: int
     src: ChunkRef
     dst: ChunkRef
     depends: list = field(default_factory=list)
     step: int = -1 # Step in the TB
     tb: int = -1 # TB this op is assigned to
+    prev: list = field(default_factory=list)
+    next: list = field(default_factory=list)
 
     def cnt(self):
         if self.src:
@@ -97,7 +100,7 @@ class Op:
         return id(self)
 
     def _print_no_dep(self):
-        return f'(Op({self.inst}, {self.src}, {self.dst}, step:{self.step}, tb:{self.tb})'
+        return f'(Op({self.inst}, {self.rank}, {self.src}, {self.dst}, step:{self.step}, tb:{self.tb})'
 
     def __repr__(self):
         # if len(self.depends) > 0:
@@ -106,7 +109,7 @@ class Op:
         #         dep += self.depends[i]._print_no_dep()
         # else:
         #     dep = ''
-        return f'Op({self.inst}, {self.src}, {self.dst}, step:{self.step}, tb:{self.tb}, dep={self.depends})'
+        return f'Op({self.inst}, {self.rank}, {self.src}, {self.dst}, step:{self.step}, tb:{self.tb})'
 
 
 # Instructions where src is on local GPU
@@ -173,7 +176,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                     extra_deps = op.depends[1:]
                     op.depends = op.depends[:1]
                     for i, dep in enumerate(extra_deps):
-                        new_ops.append(Op(Instruction.nop, None, None, [dep]))
+                        new_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
                         op_idx[new_ops[-1]] = len(new_ops) - 1
                         #op_tb_id[new_ops[-1]] = op_tb_id[op]
                 new_ops.append(op)
