@@ -66,13 +66,9 @@ def rrcs_rrs(ops, tbs):
     if len(ops) >= 2:
         for i in range(0, len(ops)-1):
             if ops[i].inst == Instruction.recv_reduce_copy and ops[i+1].inst == Instruction.send and same_tb(ops[i], ops[i+1]) and same_count(ops[i], ops[i+1]):
-                # print("REPLACE")
-                # print("  ", ops[i], ops[i].prev, ops[i].next)
-                # print("  ", ops[i+1], ops[i+1].prev, ops[i+1].next)
                 ops[i].inst = Instruction.recv_reduce_copy_send
                 ops[i].dst = ops[i+1].dst
                 ops[i].next = ops[i+1].next
-                # print("  ", ops[i], ops[i].prev, ops[i].next)
                 delete_idx.append(i+1)
 
     
