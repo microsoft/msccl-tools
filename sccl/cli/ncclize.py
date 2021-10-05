@@ -13,8 +13,8 @@ def make_handle_ncclize(cmd_parsers):
     remap_scratch_grp.add_argument('--no-remap-scratch', action='store_false', dest='remap_scratch', help='don\'t remap scratch buffer indices into free input/output indices')
     cmd.add_argument('--no-merge-contiguous', action='store_true', help='don\'t merge sends/receives from/to contiguous memory')
     cmd.add_argument('--no-pretty-print', action='store_true', help='don\'t pretty print the generated XML')
-    cmd.add_argument('--old-format', action='store_true', help='use the old format')
-    cmd.add_argument('--use-scratch', action='store_true', help='use the scratch buffer instead of extra space at the end of output buffer')
+    cmd.add_argument('--greedy-scratch-sorting', action='store_true', help='sort scratch buffer indices greedily to increase contiguous operations')
+    cmd.add_argument('--no-scratch', action='store_true', help='use extra space at the end of output buffer instead of the scratch buffer')
     cmd.add_argument('--channel-policy', type=ChannelPolicy, choices=list(ChannelPolicy), default=ChannelPolicy.MatchTopology, help='channel allocation policy')
     cmd.add_argument('--instances', type=int, default=1, help='number of interleaved instances of the algorithm to make')
 
@@ -30,9 +30,9 @@ def make_handle_ncclize(cmd_parsers):
                 remap_scratch=args.remap_scratch,
                 channel_policy=args.channel_policy,
                 pretty_print=not args.no_pretty_print,
-                old_format=args.old_format,
-                use_scratch=args.use_scratch,
+                use_scratch=not args.no_scratch,
                 merge_contiguous=not args.no_merge_contiguous,
+                greedy_scratch_sorting=args.greedy_scratch_sorting,
                 instances=args.instances,
                 logging=True)
 

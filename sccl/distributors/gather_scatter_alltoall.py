@@ -94,7 +94,9 @@ def synthesize_gather_scatter_distributed_alltoall(num_copies, gather_algo, scat
 
     steps = []
 
-    for local_step in gather_algo.steps:
+    chunk_end = defaultdict(lambda: 0)
+
+    for step_idx, local_step in enumerate(gather_algo.steps):
         sends = []
 
         # Translate copies of the local Gather to the new space of ranks
@@ -119,10 +121,13 @@ def synthesize_gather_scatter_distributed_alltoall(num_copies, gather_algo, scat
                     sends.append((dist_chunk, to_dist(src), to_dist(dst)))
                     assert to_dist(src) != to_dist(dst)
 
+                    # Update the latest step this chunk was touched on
+                    chunk_end[dist_chunk] = max(chunk_end[dist_chunk], step_idx+1)
+
         steps.append(Step(local_step.rounds * nodes, sends))
 
     # Perform transpose between local root nodes
-    transpose_sends = []
+    transpose_sends = [[] for _ in range(len(gather_algo.steps) + 1)]
     for src in range(nodes):
         for dst in range(nodes):
                 # Sends are needed for the chunks going from src to dst if they are in different copies or if the
@@ -139,9 +144,14 @@ def synthesize_gather_scatter_distributed_alltoall(num_copies, gather_algo, scat
                         # Calculate the local root ranks' global indices
                         root_src = (src // local_nodes) * local_nodes + gather_root
                         root_dst = (dst // local_nodes) * local_nodes + scatter_root
-                        transpose_sends.append((chunk, root_src, root_dst))
+                        transpose_sends[chunk_end[chunk]].append((chunk, root_src, root_dst))
                         assert root_src != root_dst
-    steps.append(Step(chunks * local_nodes * local_nodes, transpose_sends))
+    for i, sends in enumerate(transpose_sends):
+        if i < len(gather_algo.steps):
+            steps[i].sends.extend(sends)
+            steps[i].rounds = max(steps[i].rounds, chunks * local_nodes * local_nodes)
+        else:
+            steps.append(Step(chunks * local_nodes * local_nodes, sends))
 
     #TODO: integrate into above
     if gather_root != scatter_root and local_topology.link(gather_root, scatter_root) == 0:
