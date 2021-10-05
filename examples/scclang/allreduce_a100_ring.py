@@ -6,30 +6,8 @@ from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllReduce
 
-# def allreduce_parallelrings(instances):
-#     size = 8
-#     topology = fully_connected(size)
-#     collective = AllReduce(size, size * instances, True, "allreduce")
-#     with SCCLProgram("allreduce_ring", topology, collective, size * instances, protocol="LL128"):
-        
-#         for r in range(size):
-#             for i in range(instances):
-#                 # Get the chunk at rank r, input[r]
-#                 index = r * instances + i
-#                 c = Rank(r).input(index)
-#                 next = (r + 1) % size
-#                 while next != r:
-#                     # For each rank in the ring, send the chunk to the next rank
-#                     c = c.reduce(next, Buffer.input, index, ch=r*instances+i, sendtb=r*instances+i, recvtb=r*instances+i)
-#                     next = (next + 1) % size
-#                 while next != (r-1) % size:
-#                     c = c.send(next, Buffer.input, index, ch=r*instances+i, sendtb=r*instances+i, recvtb=r*instances+i)
-#                     next = (next + 1) % size
-#         XML()
-#         Check()
-
-# Ring all reduce for 
-# Vary channels from [1-8] to divide parts of the ring over multiple channels.
+# Ring all reduce for A100s
+# Vary channels from [1-8] to divide parts of the ring over multiple channels/tbs.
 # channels=1 is standard ring, all chunks are assigned to the same tb/channel
 # channels=8 devotes 1 tb/channel to handling 1 chunk of the data
 def allreduce_ring(instances, channels):

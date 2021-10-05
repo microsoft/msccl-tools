@@ -45,13 +45,10 @@ class SCCLProgram:
     # Lower program to XML
     def lower(self):
         for rank in self.ranks:
-            # print(f'Rank {rank.rank}')
-            # for slot, ops in rank.slot_ops.items():
-            #     print(f'  {slot}')
-            #     for op in ops:
-                    # print(f'    {op}')
             if self.run_opt:
                 rank.optimize()
+            rank.reorder_ops()
+            rank.detect_dependencies()
             rank.lower_buffers()
         gpu_prgms = [rank.lower_tbs() for rank in self.ranks]
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
@@ -186,10 +183,9 @@ class Process:
 
         self._tb_addop(tbid, sendto, -1, ch, op)
 
-        # Fill in op dependence 
+        # Fill in op fields 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.inst, op.src.buffer, op.src.index, op.src.size)
         
         # Update slot_ops 
         for i in range(op.src.size):
@@ -206,10 +202,9 @@ class Process:
         # Update tbs
         self._tb_addop(tbid, -1, receivefrom, ch, op)
 
-        # Fill in op dependence 
+        # Fill in op fields
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.inst, op.dst.buffer, op.dst.index, op.dst.size)
 
          # Update buffer with received chunks, update dependencies for those chunks
         for i in range(op.src.size):
@@ -228,10 +223,9 @@ class Process:
             tb = self.tbs[tbid]
             tb.ops.append(op)
         
-        # Fill in op dependence 
+        # Fill in op fields 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.inst, op.src.buffer, op.src.index, op.src.size)
 
         # Update buffer copied chunks and dependencies
         for i in range(op.src.size):
@@ -247,10 +241,9 @@ class Process:
         # Update tbs
         self._tb_addop(tbid, -1, receivefrom, ch, op)
 
-        # Fill in op dependence 
+        # Fill in op fields 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.inst, op.dst.buffer, op.dst.index, op.dst.size)
 
         # Update buffer with reduced chunks and dependencies for each chunk
         for i in range(op.src.size):
@@ -279,39 +272,10 @@ class Process:
             tb = self.tbs[tbid]
             tb.ops.append(op)
 
-        # Fill in op dependence 
+        # Fill in op fields 
         op.tb = tbid
         op.step = len(self.tbs[tbid].ops)-1
-        op.depends = self._get_dependences(op.inst, op.src.buffer, op.src.index, op.src.size)              
 
-    # TODO: Can we remove this and replace with a later pass?
-    def _get_dependences(self, inst, buffer, start_index, size):
-        # Get and merge dependencies for each index
-        depends = {}
-        # for i in range(size):
-        #     index = start_index + i
-        #     slot = (buffer, index)
-        #     if slot in self.slot_ops:
-        #         last_op = self.slot_ops[slot][-1]
-
-        #         if inst == Instruction.send:
-        #             # If this is a send we depend on the last non-send op
-        #             op_idx = len(self.slot_ops[slot])-1
-        #             while last_op.inst is Instruction.send and op_idx >= 0:
-        #                 op_idx -= 1
-        #                 last_op = self.slot_ops[slot][op_idx]
-        #             if op_idx == -1:
-        #                 continue # No true dependency
-
-        #         # If we have multiple dependent ops from the same tb keep the one with the highest steps
-        #         tb = last_op.tb
-        #         if tb not in depends or last_op.step > depends[tb].step:
-        #                 depends[tb] = last_op
-
-        return list(depends.values())
-
-    
-    
     def _update_slot_ops(self, buffer, index, op, tbid):
         key = (buffer, index)
         if key in self.slot_ops:
@@ -347,10 +311,15 @@ class Process:
         # Instruction reordering within tbs
         for tbid, tb in self.tbs.items():
             delete_pass(tb)
-            self.order_ops_in_tb(tbid)
-        # Redo dependences
-        for _, ops in self.slot_ops.items():
-            clear_dependency(ops)
+
+    def reorder_ops(self):
+        rerun = False
+        for tbid, tb in self.tbs.items():
+            rerun = self.order_ops_in_tb(tbid)
+        if rerun:
+            self.reorder_ops()
+    
+    def detect_dependencies(self):
         for _, ops in self.slot_ops.items():
             update_slot_dependency(ops)
         for _, ops in self.slot_ops.items():
@@ -363,6 +332,7 @@ class Process:
     # tb:x send(a), send(b) -> tb:y recv(a), recv(b)
     # Currently the order is defined by programmer, but we need place RRCS/RRS/RCS instructions
     # appropriately to avoid deadlock
+    # Returns whether or not operations were re-ordered
     # TODO: Eventually want to order operations automatically based off priority
     # TODO: Does this terminate?
     def order_ops_in_tb(self, tbid):
@@ -376,32 +346,36 @@ class Process:
             for next in op.next:
                 other_tbs[(next.rank, next.tb)] = (-1, -1)
         # Check that the ordering of everything is preserved
-        for i in range(len(tb.ops)):
-            op = tb.ops[i]
+        for step in range(len(tb.ops)):
+            op = tb.ops[step]
             for prev in op.prev:
-                other_tb_step, this_tb_step = other_tbs[(prev.rank, prev.tb)] 
-                if other_tb_step >= prev.step:
-                    rerun = True
-                    # Reorder this operation
-                    tb.ops[i] = tb.ops[this_tb_step]
-                    tb.ops[this_tb_step] = op
-                    tb.ops[i].step = i
-                    tb.ops[this_tb_step].step = this_tb_step
+                other_tb_step, prev_tb_step = other_tbs[(prev.rank, prev.tb)] 
+                if other_tb_step > prev.step:
+                    # Reorder this current op (step, op) to (prev_tb_step, op)
+                    tb.ops[step] = tb.ops[prev_tb_step]
+                    tb.ops[prev_tb_step] = op
+                    tb.ops[step].step = step
+                    tb.ops[prev_tb_step].step = prev_tb_step
+                    print("Reordered 1")
+                    if tb.ops[step].src == tb.ops[prev_tb_step].src:
+                        print("eek")
+                    return True
                 other_tbs[(prev.rank, prev.tb)] = (prev.step, op.step)
 
             for next in op.next:
-                other_tb_step, this_tb_step = other_tbs[(next.rank, next.tb)]
-                if other_tb_step >= next.step:
-                    rerun = True
-                    # Reorder this operation
-                    tb.ops[i] = tb.ops[this_tb_step]
-                    tb.ops[this_tb_step] = op
-                    tb.ops[i].step = i
-                    tb.ops[this_tb_step].step = this_tb_step
+                other_tb_step, prev_tb_step = other_tbs[(next.rank, next.tb)]
+                if other_tb_step > next.step:
+                    # Reorder this current op (step, op) to (prev_tb_step, op)
+                    tb.ops[step] = tb.ops[prev_tb_step]
+                    tb.ops[prev_tb_step] = op
+                    tb.ops[step].step = step
+                    tb.ops[prev_tb_step].step = prev_tb_step
+                    print("Reordered 2")
+                    if tb.ops[step].src == tb.ops[prev_tb_step].src or tb.ops[step].dst == tb.ops[prev_tb_step].dst:
+                        print("eek")
+                    return True
                 other_tbs[(next.rank, next.tb)] = (next.step, op.step)
-        if rerun:
-            self.order_ops_in_tb(tbid)
-            
+        return False
 
 
     # Convert local scratch buffers to index into one global scratch buffer

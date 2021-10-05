@@ -71,6 +71,7 @@ def allreduce(ways, instances):
                 propagate_tree(4, 2, next_index, lc, i, 5, 6)
                 propagate_tree(2, 4, next_index, lc, i, 4, 5)
 
+            # TODO: This is broken and needs debugging :(
             if ways > 2:
                 next_index = [0] * 8
                 lc = 2
@@ -86,8 +87,8 @@ def allreduce(ways, instances):
         Check()
 
 parser = argparse.ArgumentParser()
-parser.add_argument('ways', type=int, help='number of parallel trees to perform reduction min:1 max:3')
+parser.add_argument('ways', type=int, help='number of parallel trees to perform reduction min:1 max:2')
 parser.add_argument('instances', type=int, help='number of instances')
 args = parser.parse_args()
-assert args.ways >=0 and args.ways <= 3
+assert args.ways >=0 and args.ways <= 2
 allreduce(args.ways, args.instances)
