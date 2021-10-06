@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import sys
 from sccl.language.ir import *
 
 def same_tb(op1, op2):
@@ -31,6 +32,12 @@ def delete_operations(ops, tbs, delete_idx):
         ops[i].inst = Instruction.delete
         del ops[i]
 
+def remove_op(ops, i):
+    ops[i].next.remove(ops[i+1])
+    ops[i].next = ops[i].next + ops[i+1].next
+    for o in ops[i+1].next:
+        o.prev.remove(ops[i+1])
+        o.prev.append(ops[i])
 
 # Given the set of operations that operate over a particular slot (rank, buffer, idx) fixed
 # Try and replace operations with pipelined ops like receive copy send (rcs)
@@ -45,7 +52,7 @@ def rcs(ops, tbs):
             if ops[i].inst == Instruction.recv and ops[i+1].inst == Instruction.send and same_tb(ops[i], ops[i+1]) and same_count(ops[i], ops[i+1]):
                 ops[i].inst = Instruction.recv_copy_send
                 ops[i].dst = ops[i+1].dst
-                ops[i].next = ops[i+1].next
+                remove_op(ops, i)
                 delete_idx.append(i+1)
     
     delete_operations(ops, tbs, delete_idx)
@@ -59,7 +66,7 @@ def rrcs_rrs(ops, tbs):
             if ops[i].inst == Instruction.recv_reduce_copy and ops[i+1].inst == Instruction.send and ops[i+2].inst == Instruction.recv and same_tb(ops[i], ops[i+1]) and same_count(ops[i], ops[i+1]):
                 ops[i].inst = Instruction.recv_reduce_send
                 ops[i].dst = ops[i+1].dst
-                ops[i].next = ops[i+1].next
+                remove_op(ops, i)
                 delete_idx.append(i+1)
 
     # RRC/S -> RRCS
@@ -68,7 +75,7 @@ def rrcs_rrs(ops, tbs):
             if ops[i].inst == Instruction.recv_reduce_copy and ops[i+1].inst == Instruction.send and same_tb(ops[i], ops[i+1]) and same_count(ops[i], ops[i+1]):
                 ops[i].inst = Instruction.recv_reduce_copy_send
                 ops[i].dst = ops[i+1].dst
-                ops[i].next = ops[i+1].next
+                remove_op(ops, i)
                 delete_idx.append(i+1)
 
     
@@ -89,7 +96,7 @@ def update_slot_dependency(ops):
     for i in range(1, len(ops)):
         dep_op = ops[i-1]
         op = ops[i]
-        
+
         # Send's depend on the most recent recv-type instruction
         # Avoid serializing sends that can happen in parallel.
         if op.inst == Instruction.send:
@@ -97,15 +104,58 @@ def update_slot_dependency(ops):
             dep_op_idx = i-1
             while dep_op.inst is Instruction.send and dep_op_idx >= 0:
                 dep_op_idx -= 1
-                prev_op = ops[dep_op_idx]
+                dep_op = ops[dep_op_idx]
             if dep_op_idx == -1:
                 continue # No true dependency
-
         # If we have multiple dependent ops from the same tb keep the one with the highest steps
         depends = op.depends
         tb = dep_op.tb
         if tb not in depends or dep_op.step > depends[tb].step:
             depends[tb] = dep_op
+
+# Check that there are no cyclic dependencies
+def check_dependency_cycles(tbs):
+    for tb in tbs.values():
+        for op in tb.ops:
+            deps = op.depends
+            while len(deps) > 0:
+                dep = deps[0]
+                if dep == op:
+                    print("Cyclic dependency")
+                    sys.exit()
+                deps = deps[1:] + dep.depends
+
+
+# Check there are no ordering violations
+def check_threadblock_ordering(tbs, ranks):
+    for tb in tbs.values():
+        other_tbs = {} # TBs this TB communicates with (r, tb) -> step of last op
+        # Gather all unique TBs this TB communicates with
+        rerun = False
+        for op in tb.ops:
+            for prev in op.prev:
+                other_tbs[(prev.rank, prev.tb)] = (-1, -1)
+            for next in op.next:
+                other_tbs[(next.rank, next.tb)] = (-1, -1)
+        # Check that the ordering of everything is preserved
+        for op_step, op in enumerate(tb.ops):
+            for prev in op.prev:
+                # Get the step of the previous operation directly
+                prev_step = ranks[prev.rank].tbs[prev.tb].ops.index(prev)
+                other_tb_step, prev_tb_step = other_tbs[(prev.rank, prev.tb)] 
+                if other_tb_step > prev_step:
+                    print("Ordering problem")
+                    sys.exit()
+                other_tbs[(prev.rank, prev.tb)] = (prev_step, op_step)
+
+            for next in op.next:
+                next_step = ranks[next.rank].tbs[next.tb].ops.index(next)
+                other_tb_step, prev_tb_step = other_tbs[(next.rank, next.tb)]
+                if other_tb_step > next_step:
+                    print("Ordering problem")
+                    sys.exit()
+                other_tbs[(next.rank, next.tb)] = (next_step, op.step)
+                
 
 
 

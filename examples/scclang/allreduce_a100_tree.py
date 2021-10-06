@@ -28,8 +28,8 @@ def allreduce(ways, instances):
                 block = 2 ** pairs
                 reverse = (r // block) % block
                 for x in range(count):
-                    if reverse == 0:
-                        x = count - 1 - x
+                    # if reverse == 0:
+                    #     x = count - 1 - x
                     index = current_index[r] + offset + i*logical_chunk + lc*8 + x
                     c = Rank(r).input(index)
                     c.reduce(next, Buffer.input, index, ch=lc + i * ways, sendtb=sendtb+i*tb_per_channel, recvtb=recvtb+i*tb_per_channel)
@@ -62,26 +62,26 @@ def allreduce(ways, instances):
             if ways > 1:
                 next_index = [0] * 8
                 lc = 1
-                reduce_tree(2, 4, next_index, lc, i, 4, 5)
-                reduce_tree(4, 2, next_index, lc, i, 5, 6)
-                reduce_tree(1, 1, next_index, lc, i, 6, 7)
+                reduce_tree(4, 4, next_index, lc, i, 8, 9)
+                reduce_tree(2, 2, next_index, lc, i, 9, 10)
+                reduce_tree(1, 1, next_index, lc, i, 10, 11)
 
+                propagate_tree(1, 1, next_index, lc, i, 10, 11)
+                propagate_tree(2, 2, next_index, lc, i, 9, 10)
+                propagate_tree(4, 4, next_index, lc, i, 8, 9)
                 
-                propagate_tree(1, 1, next_index, lc, i, 6, 7)
-                propagate_tree(4, 2, next_index, lc, i, 5, 6)
-                propagate_tree(2, 4, next_index, lc, i, 4, 5)
-
-            # TODO: This is broken and needs debugging :(
             if ways > 2:
                 next_index = [0] * 8
                 lc = 2
-                reduce_tree(4, 4, next_index, lc, i, 8, 9)
-                reduce_tree(1, 2, next_index, lc, i, 9, 10)
-                reduce_tree(2, 1, next_index, lc, i, 10, 11)
+                reduce_tree(2, 4, next_index, lc, i, 4, 5)
+                reduce_tree(1, 2, next_index, lc, i, 5, 6)
+                reduce_tree(4, 1, next_index, lc, i, 6, 7)
 
-                propagate_tree(2, 1, next_index, lc, i, 10, 11)
-                propagate_tree(1, 2, next_index, lc, i, 9, 10)
-                propagate_tree(4, 4, next_index, lc, i, 8, 9)
+                
+                propagate_tree(4, 1, next_index, lc, i, 6, 7)
+                propagate_tree(1, 2, next_index, lc, i, 5, 6)
+                propagate_tree(2, 4, next_index, lc, i, 4, 5)
+                
 
         XML()
         Check()
@@ -90,5 +90,5 @@ parser = argparse.ArgumentParser()
 parser.add_argument('ways', type=int, help='number of parallel trees to perform reduction min:1 max:2')
 parser.add_argument('instances', type=int, help='number of instances')
 args = parser.parse_args()
-assert args.ways >=0 and args.ways <= 2
+assert args.ways >=0 and args.ways <= 3
 allreduce(args.ways, args.instances)

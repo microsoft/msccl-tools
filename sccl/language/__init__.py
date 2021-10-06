@@ -50,6 +50,9 @@ class SCCLProgram:
             rank.reorder_ops()
             rank.detect_dependencies()
             rank.lower_buffers()
+        for rank in self.ranks:
+            check_dependency_cycles(rank.tbs)
+            check_threadblock_ordering(rank.tbs, self.ranks)
         gpu_prgms = [rank.lower_tbs() for rank in self.ranks]
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
 
@@ -284,7 +287,12 @@ class Process:
             self.slot_ops[key] = [op]
 
     def get_ref(self, buffer, index, size):
-        return Ref(buffer, index, size, self.prog, self.rank)
+        creator = []
+        for i in range(index, index+size):
+            if (buffer, i) in self.slot_ops:
+                x = self.slot_ops[(buffer, i)][-1]
+                creator.append(x)
+        return Ref(buffer, index, size, self.prog, self.rank, creator=creator)
 
     # Returns a reference to the chunk located at index of the input buffer.
     def input(self, index, size=1):
@@ -315,7 +323,7 @@ class Process:
     def reorder_ops(self):
         rerun = False
         for tbid, tb in self.tbs.items():
-            rerun = self.order_ops_in_tb(tbid)
+            rerun |= self.order_ops_in_tb(tbid)
         if rerun:
             self.reorder_ops()
     
@@ -341,42 +349,23 @@ class Process:
         # Gather all unique TBs this TB communicates with
         rerun = False
         for op in tb.ops:
-            for prev in op.prev:
-                other_tbs[(prev.rank, prev.tb)] = (-1, -1)
             for next in op.next:
                 other_tbs[(next.rank, next.tb)] = (-1, -1)
         # Check that the ordering of everything is preserved
-        for step in range(len(tb.ops)):
-            op = tb.ops[step]
-            for prev in op.prev:
-                other_tb_step, prev_tb_step = other_tbs[(prev.rank, prev.tb)] 
-                if other_tb_step > prev.step:
-                    # Reorder this current op (step, op) to (prev_tb_step, op)
-                    tb.ops[step] = tb.ops[prev_tb_step]
-                    tb.ops[prev_tb_step] = op
-                    tb.ops[step].step = step
-                    tb.ops[prev_tb_step].step = prev_tb_step
-                    print("Reordered 1")
-                    if tb.ops[step].src == tb.ops[prev_tb_step].src:
-                        print("eek")
-                    return True
-                other_tbs[(prev.rank, prev.tb)] = (prev.step, op.step)
-
+        for op in tb.ops:
+            this_current_step = op.step
             for next in op.next:
-                other_tb_step, prev_tb_step = other_tbs[(next.rank, next.tb)]
-                if other_tb_step > next.step:
+                other_current_step = next.step
+                other_last_step, this_last_step = other_tbs[(next.rank, next.tb)]
+                if other_last_step > other_current_step:
                     # Reorder this current op (step, op) to (prev_tb_step, op)
-                    tb.ops[step] = tb.ops[prev_tb_step]
-                    tb.ops[prev_tb_step] = op
-                    tb.ops[step].step = step
-                    tb.ops[prev_tb_step].step = prev_tb_step
-                    print("Reordered 2")
-                    if tb.ops[step].src == tb.ops[prev_tb_step].src or tb.ops[step].dst == tb.ops[prev_tb_step].dst:
-                        print("eek")
+                    tb.ops[this_current_step] = tb.ops[this_last_step]
+                    tb.ops[this_last_step] = op
+                    tb.ops[this_current_step].step = this_current_step
+                    tb.ops[this_last_step].step = this_last_step
                     return True
-                other_tbs[(next.rank, next.tb)] = (next.step, op.step)
+                other_tbs[(next.rank, next.tb)] = (other_current_step, this_current_step)
         return False
-
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
@@ -523,7 +512,8 @@ class Ref(ChunkRef):
         self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
         receiveOp = Op(Instruction.recv, dst, self, dst_chunkref, {})
         sendOp.prev = sendOp.prev + self.creator
-        dst_chunkref.creator.append(receiveOp)
+        for p in sendOp.prev:
+            p.next.append(sendOp)
         sendOp.next.append(receiveOp)
         receiveOp.prev.append(sendOp)
         self.prog.ranks[dst]._add_recv(recvtb, ch, receiveOp)
@@ -545,7 +535,8 @@ class Ref(ChunkRef):
         self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
         rrcOp = Op(Instruction.recv_reduce_copy, dst, self, dst_chunkref, {})
         sendOp.prev = sendOp.prev + self.creator
-        dst_chunkref.creator.append(rrcOp)
+        for p in sendOp.prev:
+            p.next.append(sendOp)
         sendOp.next.append(rrcOp)
         rrcOp.prev.append(sendOp)
         self.prog.ranks[dst]._add_receive_reduce_copy(recvtb, ch, rrcOp)
