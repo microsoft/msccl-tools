@@ -13,7 +13,7 @@ def test_sccl_init(capsys):
     sccl.init('ndv2', 2, ('alltoall', '1MB'))
     out, err = capsys.readouterr()
     assert 'synthesize_ndv2_relay_alltoall' in out
-    sccl.init('ndv4', 9, ('alltoall', '1MB'))
+    sccl.init('ndv4', 9, (sccl.Collective.alltoall, '1MB'))
     out, err = capsys.readouterr()
     assert 'synthesize_ndv4_hierarchical_alltoall' in out
 

@@ -3,3 +3,4 @@
 
 from sccl.autosynth import init
 from sccl.autosynth import ndv2_perm
+from sccl.autosynth import Collective
