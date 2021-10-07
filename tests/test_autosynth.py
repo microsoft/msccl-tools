@@ -7,13 +7,13 @@ from sccl.autosynth.registry import register_synthesis_plan
 
 
 def test_sccl_init(capsys):
-    sccl.init(4, 'not_a_machine_type', ('alltoall', 0))
+    sccl.init('not_a_machine_type', 4, ('alltoall', 0))
     out, err = capsys.readouterr()
     assert 'No plan found' in out
-    sccl.init(2, 'ndv2', ('alltoall', '1MB'))
+    sccl.init('ndv2', 2, ('alltoall', '1MB'))
     out, err = capsys.readouterr()
     assert 'synthesize_ndv2_relay_alltoall' in out
-    sccl.init(9, 'ndv4', ('alltoall', '1MB'))
+    sccl.init('ndv4', 9, (sccl.Collective.alltoall, '1MB'))
     out, err = capsys.readouterr()
     assert 'synthesize_ndv4_hierarchical_alltoall' in out
 

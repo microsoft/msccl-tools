@@ -12,6 +12,7 @@ import os
 import math
 import tempfile
 import humanfriendly
+from enum import Enum
 
 from sccl.autosynth.ndv2_plans import register_ndv2_plans
 from sccl.autosynth.ndv4_plans import register_ndv4_plans
@@ -19,11 +20,25 @@ register_ndv2_plans()
 register_ndv4_plans()
 
 
-def init(num_machines, machine_type, *collectives):
+class Collective(Enum):
+    allreduce = 'allreduce'
+    allgather = 'allgather'
+    reduce = 'reduce'
+    broadcast = 'broadcast'
+    alltoall = 'alltoall'
+    reduce_scatter = 'reduce_scatter'
+
+    def __str__(self):
+        return self.value
+
+
+def init(machine_type, num_machines, *collectives):
     # Collect and sort all plans that match the collectives and sizes given by the user.
     selected_plans = {}
     for collective in collectives:
         name, sizes = collective
+        if isinstance(name, Collective):
+            name = str(name)
         if isinstance(sizes, tuple):
             lower, upper = sizes
             if isinstance(lower, str):
