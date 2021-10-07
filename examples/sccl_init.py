@@ -17,7 +17,7 @@ def show():
 print('=== Trigger a builtin synthesis plan ===')
 
 import sccl
-sccl.init(9, 'ndv4', ('alltoall', '1GB'))
+sccl.init('ndv4', 9, ('alltoall', '1GB'))
 
 show()
 
@@ -25,7 +25,7 @@ show()
 print('=== Register additional plans from a library ===')
 
 import sccl_presynth
-sccl.init(3, 'ndv2',
+sccl.init('ndv2', 3,
     ('alltoall', '1GB'),
     ('allgather', (128, '1KB')))
 
@@ -42,7 +42,7 @@ def alltoall_9000(machines):
     ...
     </algo>"""
 
-sccl.init(1, 'ndv9000', ('alltoall', '2MB'))
+sccl.init('ndv9000', 1, ('alltoall', '2MB'))
 
 show()
 
@@ -52,6 +52,6 @@ print('=== Overlapping size ranges ===')
 register_synthesis_plan('alltoall', 'ndv9000', lambda m: m == 1, (0, '1KB'), protocol='LL')(alltoall_9000)
 register_synthesis_plan('alltoall', 'ndv9000', lambda m: m == 1, ('1KB', '1MB'), protocol='LL128')(alltoall_9000)
 
-sccl.init(1, 'ndv9000', ('alltoall', ('2KB', None)))
+sccl.init('ndv9000', 1, ('alltoall', ('2KB', None)))
 
 show()

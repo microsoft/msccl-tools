@@ -19,7 +19,7 @@ register_ndv2_plans()
 register_ndv4_plans()
 
 
-def init(num_machines, machine_type, *collectives):
+def init(machine_type, num_machines, *collectives):
     # Collect and sort all plans that match the collectives and sizes given by the user.
     selected_plans = {}
     for collective in collectives:
