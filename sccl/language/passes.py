@@ -137,23 +137,14 @@ def check_threadblock_ordering(tbs, ranks):
                 other_tbs[(prev.rank, prev.tb)] = (-1, -1)
             for next in op.next:
                 other_tbs[(next.rank, next.tb)] = (-1, -1)
-        # Check that the ordering of everything is preserved
+        # Check that the ordering of operations between threadblocks is consistent
         for op_step, op in enumerate(tb.ops):
-            for prev in op.prev:
-                # Get the step of the previous operation directly
-                prev_step = ranks[prev.rank].tbs[prev.tb].ops.index(prev)
-                other_tb_step, prev_tb_step = other_tbs[(prev.rank, prev.tb)] 
-                if other_tb_step > prev_step:
-                    print("Ordering problem")
-                    sys.exit()
-                other_tbs[(prev.rank, prev.tb)] = (prev_step, op_step)
-
             for next in op.next:
                 next_step = ranks[next.rank].tbs[next.tb].ops.index(next)
                 other_tb_step, prev_tb_step = other_tbs[(next.rank, next.tb)]
                 if other_tb_step > next_step:
-                    print("Ordering problem")
-                    sys.exit()
+                    print("Ordering problem", other_tb_step, next_step, op)
+                    sys.exit(1)
                 other_tbs[(next.rank, next.tb)] = (next_step, op.step)
                 
 

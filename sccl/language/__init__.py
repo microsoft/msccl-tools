@@ -359,6 +359,7 @@ class Process:
                 other_last_step, this_last_step = other_tbs[(next.rank, next.tb)]
                 if other_last_step > other_current_step:
                     # Reorder this current op (step, op) to (prev_tb_step, op)
+                    print("Reorder")
                     tb.ops[this_current_step] = tb.ops[this_last_step]
                     tb.ops[this_last_step] = op
                     tb.ops[this_current_step].step = this_current_step
@@ -461,6 +462,9 @@ class Ref(ChunkRef):
     def _copy(self, buffer=Buffer.output, index=-1, tb=-1, ch=0):
         dst_chunkref = self.prog.ranks[self.rank].get_ref(buffer, index, self.size)
         op = Op(Instruction.copy, self.rank, self, dst_chunkref, {})
+        op.prev = self.creator
+        for p in op.prev:
+            p.next.append(op)
         self.prog.ranks[self.rank]._add_copy(tb, ch, op)
         return dst_chunkref
 
@@ -522,6 +526,10 @@ class Ref(ChunkRef):
     def _local_reduce(self, buffer, index, tb, ch):
         dst_chunkref = self.prog.ranks[self.rank].get_ref(buffer, index, self.size)
         op = Op(Instruction.reduce, self.rank, self, dst_chunkref, {})
+
+        op.prev = self.creator + dst_chunkref.creator
+        for p in op.prev:
+            p.next.append(op)
         self.prog.ranks[self.rank]._add_reduce(tb, ch, op)
         return dst_chunkref
     
@@ -538,7 +546,7 @@ class Ref(ChunkRef):
         for p in sendOp.prev:
             p.next.append(sendOp)
         sendOp.next.append(rrcOp)
-        rrcOp.prev.append(sendOp)
+        rrcOp.prev = dst_chunkref.creator + [sendOp]
         self.prog.ranks[dst]._add_receive_reduce_copy(recvtb, ch, rrcOp)
         return dst_chunkref
 
