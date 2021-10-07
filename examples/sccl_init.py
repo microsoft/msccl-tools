@@ -17,7 +17,7 @@ def show():
 print('=== Trigger a builtin synthesis plan ===')
 
 import sccl
-sccl.init('ndv4', 9, ('alltoall', '1GB'))
+sccl.init('ndv4', 9, (sccl.Collective.alltoall, '1GB'))
 
 show()
 
@@ -26,8 +26,8 @@ print('=== Register additional plans from a library ===')
 
 import sccl_presynth
 sccl.init('ndv2', 3,
-    ('alltoall', '1GB'),
-    ('allgather', (128, '1KB')))
+    (sccl.Collective.alltoall, '1GB'),
+    (sccl.Collective.allgather, (128, '1KB')))
 
 show()
 
@@ -36,22 +36,22 @@ print('=== Register custom plans ===')
 
 from sccl.autosynth.registry import register_synthesis_plan
 
-@register_synthesis_plan('alltoall', 'ndv9000', lambda m: m == 1, ('1MB', None))
+@register_synthesis_plan(sccl.Collective.alltoall, 'ndv9000', lambda m: m == 1, ('1MB', None))
 def alltoall_9000(machines):
     return """<algo name="a2andv9000" nchunksperloop="2" nchannels="1" inplace="0" ngpus="2" proto="Simple">
     ...
     </algo>"""
 
-sccl.init('ndv9000', 1, ('alltoall', '2MB'))
+sccl.init('ndv9000', 1, (sccl.Collective.alltoall, '2MB'))
 
 show()
 
 
 print('=== Overlapping size ranges ===')
 
-register_synthesis_plan('alltoall', 'ndv9000', lambda m: m == 1, (0, '1KB'), protocol='LL')(alltoall_9000)
-register_synthesis_plan('alltoall', 'ndv9000', lambda m: m == 1, ('1KB', '1MB'), protocol='LL128')(alltoall_9000)
+register_synthesis_plan(sccl.Collective.alltoall, 'ndv9000', lambda m: m == 1, (0, '1KB'), protocol='LL')(alltoall_9000)
+register_synthesis_plan(sccl.Collective.alltoall, 'ndv9000', lambda m: m == 1, ('1KB', '1MB'), protocol='LL128')(alltoall_9000)
 
-sccl.init('ndv9000', 1, ('alltoall', ('2KB', None)))
+sccl.init('ndv9000', 1, (sccl.Collective.alltoall, ('2KB', None)))
 
 show()
