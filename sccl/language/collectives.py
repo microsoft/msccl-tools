@@ -53,20 +53,33 @@ class AllGather(Collective):
     # Initializes input buffer for an allgather
     def init_buffers(self):
         rank_buffers = []
-        for r in range(self.num_ranks):
-            input_buffer = []
-            output_buffer = [None] * (self.num_ranks * self.instances)
-            for ch in range(self.instances):
-                input_buffer.append(Chunk(r, ch, -1, r*self.instances+ch))
-            buffers = {Buffer.input : input_buffer, 
-                    Buffer.output : output_buffer}
-            rank_buffers.append(buffers)
+        if self.inplace:
+            # Inplace input buffers for AllGather is a pointer into the output buffer
+            for r in range(self.num_ranks):
+                input_buffer = [None] * self.instances
+                output_buffer = [None] * (self.num_ranks * self.instances)
+                for ch in range(self.instances):
+                    chunk = Chunk(r, ch, -1, r*self.instances+ch)
+                    output_buffer[r*self.instances+ch] = chunk
+                    input_buffer[ch] = chunk
+                buffers = {Buffer.input : input_buffer, 
+                           Buffer.output : output_buffer}
+                rank_buffers.append(buffers)
+        else:
+            for r in range(self.num_ranks):
+                input_buffer = [None] * self.instances
+                output_buffer = [None] * (self.num_ranks * self.instances)
+                for ch in range(self.instances):
+                    input_buffer[ch] = Chunk(r, ch, -1, r*self.instances+ch)
+                buffers = {Buffer.input : input_buffer, 
+                           Buffer.output : output_buffer}
+                rank_buffers.append(buffers)
         return rank_buffers
                 
     # Expected output buffer for allgather
     def check(self, prog):
         correct = True
-        buf = Buffer.input if self.inplace else Buffer.output
+        buf = Buffer.output
         for r in range(self.num_ranks):
             output = prog.ranks[r].buffers[buf]
             for i in range(self.num_ranks):

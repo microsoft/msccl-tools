@@ -122,7 +122,7 @@ def check_dependency_cycles(tbs):
                 dep = deps[0]
                 if dep == op:
                     print("Cyclic dependency")
-                    sys.exit()
+                    sys.exit(1)
                 deps = deps[1:] + dep.depends
 
 

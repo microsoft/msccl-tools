@@ -26,7 +26,7 @@ class SCCLProgram:
         self.protocol = protocol
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
-        self.run_opt = True # Runs optimization passes
+        self.run_opt = False # Runs optimization passes
         # Initialize the input buffers
         num_ranks = topo.num_nodes()
         rank_buffers = collective.init_buffers()
@@ -290,8 +290,13 @@ class Process:
         creator = []
         for i in range(index, index+size):
             if (buffer, i) in self.slot_ops:
-                x = self.slot_ops[(buffer, i)][-1]
-                creator.append(x)
+                creator_index = len(self.slot_ops[(buffer, i)]) - 1
+                op = self.slot_ops[(buffer, i)][creator_index]
+                while op.inst == Instruction.send and creator_index > 0:
+                    creator_index -= 1
+                    op = self.slot_ops[(buffer, i)][creator_index]
+                if op.inst != Instruction.send:
+                    creator.append(op)
         return Ref(buffer, index, size, self.prog, self.rank, creator=creator)
 
     # Returns a reference to the chunk located at index of the input buffer.
@@ -359,7 +364,6 @@ class Process:
                 other_last_step, this_last_step = other_tbs[(next.rank, next.tb)]
                 if other_last_step > other_current_step:
                     # Reorder this current op (step, op) to (prev_tb_step, op)
-                    print("Reorder")
                     tb.ops[this_current_step] = tb.ops[this_last_step]
                     tb.ops[this_last_step] = op
                     tb.ops[this_current_step].step = this_current_step
@@ -462,9 +466,11 @@ class Ref(ChunkRef):
     def _copy(self, buffer=Buffer.output, index=-1, tb=-1, ch=0):
         dst_chunkref = self.prog.ranks[self.rank].get_ref(buffer, index, self.size)
         op = Op(Instruction.copy, self.rank, self, dst_chunkref, {})
+
         op.prev = self.creator
         for p in op.prev:
             p.next.append(op)
+
         self.prog.ranks[self.rank]._add_copy(tb, ch, op)
         return dst_chunkref
 
@@ -513,13 +519,15 @@ class Ref(ChunkRef):
         assert (self.prog.topo.link(self.rank, dst)), f'No link from {self.rank} to {dst}'
         dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
         sendOp =  Op(Instruction.send, self.rank, self, dst_chunkref, {})
-        self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
         receiveOp = Op(Instruction.recv, dst, self, dst_chunkref, {})
-        sendOp.prev = sendOp.prev + self.creator
+
+        sendOp.prev = self.creator
         for p in sendOp.prev:
             p.next.append(sendOp)
         sendOp.next.append(receiveOp)
         receiveOp.prev.append(sendOp)
+
+        self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
         self.prog.ranks[dst]._add_recv(recvtb, ch, receiveOp)
         return dst_chunkref
 
@@ -530,6 +538,7 @@ class Ref(ChunkRef):
         op.prev = self.creator + dst_chunkref.creator
         for p in op.prev:
             p.next.append(op)
+
         self.prog.ranks[self.rank]._add_reduce(tb, ch, op)
         return dst_chunkref
     
@@ -537,16 +546,20 @@ class Ref(ChunkRef):
         # Local reduce
         if dst == self.rank:
             return self._local_reduce(buffer, index, sendtb, ch)
-        # Receive reduce copy   
+
+        # Receive reduce copy
+        assert (self.prog.topo.link(self.rank, dst)), f'No link from {self.rank} to {dst}'
         dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
         sendOp = Op(Instruction.send, self.rank, self, dst_chunkref, {})
-        self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
         rrcOp = Op(Instruction.recv_reduce_copy, dst, self, dst_chunkref, {})
-        sendOp.prev = sendOp.prev + self.creator
+
+        sendOp.prev = self.creator
         for p in sendOp.prev:
             p.next.append(sendOp)
         sendOp.next.append(rrcOp)
         rrcOp.prev = dst_chunkref.creator + [sendOp]
+
+        self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
         self.prog.ranks[dst]._add_receive_reduce_copy(recvtb, ch, rrcOp)
         return dst_chunkref
 
