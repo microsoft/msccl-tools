@@ -220,11 +220,7 @@ class Process:
             tbid = self._get_tbid(Instruction.copy, -1, ch)
         
         # Update tbs
-        if tbid not in self.tbs:
-            self.tbs[tbid] = Threadblock(ch, ops=[op])
-        else:
-            tb = self.tbs[tbid]
-            tb.ops.append(op)
+        self._tb_addop(tbid, -1, -1, ch, op)
         
         # Fill in op fields 
         op.tb = tbid
@@ -234,6 +230,7 @@ class Process:
         for i in range(op.src.size):
             self.buffers[op.dst.buffer][op.dst.index+i] = self.buffers[op.src.buffer][op.src.index+i]
             self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
+            self._update_slot_ops(op.src.buffer, op.src.index+i, op, tbid)
 
     def _add_receive_reduce_copy(self, tbid, ch, op):
         receivefrom = op.src.rank
@@ -267,13 +264,10 @@ class Process:
             other_chunk = self.prog.ranks[op.src.rank].buffers[op.src.buffer][op.src.index+i]
             self.buffers[op.dst.buffer][op.dst.index+i] = other_chunk.reduce(reduce_chunk)
             self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
+            self._update_slot_ops(op.src.buffer, op.src.index+i, op, tbid)
 
         # Update tbs
-        if tbid not in self.tbs:
-            self.tbs[tbid] = Threadblock(ch, recv=receivefrom, ops=[op])
-        else:
-            tb = self.tbs[tbid]
-            tb.ops.append(op)
+        self._tb_addop(tbid, -1, -1, ch, op)
 
         # Fill in op fields 
         op.tb = tbid
@@ -301,10 +295,12 @@ class Process:
 
     # Returns a reference to the chunk located at index of the input buffer.
     def input(self, index, size=1):
-        return self.get_ref(Buffer.input, index, size)
+        buffer, index = self.prog.collective.get_buffer_index(self.rank, Buffer.input, index)
+        return self.get_ref(buffer, index, size)
 
     def output(self, index, size=1):
-        return self.get_ref(Buffer.output, index, size)
+        buffer, index = self.prog.collective.get_buffer_index(self.rank, Buffer.output, index)
+        return self.get_ref(buffer, index, size)
 
     def scratch(self, name, index, size=1):
         return self.get_ref(name, index, size)
@@ -503,13 +499,16 @@ class Ref(ChunkRef):
 
     def send(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=0):
         assert (len(self.missing) == 0), f'Trying to send an incomplete concatenation. Missing indices {self.missing}'
- 
+
         # If index is not specified assume it is going to the same place in the next gpu
         if index == -1 and buffer == None:
             index = self.index
             buffer = self.buffer
         elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
             index = self.prog.ranks[dst].buffers[buffer].get_next_index(self.size)
+
+        # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
+        buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
 
         # Local copy
         if dst == self.rank:
@@ -543,6 +542,10 @@ class Ref(ChunkRef):
         return dst_chunkref
     
     def reduce(self, dst, buffer, index=-1, sendtb=-1, recvtb=-1, ch=0):
+
+        # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
+        buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
+
         # Local reduce
         if dst == self.rank:
             return self._local_reduce(buffer, index, sendtb, ch)

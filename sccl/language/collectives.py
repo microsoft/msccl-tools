@@ -15,6 +15,9 @@ class Collective():
     def check(self, prog):
         pass
 
+    def get_buffer_index(self, rank, buffer, index):
+        return buffer, index
+
 
 class AllToAll(Collective):
 
@@ -54,16 +57,12 @@ class AllGather(Collective):
     def init_buffers(self):
         rank_buffers = []
         if self.inplace:
-            # Inplace input buffers for AllGather is a pointer into the output buffer
+            # Inplace AllGather only uses the output buffer   
             for r in range(self.num_ranks):
-                input_buffer = [None] * self.instances
                 output_buffer = [None] * (self.num_ranks * self.instances)
                 for ch in range(self.instances):
-                    chunk = Chunk(r, ch, -1, r*self.instances+ch)
-                    output_buffer[r*self.instances+ch] = chunk
-                    input_buffer[ch] = chunk
-                buffers = {Buffer.input : input_buffer, 
-                           Buffer.output : output_buffer}
+                    output_buffer[r*self.instances+ch] = Chunk(r, ch, -1, r*self.instances+ch)
+                buffers = {Buffer.output : output_buffer}
                 rank_buffers.append(buffers)
         else:
             for r in range(self.num_ranks):
@@ -94,6 +93,15 @@ class AllGather(Collective):
                         correct = False
         return correct
 
+    
+    def get_buffer_index(self, rank, buffer, index):
+        # For inplace AllGathers, the input buffer points into the output buffer
+        if self.inplace and buffer == Buffer.input:
+            return Buffer.output, index + rank * self.instances
+        else:
+            return buffer, index
+
+
             
 class AllReduce(Collective):
 
@@ -106,8 +114,11 @@ class AllReduce(Collective):
             for c in range(chunks_per_node):
                 # TODO: Chunk starts at rank r index c, and ends on all ranks (-1) at index r, also reduced (?? how to indicate??)
                 input_buffer.append(Chunk(r, c, -1, c))
-            buffers = {Buffer.input : input_buffer, 
-                    Buffer.output : output_buffer}
+            if self.inplace:
+                buffers = {Buffer.input : input_buffer}
+            else:
+                buffers = {Buffer.input : input_buffer, 
+                           Buffer.output : output_buffer}
             rank_buffers.append(buffers)
         return rank_buffers
 
@@ -138,20 +149,27 @@ class ReduceScatter(Collective):
     def init_buffers(self):
         rank_buffers = []
         for r in range(self.num_ranks):
-            input_buffer = []
-            output_buffer = [None] * self.instances
-            for i in range(self.num_ranks):
-                for c in range(self.instances):
-                    input_buffer.append(Chunk(r, i*self.instances + c, i, c))
-            buffers = {Buffer.input : input_buffer, 
-                    Buffer.output : output_buffer}
-            rank_buffers.append(buffers)
+            if self.inplace:
+                input_buffer = []
+                for i in range(self.num_ranks):
+                    for c in range(self.instances):
+                        input_buffer.append(Chunk(r, i*self.instances + c, i, c))
+                buffers = {Buffer.input : input_buffer}
+                rank_buffers.append(buffers)
+            else:
+                input_buffer = []
+                output_buffer = [None] * self.instances
+                for i in range(self.num_ranks):
+                    for c in range(self.instances):
+                        input_buffer.append(Chunk(r, i*self.instances + c, i, c))
+                buffers = {Buffer.input : input_buffer, 
+                        Buffer.output : output_buffer}
+                rank_buffers.append(buffers)
         return rank_buffers
 
     def check(self, prog):
         expected_chunks = []
         buf = Buffer.input if self.inplace else Buffer.output
-
         for c in range(self.num_ranks * self.instances):
             chunk = ReduceChunk([])
             for r in range(self.num_ranks):
@@ -162,9 +180,19 @@ class ReduceScatter(Collective):
         for r in range(self.num_ranks):
             output = prog.ranks[r].buffers[buf]
             for c in range(self.instances):
-                chunk = output[c]
                 correct_idx = r * self.instances + c
+                if self.inplace:
+                    c = correct_idx
+                chunk = output[c]
                 if chunk is None or chunk != expected_chunks[correct_idx]:
                     print(f'Rank {r} chunk {c} is incorrect should be index {correct_idx} from all ranks given {chunk}')
                     correct = False
         return correct
+
+    def get_buffer_index(self, rank, buffer, index):
+        # For inplace ReduceScatter the output buffer is a pointer into the input buffer
+        if self.inplace and buffer == Buffer.output:
+            return Buffer.input, index + rank * self.instances
+        else:
+            return buffer, index
+
