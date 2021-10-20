@@ -195,7 +195,7 @@ def ndv2_perm(): # pragma: no cover
     return _select_isomorphism(isomorphisms)
 
 
-def _select_isomorphism(self, isomorphisms, verbose=True): # pragma: no cover
+def _select_isomorphism(isomorphisms, verbose=True): # pragma: no cover
     with open('/var/lock/sccl_autosynth_inspector_topo.lock', "a+") as f:
         fcntl.lockf(f, fcntl.LOCK_EX)
         try:
