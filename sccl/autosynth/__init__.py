@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from sccl.topologies import dgx1
+from sccl.topologies import dgx1, nvlink_only
 from sccl.isomorphisms import find_isomorphisms
 from sccl.autosynth.registry import synthesis_plans
 from lxml import etree as ET
@@ -182,13 +182,13 @@ def _extract_min_channels(path):
             return None
 
 
-def ndv2_perm(self): # pragma: no cover
+def ndv2_perm(): # pragma: no cover
     # This function is used in a hacky way right now. The sccl_ndv2_launcher.sh
     # relies on the side effect of _select_isomorphism creating the lock file,
     # which is read by the script after calling this function, so the return
     # value does't currently get used. If you make changes, please fix or update
     # sccl_ndv2_launcher.sh accordingly.
-    isomorphisms = find_isomorphisms(dgx1(), self.local_topo)
+    isomorphisms = find_isomorphisms(dgx1(), nvlink_only())
     if len(isomorphisms) != 4:
         raise RuntimeError(
             f'Expected to find 4 isomorphisms to DGX1 topology, but found {len(isomorphisms)}.')
