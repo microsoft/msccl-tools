@@ -8,14 +8,16 @@ from sccl.language.collectives import AllReduce
 
 def allreduce_allpairs(instances):
     size = 8
+    chunksperloop = 7
     topology = fully_connected(size)
-    collective = AllReduce(size, 7 * instances, True, "allreduce")
-    with SCCLProgram("allreduce_pairs", topology, collective, size * instances, protocol="LL128"):
+    collective = AllReduce(size, chunksperloop, True, "allreduce")
+    with SCCLProgram("allreduce_pairs", topology, collective, instances, protocol="LL128", interleaved_replication=False):
         
         for r in range(size):
             for r1 in range(size):
                 Rank(r).create_scratch(f'scratch{r1}') 
 
+        instances = 1
         for i in range(instances):
             index = 7 * i
             for r1 in range(size):

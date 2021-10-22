@@ -17,16 +17,17 @@ def _curr():
     return _current_program
 
 class SCCLProgram:
-    def __init__(self, name, topo, collective, instances, protocol='Simple'):
+    def __init__(self, name, topo, collective, instances, protocol='Simple', interleaved_replication=True):
         self.name = name
         self.topo = topo
         self.collective = collective       
         self.ranks = []
         self.instances = instances
         self.protocol = protocol
+        self.interleaved_replication = interleaved_replication
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
-        self.run_opt = False # Runs optimization passes
+        self.run_opt = True # Runs optimization passes
         # Initialize the input buffers
         num_ranks = topo.num_nodes()
         rank_buffers = collective.init_buffers()
@@ -48,8 +49,9 @@ class SCCLProgram:
             if self.run_opt:
                 rank.optimize()
             rank.reorder_ops()
+            rank.replicate(self.instances, interleaved=self.interleaved_replication)
             rank.detect_dependencies()
-            rank.lower_buffers()
+            rank.lower_buffers(self.instances)
         for rank in self.ranks:
             check_dependency_cycles(rank.tbs)
             check_threadblock_ordering(rank.tbs, self.ranks)
@@ -82,7 +84,7 @@ class BufferSlice:
     def __init__(self, buf):
         self.buf = buf
         self.offset = -1 # Offset into the global scratch buffer
-        self.index = 0 # Current index of chunks added
+        self.single_instance_index = 0 # Current index of chunks added
         self.chunks = {}
 
     # Returns the global index into the scratch buffer
@@ -93,15 +95,15 @@ class BufferSlice:
     def get_buffer(self):
         return self.buf
 
-    def size(self):
+    def instance_size(self):
         return len(self.chunks)
 
     def set_offset(self, offset):
         self.offset = offset
 
     def get_next_index(self, size):
-        index = self.index
-        self.index += size
+        index = self.single_instance_index
+        self.single_instance_index += size
         return index
 
     def __getitem__(self, index):
@@ -329,9 +331,9 @@ class Process:
             self.reorder_ops()
     
     def detect_dependencies(self):
-        for _, ops in self.slot_ops.items():
-            update_slot_dependency(ops)
-        for _, ops in self.slot_ops.items():
+        for slot, ops in self.instanced_slot_ops.items():
+            update_slot_dependency(slot, ops)
+        for _, ops in self.instanced_slot_ops.items():
             for op in ops:
                 if type(op.depends) is dict:
                     op.depends = list(op.depends.values())
@@ -368,6 +370,91 @@ class Process:
                 other_tbs[(next.rank, next.tb)] = (other_current_step, this_current_step)
         return False
 
+    # Automatically replicates the algorithm instance number of times
+    # interleaved sets the replication policy
+    # if True chunks are split as: ChunkA ChunkB -> ChunkA0 ChunkA1 .. ChunkB0 ChunkB1 ...
+    # if false chunks are divided as ChunkA0 ChunkB0 ChunkA1 ChunkB1 ...
+    # For collectives were chunks are designated for a particular GPU (e.g. AllToAll) 
+    # only interleaved replication will be correct
+    # Interleaved policy only supports single count sends/receives from the input/output buffer
+    # (multicount ops are fine between scratch)
+    def replicate(self, instances, interleaved):
+        if instances == 1:
+            self.instanced_tbs = self.tbs
+            self.instanced_slot_ops = self.slot_ops
+            return 
+
+        new_tbs = {}
+        new_slot_ops = {}
+
+        def is_scratch(buffer):
+            return buffer != Buffer.input and buffer != Buffer.output
+
+        def get_new_index(rank, buffer, index, size, i):
+            # Scratch buffers always use batched
+            if is_scratch(buffer):
+                buf_instance_len = self.prog.ranks[rank].buffers[buffer].instance_size()
+                return buf_instance_len * i + index
+            # If this is operating on the input/output buffer then replication strategy can be either interleaved or batched
+            # This is to fit with the semantics of certain collectives
+            elif interleaved:
+                return  index * instances + i * size
+            else:
+                return  len(self.prog.ranks[rank].buffers[buffer]) * i + index
+
+        for i in range(instances):
+            multichunk_ops = {}
+            for slot, ops in self.slot_ops.items():
+                buf, idx = slot
+                new_ops = []
+                for s, op in enumerate(ops):
+                    if not is_scratch(op.src.buffer) and not is_scratch(op.dst.buffer) and op.src.size > 1 and interleaved:
+                        print(op.src)
+                        print(op.dst)
+                        assert False, "Cannot autoreplicate with interleaved policy with multi-chunk ops. Manually create multiple instances or try batched."
+
+                    # For multichunk ops - each affected slot should have a pointer to the same op
+                    if op not in multichunk_ops:
+                        # Get the starting index of this operation
+                        src_index = get_new_index(op.src.rank, op.src.buffer, op.src.index, op.src.size, i)
+                        dst_index = get_new_index(op.dst.rank, op.dst.buffer, op.dst.index, op.dst.size, i)
+
+                        new_src = Ref(op.src.buffer, src_index, op.src.size, op.src.prog, op.src.rank)
+                        new_dst = Ref(op.dst.buffer, dst_index, op.dst.size, op.dst.prog, op.dst.rank)
+                        new_tbid = op.tb * instances + i
+                        new_op = Op(op.inst, self.rank, new_src, new_dst, {}, tb=new_tbid, step=op.step)
+                        multichunk_ops[op] = new_op
+                    else:
+                        new_op = multichunk_ops[op]
+                    new_ops.append(new_op)
+                new_idx = get_new_index(self.rank, buf, idx, 1, i)
+                new_slot = (buf, new_idx)
+                new_slot_ops[new_slot] = new_ops
+
+        for tbid, tb in self.tbs.items():
+            for i in range(instances):
+                instance_tbid = tbid * instances + i
+                channel = tb.channel * instances + i
+                instance_ops = []
+                for op in tb.ops:
+                    # Get the index in slot_ops of this op
+                    # Use the index to index into the proper instanced_slot_ops created earlier to grab the op.
+                    if op.inst == Instruction.send:
+                        key = (op.src.buffer, op.src.index)
+                        new_index = get_new_index(op.src.rank, op.src.buffer, op.src.index, 1, i)
+                        new_key = (op.src.buffer, new_index)
+                    else:
+                        key = (op.dst.buffer, op.dst.index)
+                        new_index = get_new_index(op.dst.rank, op.dst.buffer, op.dst.index, 1, i)
+                        new_key = (op.dst.buffer, new_index)
+                    s = self.slot_ops[key].index(op)
+                    instance_ops.append(new_slot_ops[new_key][s])
+                tb_instance = Threadblock(channel, tb.send, tb.recv, instance_ops)
+                new_tbs[instance_tbid] = tb_instance
+
+        self.instanced_tbs = new_tbs
+        self.instanced_slot_ops = new_slot_ops
+
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
         if chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
@@ -378,22 +465,22 @@ class Process:
         return chunk
 
     # Assigns each scratch buffer an offset into the global scratch buffer
-    def lower_buffers(self):
+    def lower_buffers(self, instances):
         offset = 0
         for key, buf in self.buffers.items():
             if key is not Buffer.input and key is not Buffer.output:
                 buf.set_offset(offset)
-                offset += buf.size()
+                offset += buf.instance_size() * instances
 
     # Preprocess the threadblocks for lowering into xml
     def lower_tbs(self):
-        for tb in self.tbs.values():
+        for tb in self.instanced_tbs.values():
             # Sort Ops by step
             # Index scratch buffers
             for op in tb.ops:
                 op.src = self.lower_chunk(op.src)
                 op.dst = self.lower_chunk(op.dst)
-        return Gpu(self.rank, self.tbs.values())
+        return Gpu(self.rank, self.instanced_tbs.values())
 
 @dataclass
 class Chunk:
@@ -525,6 +612,7 @@ class Ref(ChunkRef):
             p.next.append(sendOp)
         sendOp.next.append(receiveOp)
         receiveOp.prev.append(sendOp)
+        dst_chunkref.creator = [receiveOp]
 
         self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
         self.prog.ranks[dst]._add_recv(recvtb, ch, receiveOp)
@@ -561,6 +649,7 @@ class Ref(ChunkRef):
             p.next.append(sendOp)
         sendOp.next.append(rrcOp)
         rrcOp.prev = dst_chunkref.creator + [sendOp]
+        dst_chunkref.creator = [rrcOp]
 
         self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
         self.prog.ranks[dst]._add_receive_reduce_copy(recvtb, ch, rrcOp)

@@ -92,7 +92,7 @@ def clear_dependency(ops):
     for op in ops:
         op.depends = {}
 
-def update_slot_dependency(ops):           
+def update_slot_dependency(slot, ops): 
     for i in range(1, len(ops)):
         dep_op = ops[i-1]
         op = ops[i]
@@ -102,28 +102,50 @@ def update_slot_dependency(ops):
         if op.inst == Instruction.send:
             # If this is a send we depend on the last non-send op
             dep_op_idx = i-1
-            while dep_op.inst is Instruction.send and dep_op_idx >= 0:
+            while dep_op.inst is Instruction.send and dep_op_idx > 0:
                 dep_op_idx -= 1
                 dep_op = ops[dep_op_idx]
             if dep_op.inst is Instruction.send:
                 continue # No true dependency
+            dep_ops = [dep_op]
+        # Receive and reduce instructions depend on the previous receive/reduce instructions
+        # or all parallel sends that happen before it       
+        else:
+            dep_ops = [dep_op]
+            dep_op_idx = i-1
+            while dep_op.inst is Instruction.send and dep_op_idx > 0:
+                dep_op_idx -= 1
+                dep_op = ops[dep_op_idx]
+                if dep_op.inst is Instruction.send:
+                    dep_ops.append(dep_op)
+
         # If we have multiple dependent ops from the same tb keep the one with the highest steps
         depends = op.depends
-        tb = dep_op.tb
-        if tb not in depends or dep_op.step > depends[tb].step:
-            depends[tb] = dep_op
+        for dep_op in dep_ops:
+            tb = dep_op.tb
+            if tb not in depends or dep_op.step > depends[tb].step:
+                depends[tb] = dep_op
 
 # Check that there are no cyclic dependencies
 def check_dependency_cycles(tbs):
     for tb in tbs.values():
         for op in tb.ops:
             deps = op.depends
+            chain = [op]
+            # DFS to check for cycles
             while len(deps) > 0:
                 dep = deps[0]
-                if dep == op:
-                    print("Cyclic dependency")
+                if dep in chain:
+                    print("Cyclic dependency", op)
+                    for op in chain:
+                        print("  ", op)
                     sys.exit(1)
-                deps = deps[1:] + dep.depends
+                next_depends = dep.depends
+                if len(next_depends) > 0:
+                    chain.append(dep)
+                else:
+                    chain = [op]
+                deps = next_depends + deps[1:]
 
 
 # Check there are no ordering violations
@@ -147,9 +169,3 @@ def check_threadblock_ordering(tbs, ranks):
                     # sys.exit(1)
                 other_tbs[(next.rank, next.tb)] = (next_step, op.step)
                 
-
-
-
-
-
-

@@ -13,29 +13,26 @@ from sccl.language.collectives import AllReduce
 def allreduce_ring(instances, channels):
     size = 8
     topology = fully_connected(size)
-    collective = AllReduce(size, size * instances, True, "allreduce")
-    with SCCLProgram(f"allreduce_ring_{channels}channelsperring", topology, collective, size * instances, protocol="LL128"):
-        
-        
-        for i in range(instances):
-            # Reduce ring
-            for step in range(0, size-1):
-                for chunk in range(0, size):
-                    index = chunk * instances + i
-                    start = (chunk + step) % size
-                    c = Rank(start).input(index)
-                    next = (chunk + step + 1) % size
-                    channel = (chunk%channels) * instances + i
-                    c = c.reduce(next, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
-            # Propagate ring
-            for step in range(-1, size-2):
-                for chunk in range(0, size):
-                    index = chunk * instances + i
-                    start = (chunk + step) % size
-                    c = Rank(start).input(index)
-                    next = (chunk + step + 1) % size
-                    channel = (chunk%channels) * instances + i
-                    c = c.send(next, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
+    collective = AllReduce(size, size, True, "allreduce")
+    with SCCLProgram(f"allreduce_ring_{channels}channelsperring", topology, collective, instances, protocol="LL128"):
+        # Reduce ring
+        for step in range(0, size-1):
+            for chunk in range(0, size):
+                index = chunk
+                start = (chunk + step) % size
+                c = Rank(start).input(index)
+                next = (chunk + step + 1) % size
+                channel = chunk%channels
+                c = c.reduce(next, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
+        # Propagate ring
+        for step in range(-1, size-2):
+            for chunk in range(0, size):
+                index = chunk
+                start = (chunk + step) % size
+                c = Rank(start).input(index)
+                next = (chunk + step + 1) % size
+                channel = chunk%channels
+                c = c.send(next, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
                
         XML()
         Check()

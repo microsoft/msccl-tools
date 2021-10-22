@@ -155,6 +155,16 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
             for op in tb.ops:
                 op.depends = list(
                     filter(lambda dep: op_tb_id[dep] != tb_id[tb], op.depends))
+    # Filter out redundant dependencies
+    # e.g. if op1 and op2 depend on op, and op1 happends before op2 
+    # then op2 does not need to explicitly depend on op
+    for gpu in program.gpus:
+        for tb in gpu.threadblocks:
+            running_depends = []
+            for op in tb.ops:
+                op.depends = list(
+                    filter(lambda dep: dep not in running_depends, op.depends))
+                running_depends = running_depends + op.depends
 
     # Mark all ops that have a dependence on them
     has_dependence = set()
