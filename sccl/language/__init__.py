@@ -26,7 +26,7 @@ class SCCLProgram:
         self.protocol = protocol
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
-        self.run_opt = False # Runs optimization passes
+        self.run_opt = True # Runs optimization passes
         # Initialize the input buffers
         num_ranks = topo.num_nodes()
         rank_buffers = collective.init_buffers()
