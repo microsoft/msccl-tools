@@ -51,7 +51,7 @@ def pipeline(num_nodes, instances):
     def rank(node, local_rank):
         return node * num_local_gpus + local_rank
     
-    with SCCLProgram("pipeline-forward", topology, collective, total_chunks_per_loop):
+    with SCCLProgram("pipeline-forward", topology, collective, 1):
 
         # Allocate scratch space
         for n in range(num_nodes):

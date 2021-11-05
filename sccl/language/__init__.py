@@ -7,6 +7,8 @@ from enum import Enum
 from sccl.language.ir import *
 from sccl.language.misc import *
 from sccl.language.passes import *
+from sccl.language.chunk import *
+from sccl.language.buffer import *
 import sccl.collectives as collectives
 
 _current_program = None
@@ -78,40 +80,6 @@ def XML():
 
 def Check():
     return _curr().check()
-
-# Scratch buffer slice with manual indexing
-class BufferSlice:
-    def __init__(self, buf):
-        self.buf = buf
-        self.offset = -1 # Offset into the global scratch buffer
-        self.single_instance_index = 0 # Current index of chunks added
-        self.chunks = {}
-
-    # Returns the global index into the scratch buffer
-    def get_global_index(self, index):
-        assert (self.offset > -1), 'set_offset needs to be called first'
-        return self.offset + index
-
-    def get_buffer(self):
-        return self.buf
-
-    def instance_size(self):
-        return len(self.chunks)
-
-    def set_offset(self, offset):
-        self.offset = offset
-
-    def get_next_index(self, size):
-        index = self.single_instance_index
-        self.single_instance_index += size
-        return index
-
-    def __getitem__(self, index):
-        return self.chunks[index]
-    
-    def __setitem__(self, index, value):
-        self.chunks[index] = value
-
 
 class Process:
     def __init__(self, prog, rank, buffers):
@@ -310,7 +278,7 @@ class Process:
     # Creates a scratch buffer with a name
     def create_scratch(self, name):
         assert (name not in self.buffers), f'Scratch buffer, {name}, already created'
-        self.buffers[name] = BufferSlice(Buffer.scratch)
+        self.buffers[name] = BufferSlice(Buffer.scratch, name)
 
     # Runs optimization pass over slot_ops
     # TODO: This is now doing more than optimization...
@@ -482,53 +450,6 @@ class Process:
                 op.dst = self.lower_chunk(op.dst)
         return Gpu(self.rank, self.instanced_tbs.values())
 
-@dataclass
-class Chunk:
-    origin_rank: int # Rank the chunk initially started at
-    origin_index: int # Index the chunk initially started at
-    dst_rank: int = -1
-    dst_index: int = -1
-
-    def reduce(self, chunk):
-        if type(chunk) is ReduceChunk:
-            return chunk.reduce(self)
-        elif type(chunk) is Chunk:  
-            chunks = [self, chunk]
-            return ReduceChunk(chunks)
-        else:
-            assert True, "Trying to reduce with chunk of None"
-            return None
-
-    def __eq__(self, other):
-        return type(other) is Chunk and self.origin_rank == other.origin_rank and self.origin_index == other.origin_index
-
-    def __lt__(self, other):
-        return self.origin_rank < other.origin_rank or \
-               (self.origin_rank == other.origin_rank and self.origin_index < other.origin_index)
-
-@dataclass
-class ReduceChunk:
-    chunks: list # List of chunks reduced
-
-    def reduce(self, chunk):
-        if type(chunk) is ReduceChunk:
-            chunks = self.chunks + chunk.chunks
-        elif type(chunk) is Chunk:  
-            chunks =self.chunks + [chunk]
-        else:
-            assert True, "Trying to reduce with chunk of None"
-        return ReduceChunk(chunks)
-
-    def sort(self):
-        self.chunks.sort()
-
-    # Two reduce chunks are equal if they contain the same list of
-    # chunks being reduced
-    def __eq__(self, other):
-        self.sort()
-        other.sort()
-        return self.chunks == other.chunks
-
 
 @dataclass
 class Ref(ChunkRef):
@@ -592,7 +513,7 @@ class Ref(ChunkRef):
             index = self.index
             buffer = self.buffer
         elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
-            index = self.prog.ranks[dst].buffers[buffer].get_next_index(self.size)
+            index = self.prog.ranks[dst].buffers[buffer].instance_size()
 
         # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
         buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
