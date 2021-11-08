@@ -19,6 +19,7 @@ class KnownTopologies:
             'Star': self._sized_topo(topologies.star),
             'AMD4': self._fixed_topo(topologies.amd4),
             'AMD8': self._fixed_topo(topologies.amd8),
+            'AMDnew': self._fixed_topo(topologies.amdnew),
             'DGX1': self._fixed_topo(topologies.dgx1),
             'DGX2': self._fixed_topo(lambda: topologies.hub_and_spoke(16)),
             'NVLinkOnly': self._fixed_topo(topologies.nvlink_only),
