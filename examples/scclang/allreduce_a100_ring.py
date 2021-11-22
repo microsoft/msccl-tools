@@ -14,7 +14,7 @@ def allreduce_ring(instances, channels):
     size = 8
     topology = fully_connected(size)
     collective = AllReduce(size, size, True, "allreduce")
-    with SCCLProgram(f"allreduce_ring_{channels}channelsperring", topology, collective, instances, protocol="LL128"):
+    with SCCLProgram(f"allreduce_ring_{channels}channelsperring", topology, collective, instances, protocol="LL128", threadblocks=-1):
         # Reduce ring
         for step in range(0, size-1):
             for chunk in range(0, size):

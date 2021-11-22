@@ -1,15 +1,18 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-
 from dataclasses import dataclass
 from enum import Enum
+import functools
 from sccl.language.ir import *
 from sccl.language.misc import *
 from sccl.language.passes import *
 from sccl.language.chunk import *
 from sccl.language.buffer import *
+from sccl.language.rank_dag import *
+from sccl.language.visualize import *
 import sccl.collectives as collectives
+
 
 _current_program = None
 def _curr():
@@ -19,22 +22,45 @@ def _curr():
     return _current_program
 
 class SCCLProgram:
-    def __init__(self, name, topo, collective, instances, protocol='Simple', interleaved_replication=True):
+    def __init__(self, name, topo, collective, instances, threadblocks=0, protocol='Simple', interleaved_replication=True):
         self.name = name
         self.topo = topo
         self.collective = collective       
+        self.num_ranks = topo.num_nodes()
         self.ranks = []
         self.instances = instances
+        self.threadblocks = threadblocks
         self.protocol = protocol
         self.interleaved_replication = interleaved_replication
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
         self.run_opt = True # Runs optimization passes
         # Initialize the input buffers
-        num_ranks = topo.num_nodes()
-        rank_buffers = collective.init_buffers()
-        for r in range(num_ranks):
-            self.ranks.append(Process(self, r, rank_buffers[r]))
+        self.chunk_dag = ChunkDAG()
+        self.buffers = collective.init_buffers()
+        self.rank_dags = [RankDAG(r, self.buffers[r]) for r in range(self.num_ranks)]
+        for r in range(self.num_ranks):
+            self.ranks.append(Process(self, r, self.buffers[r]))
+            for index, chunk in enumerate(self.buffers[r][Buffer.input]):
+                ref = self.get_ref(r, Buffer.input, index, 1)
+                self.chunk_dag.init_chunk(chunk, ref)
+
+    def add_send(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
+        sb = self.buffers[src][src_buffer]
+        db = self.buffers[dst][dst_buffer]
+        for i in range(size):
+            db[dst_index + i] = sb[src_index + i]
+
+    def add_reduce(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
+        sb = self.buffers[src][src_buffer]
+        db = self.buffers[dst][dst_buffer]
+        for i in range(size):
+            reduce_chunk = db[dst_index + i]
+            sent_chunk = sb[src_index + i]
+            db[dst_index + i] = reduce_chunk.reduce(sent_chunk)
+
+    def get_ref(self, rank, buffer, index, size):
+        return Ref(rank, buffer, index, size, self)
 
     # Returns a Process corresponding to rank number
     def rank(self, rank):
@@ -47,18 +73,23 @@ class SCCLProgram:
 
     # Lower program to XML
     def lower(self):
-        for rank in self.ranks:
-            if self.run_opt:
-                rank.optimize()
-            rank.reorder_ops()
-            rank.replicate(self.instances, interleaved=self.interleaved_replication)
-            rank.detect_dependencies()
-            rank.lower_buffers(self.instances)
-        for rank in self.ranks:
-            check_dependency_cycles(rank.tbs)
-            check_threadblock_ordering(rank.tbs, self.ranks)
-        gpu_prgms = [rank.lower_tbs() for rank in self.ranks]
+        self.chunk_dag._complete_metadata()
+        self.chunk_dag.lower_rank_dag(self.rank_dags)
+        for r in range(self.num_ranks):
+            self.rank_dags[r].optimize()
+            if self.threadblocks == -1:
+                self.rank_dags[r].assign_tbs()
+            else:
+                self.rank_dags[r].auto_assign_tbs(self.threadblocks)
+            self.rank_dags[r].lower_pt1(self.instances)
+            # check_threadblock_ordering(self.rank_dags[r].tbs, self.rank_dags)
+
+        gpu_prgms = []
+        for r in range(self.num_ranks):
+            gpu_prgms.append(self.rank_dags[r].lower_pt2(self.instances, self.buffers, self.interleaved_replication))
+
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
+       
 
     def __enter__(self):
         global _current_program
@@ -71,6 +102,19 @@ class SCCLProgram:
         if _current_program != self:
             raise RuntimeError("This program is not currently in context")
         _current_program = None
+
+    def print_chunk_dag(self):
+        visualize_chunk_dag(self.chunk_dag.chunk_paths)
+
+    def print_rank_dags(self, rank):
+        if rank == -1:
+            for r in range(len(self.ranks)):
+                visualize_rank_dag(self.rank_dags[r].operations)
+        else:
+            visualize_rank_dag(self.rank_dags[rank].operations)
+
+def Print():
+    _curr().print_chunk_dag()
 
 def Rank(index):
     return _curr().rank(index)
@@ -91,177 +135,15 @@ class Process:
         self.send_channel_mapping = {} # sender rank -> channels -> tbid
         self.recv_channel_mapping = {} # receiver rank -> channels -> tbid
         self.tb_count = 0
-        self.slot_ops = {} # (buffer, idx) -> list of ops on this slot
-
-    def _get_tbid(self, inst, other_rank, ch):
-        key = (inst, other_rank, ch)
-        if key in self.tb_mapping:
-            tbid = self.tb_mapping[key]
-        else: # TODO: Currently can mix default tb assignment and manual tb assignment which will break
-            self.tb_mapping[key] = self.tb_count
-            tbid = self.tb_count
-            self.tb_count += 1
-        return tbid
-
-    def _tb_addop(self, tbid, sendto, receivefrom, ch, op):
-        def check_tb_channels():
-            # Check this channel isn't being used by another tb to send to the same rank
-            if sendto != -1:
-                if sendto not in self.send_channel_mapping:
-                    self.send_channel_mapping[sendto] = {ch:tbid}
-                else:
-                    senders_channels = self.send_channel_mapping[sendto]
-                    assert ch not in senders_channels or senders_channels[ch] == tbid, \
-                        f'Cannot assign threadblock {tbid} to channel {ch}. Already being used by threadblock {senders_channels[ch]} to send to rank {sendto}'
-                    self.send_channel_mapping[sendto][ch] = tbid
-                
-            # Check this channel isn't being used by another tb to receive from the same rank
-            if receivefrom != -1:
-                if receivefrom not in self.recv_channel_mapping:
-                    self.recv_channel_mapping[receivefrom] = {ch:tbid}
-                else:
-                    receivers_channels = self.recv_channel_mapping[receivefrom]
-                    assert ch not in receivers_channels or receivers_channels[ch] == tbid, \
-                        f'Cannot assign threadblock {tbid} on channel {ch}. Already being used by threadblock {receivers_channels[ch]} to receive from {receivefrom}'
-                    self.recv_channel_mapping[receivefrom][ch] = tbid
-            
-        # Create a new threadblock if tbid doesn't exist
-        if tbid not in self.tbs:
-            check_tb_channels()
-            self.tbs[tbid] = Threadblock(ch, sendto, receivefrom, ops=[op])
-
-        # Check it is valid to use this threadblock if already exists
-        else:
-            tb = self.tbs[tbid]
-            assert (sendto == -1 or tb.send == -1 or tb.send == sendto), \
-                f'Rank {self.rank}: Threadblock {tbid} is already set to send to {tb.send}, trying to send to {sendto}'
-            assert (receivefrom == -1 or tb.recv == -1 or tb.recv == receivefrom), \
-                   f'Rank {self.rank}: Threadblock {tbid} is already set to receive from {tb.recv}, trying to receive from {receivefrom}'
-            check_tb_channels()
-            # Update existing threadblocks if adding a sender/receiver when one previously didn't exist
-            if tb.send == -1 and sendto != -1:
-                tb.send = sendto
-            if tb.recv == -1 and receivefrom != -1:
-                tb.recv = receivefrom
-            tb.ops.append(op)
-
-
-    def _add_send(self, tbid, ch, op):
-        assert(op.inst == Instruction.send)
-        sendto = op.dst.rank
-
-        # Update tb and assign to a default tb if not given
-        if tbid == -1:
-            tbid = self._get_tbid(Instruction.send, sendto, ch)
-
-        self._tb_addop(tbid, sendto, -1, ch, op)
-
-        # Fill in op fields 
-        op.tb = tbid
-        op.step = len(self.tbs[tbid].ops)-1
-        
-        # Update slot_ops 
-        for i in range(op.src.size):
-            self._update_slot_ops(op.src.buffer, op.src.index+i, op, tbid)
-
-        
-    def _add_recv(self, tbid, ch, op):
-        assert(op.inst == Instruction.recv)
-        receivefrom = op.src.rank
-        if tbid == -1:
-            tbid = self._get_tbid(Instruction.recv, receivefrom, ch)
-        recvd_chunkref = op.dst
-
-        # Update tbs
-        self._tb_addop(tbid, -1, receivefrom, ch, op)
-
-        # Fill in op fields
-        op.tb = tbid
-        op.step = len(self.tbs[tbid].ops)-1
-
-         # Update buffer with received chunks, update dependencies for those chunks
-        for i in range(op.src.size):
-            self.buffers[op.dst.buffer][op.dst.index+i] = self.prog.ranks[op.src.rank].buffers[op.src.buffer][op.src.index+i]
-            self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
-
-    def _add_copy(self, tbid, ch, op):
-        assert(op.inst == Instruction.copy)
-        if tbid == -1:
-            tbid = self._get_tbid(Instruction.copy, -1, ch)
-        
-        # Update tbs
-        self._tb_addop(tbid, -1, -1, ch, op)
-        
-        # Fill in op fields 
-        op.tb = tbid
-        op.step = len(self.tbs[tbid].ops)-1
-
-        # Update buffer copied chunks and dependencies
-        for i in range(op.src.size):
-            self.buffers[op.dst.buffer][op.dst.index+i] = self.buffers[op.src.buffer][op.src.index+i]
-            self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
-            self._update_slot_ops(op.src.buffer, op.src.index+i, op, tbid)
-
-    def _add_receive_reduce_copy(self, tbid, ch, op):
-        receivefrom = op.src.rank
-        if tbid == -1:
-            tbid = self._get_tbid(Instruction.recv, receivefrom, ch) 
-        recvd_chunkref = op.dst
-
-        # Update tbs
-        self._tb_addop(tbid, -1, receivefrom, ch, op)
-
-        # Fill in op fields 
-        op.tb = tbid
-        op.step = len(self.tbs[tbid].ops)-1
-
-        # Update buffer with reduced chunks and dependencies for each chunk
-        for i in range(op.src.size):
-            reduce_chunk = self.buffers[op.dst.buffer][op.dst.index+i]
-            other_chunk = self.prog.ranks[op.src.rank].buffers[op.src.buffer][op.src.index+i]
-            self.buffers[op.dst.buffer][op.dst.index+i] = reduce_chunk.reduce(other_chunk)
-            self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
-
-    def _add_reduce(self, tbid, ch, op):
-        receivefrom = op.src.rank
-        if tbid == -1:
-            tbid = self._get_tbid(Instruction.copy, receivefrom, ch)
-        recvd_chunkref = op.dst
-
-        # Update buffer with reduced chunk and dependences
-        for i in range(op.src.size):
-            reduce_chunk = self.buffers[op.dst.buffer][op.dst.index+i]
-            other_chunk = self.prog.ranks[op.src.rank].buffers[op.src.buffer][op.src.index+i]
-            self.buffers[op.dst.buffer][op.dst.index+i] = other_chunk.reduce(reduce_chunk)
-            self._update_slot_ops(op.dst.buffer, op.dst.index+i, op, tbid)
-            self._update_slot_ops(op.src.buffer, op.src.index+i, op, tbid)
-
-        # Update tbs
-        self._tb_addop(tbid, -1, -1, ch, op)
-
-        # Fill in op fields 
-        op.tb = tbid
-        op.step = len(self.tbs[tbid].ops)-1
-
-    def _update_slot_ops(self, buffer, index, op, tbid):
-        key = (buffer, index)
-        if key in self.slot_ops:
-            self.slot_ops[key].append(op)
-        else:
-            self.slot_ops[key] = [op]
 
     def get_ref(self, buffer, index, size):
-        creator = []
+        return Ref(self.rank, buffer, index, size, self.prog)
+
+    def get_chunks(self, buffer, index, size=1):
+        chunks = [None] * size
         for i in range(index, index+size):
-            if (buffer, i) in self.slot_ops:
-                creator_index = len(self.slot_ops[(buffer, i)]) - 1
-                op = self.slot_ops[(buffer, i)][creator_index]
-                while op.inst == Instruction.send and creator_index > 0:
-                    creator_index -= 1
-                    op = self.slot_ops[(buffer, i)][creator_index]
-                if op.inst != Instruction.send:
-                    creator.append(op)
-        return Ref(buffer, index, size, self.prog, self.rank, creator=creator)
+            chunks[i-index] = self.buffers[buffer][i]
+        return chunks
 
     # Returns a reference to the chunk located at index of the input buffer.
     def input(self, index, size=1):
@@ -280,181 +162,9 @@ class Process:
         assert (name not in self.buffers), f'Scratch buffer, {name}, already created'
         self.buffers[name] = BufferSlice(Buffer.scratch, name)
 
-    # Runs optimization pass over slot_ops
-    # TODO: This is now doing more than optimization...
-    def optimize(self):
-        for k, ops in self.slot_ops.items():
-            rrcs_rrs(ops, self.tbs)
-            rcs(ops, self.tbs)
-        # Delete ops that are no longer needed
-        # Instruction reordering within tbs
-        for tbid, tb in self.tbs.items():
-            delete_pass(tb)
-
-    def reorder_ops(self):
-        rerun = False
-        for tbid, tb in self.tbs.items():
-            rerun |= self.order_ops_in_tb(tbid)
-        if rerun:
-            self.reorder_ops()
-    
-    def detect_dependencies(self):
-        for slot, ops in self.instanced_slot_ops.items():
-            update_slot_dependency(slot, ops)
-        for _, ops in self.instanced_slot_ops.items():
-            for op in ops:
-                if type(op.depends) is dict:
-                    op.depends = list(op.depends.values())
-
-    # If chunks are sent from one threadblock x to threadblock y they are received in the same order
-    # This is required to avoid deadlock. 
-    # tb:x send(a), send(b) -> tb:y recv(a), recv(b)
-    # Currently the order is defined by programmer, but we need place RRCS/RRS/RCS instructions
-    # appropriately to avoid deadlock
-    # Returns whether or not operations were re-ordered
-    # TODO: Eventually want to order operations automatically based off priority
-    # TODO: Does this terminate?
-    def order_ops_in_tb(self, tbid):
-        tb = self.tbs[tbid]
-        other_tbs = {} # TBs this TB communicates with (r, tb) -> step of last op
-        # Gather all unique TBs this TB communicates with
-        rerun = False
-        for op in tb.ops:
-            for next in op.next:
-                other_tbs[(next.rank, next.tb)] = (-1, -1)
-        # Check that the ordering of everything is preserved
-        for op in tb.ops:
-            this_current_step = op.step
-            for next in op.next:
-                other_current_step = next.step
-                other_last_step, this_last_step = other_tbs[(next.rank, next.tb)]
-                if other_last_step > other_current_step:
-                    # Reorder this current op (step, op) to (prev_tb_step, op)
-                    tb.ops[this_current_step] = tb.ops[this_last_step]
-                    tb.ops[this_last_step] = op
-                    tb.ops[this_current_step].step = this_current_step
-                    tb.ops[this_last_step].step = this_last_step
-                    return True
-                other_tbs[(next.rank, next.tb)] = (other_current_step, this_current_step)
-        return False
-
-    # Automatically replicates the algorithm instance number of times
-    # interleaved sets the replication policy
-    # if True chunks are split as: ChunkA ChunkB -> ChunkA0 ChunkA1 .. ChunkB0 ChunkB1 ...
-    # if false chunks are divided as ChunkA0 ChunkB0 ChunkA1 ChunkB1 ...
-    # For collectives were chunks are designated for a particular GPU (e.g. AllToAll) 
-    # only interleaved replication will be correct
-    # Interleaved policy only supports single count sends/receives from the input/output buffer
-    # (multicount ops are fine between scratch)
-    def replicate(self, instances, interleaved):
-        if instances == 1:
-            self.instanced_tbs = self.tbs
-            self.instanced_slot_ops = self.slot_ops
-            return 
-
-        new_tbs = {}
-        new_slot_ops = {}
-
-        def is_scratch(buffer):
-            return buffer != Buffer.input and buffer != Buffer.output
-
-        def get_new_index(rank, buffer, index, size, i):
-            # Scratch buffers always use batched
-            if is_scratch(buffer):
-                buf_instance_len = self.prog.ranks[rank].buffers[buffer].instance_size()
-                return buf_instance_len * i + index
-            # If this is operating on the input/output buffer then replication strategy can be either interleaved or batched
-            # This is to fit with the semantics of certain collectives
-            elif interleaved:
-                return  index * instances + i * size
-            else:
-                return  len(self.prog.ranks[rank].buffers[buffer]) * i + index
-
-        for i in range(instances):
-            multichunk_ops = {}
-            for slot, ops in self.slot_ops.items():
-                buf, idx = slot
-                new_ops = []
-                for s, op in enumerate(ops):
-                    if not is_scratch(op.src.buffer) and not is_scratch(op.dst.buffer) and op.src.size > 1 and interleaved:
-                        print(op.src)
-                        print(op.dst)
-                        assert False, "Cannot autoreplicate with interleaved policy with multi-chunk ops. Manually create multiple instances or try batched."
-
-                    # For multichunk ops - each affected slot should have a pointer to the same op
-                    if op not in multichunk_ops:
-                        # Get the starting index of this operation
-                        src_index = get_new_index(op.src.rank, op.src.buffer, op.src.index, op.src.size, i)
-                        dst_index = get_new_index(op.dst.rank, op.dst.buffer, op.dst.index, op.dst.size, i)
-
-                        new_src = Ref(op.src.buffer, src_index, op.src.size, op.src.prog, op.src.rank)
-                        new_dst = Ref(op.dst.buffer, dst_index, op.dst.size, op.dst.prog, op.dst.rank)
-                        new_tbid = op.tb * instances + i
-                        new_op = Op(op.inst, self.rank, new_src, new_dst, {}, tb=new_tbid, step=op.step)
-                        multichunk_ops[op] = new_op
-                    else:
-                        new_op = multichunk_ops[op]
-                    new_ops.append(new_op)
-                new_idx = get_new_index(self.rank, buf, idx, 1, i)
-                new_slot = (buf, new_idx)
-                new_slot_ops[new_slot] = new_ops
-
-        for tbid, tb in self.tbs.items():
-            for i in range(instances):
-                instance_tbid = tbid * instances + i
-                channel = tb.channel * instances + i
-                instance_ops = []
-                for op in tb.ops:
-                    # Get the index in slot_ops of this op
-                    # Use the index to index into the proper instanced_slot_ops created earlier to grab the op.
-                    if op.inst == Instruction.send:
-                        key = (op.src.buffer, op.src.index)
-                        new_index = get_new_index(op.src.rank, op.src.buffer, op.src.index, 1, i)
-                        new_key = (op.src.buffer, new_index)
-                    else:
-                        key = (op.dst.buffer, op.dst.index)
-                        new_index = get_new_index(op.dst.rank, op.dst.buffer, op.dst.index, 1, i)
-                        new_key = (op.dst.buffer, new_index)
-                    s = self.slot_ops[key].index(op)
-                    instance_ops.append(new_slot_ops[new_key][s])
-                tb_instance = Threadblock(channel, tb.send, tb.recv, instance_ops)
-                new_tbs[instance_tbid] = tb_instance
-
-        self.instanced_tbs = new_tbs
-        self.instanced_slot_ops = new_slot_ops
-
-    # Convert local scratch buffers to index into one global scratch buffer
-    def lower_chunk(self, chunk):
-        if chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
-            rank = self.prog.ranks[chunk.rank]
-            buffer = rank.buffers[chunk.buffer].get_buffer()
-            index = rank.buffers[chunk.buffer].get_global_index(chunk.index)
-            return ChunkRef(buffer, index, chunk.size)
-        return chunk
-
-    # Assigns each scratch buffer an offset into the global scratch buffer
-    def lower_buffers(self, instances):
-        offset = 0
-        for key, buf in self.buffers.items():
-            if key is not Buffer.input and key is not Buffer.output:
-                buf.set_offset(offset)
-                offset += buf.instance_size() * instances
-
-    # Preprocess the threadblocks for lowering into xml
-    def lower_tbs(self):
-        for tb in self.instanced_tbs.values():
-            # Sort Ops by step
-            # Index scratch buffers
-            for op in tb.ops:
-                op.src = self.lower_chunk(op.src)
-                op.dst = self.lower_chunk(op.dst)
-        return Gpu(self.rank, self.instanced_tbs.values())
-
-
 @dataclass
 class Ref(ChunkRef):
     prog: SCCLProgram
-    rank: int
     missing: set = field(default_factory=set)
     creator: list = field(default_factory=list) # The operation(s) that created this chunk on this rank
 
@@ -466,17 +176,6 @@ class Ref(ChunkRef):
 
     def _get_chunk(self, index):
         return self.prog.ranks[self.rank].buffers[self.buffer][index]
-
-    def _copy(self, buffer=Buffer.output, index=-1, tb=-1, ch=0):
-        dst_chunkref = self.prog.ranks[self.rank].get_ref(buffer, index, self.size)
-        op = Op(Instruction.copy, self.rank, self, dst_chunkref, {})
-
-        op.prev = self.creator
-        for p in op.prev:
-            p.next.append(op)
-
-        self.prog.ranks[self.rank]._add_copy(tb, ch, op)
-        return dst_chunkref
 
     def split(self, num):
         assert (self.size % num == 0), f'Trying to split a chunk of {self.size} elements into {num} parts'
@@ -502,7 +201,7 @@ class Ref(ChunkRef):
         missing = set(range(first.index, end))
         missing.difference_update(set(range(first.index, first._end())).difference(first.missing))
         missing.difference_update(set(range(second.index, second._end())).difference(second.missing))
-        return Ref(self.buffer, first.index, end - first.index, self.prog, self.rank, missing) # Broken
+        return Ref(self.rank, self.buffer, first.index, end - first.index, self.prog, missing) # Broken
         
 
     def send(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=0):
@@ -518,62 +217,33 @@ class Ref(ChunkRef):
         # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
         buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
 
-        # Local copy
-        if dst == self.rank:
-            return self._copy(buffer, index, sendtb, ch)
-
         # Direct send
-        assert (self.prog.topo.link(self.rank, dst)), f'No link from {self.rank} to {dst}'
+        assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
         dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
-        sendOp =  Op(Instruction.send, self.rank, self, dst_chunkref, {})
-        receiveOp = Op(Instruction.recv, dst, self, dst_chunkref, {})
 
-        sendOp.prev = self.creator
-        for p in sendOp.prev:
-            p.next.append(sendOp)
-        sendOp.next.append(receiveOp)
-        receiveOp.prev.append(sendOp)
-        dst_chunkref.creator = [receiveOp]
+        self.prog.add_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
-        self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
-        self.prog.ranks[dst]._add_recv(recvtb, ch, receiveOp)
+        chunks = self.prog.ranks[self.rank].get_chunks(self.buffer, self.index, self.size)
+        self.prog.chunk_dag.add_send(chunks, self, dst_chunkref, sendtb, recvtb, ch)
+
         return dst_chunkref
 
-    def _local_reduce(self, buffer, index, tb, ch):
-        dst_chunkref = self.prog.ranks[self.rank].get_ref(buffer, index, self.size)
-        op = Op(Instruction.reduce, self.rank, self, dst_chunkref, {})
-
-        op.prev = self.creator + dst_chunkref.creator
-        for p in op.prev:
-            p.next.append(op)
-
-        self.prog.ranks[self.rank]._add_reduce(tb, ch, op)
-        return dst_chunkref
-    
     def reduce(self, dst, buffer, index=-1, sendtb=-1, recvtb=-1, ch=0):
 
         # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
         buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
 
-        # Local reduce
-        if dst == self.rank:
-            return self._local_reduce(buffer, index, sendtb, ch)
-
         # Receive reduce copy
-        assert (self.prog.topo.link(self.rank, dst)), f'No link from {self.rank} to {dst}'
+        assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
         dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
-        sendOp = Op(Instruction.send, self.rank, self, dst_chunkref, {})
-        rrcOp = Op(Instruction.recv_reduce_copy, dst, self, dst_chunkref, {})
 
-        sendOp.prev = self.creator
-        for p in sendOp.prev:
-            p.next.append(sendOp)
-        sendOp.next.append(rrcOp)
-        rrcOp.prev = dst_chunkref.creator + [sendOp]
-        dst_chunkref.creator = [rrcOp]
+        chunks1 = self.prog.ranks[self.rank].get_chunks(self.buffer, self.index, self.size)
+        chunks2 = self.prog.ranks[dst].get_chunks(buffer, index, self.size)
 
-        self.prog.ranks[self.rank]._add_send(sendtb, ch, sendOp)
-        self.prog.ranks[dst]._add_receive_reduce_copy(recvtb, ch, rrcOp)
+        self.prog.add_reduce(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
+
+        reduce_chunks = self.prog.ranks[dst].get_chunks(buffer, index, self.size)
+        self.prog.chunk_dag.add_reduce(chunks1, chunks2, reduce_chunks, self, dst_chunkref, sendtb, recvtb, ch)
         return dst_chunkref
 
     def get_origin_index(self, index=0):
@@ -590,3 +260,152 @@ class Ref(ChunkRef):
 
     def print_chunk_info(self, index=0):
         print(self._get_chunk(index + self.index)) 
+
+
+@dataclass
+class ChunkOp():
+    inst: ChunkInstruction
+    src: Ref # Ref Chunk acted on
+    dst: Ref # Ref Chunk created
+    sendtb: int = -1# For lowering to RankInstructions
+    recvtb: int = -1#  For lowering to RankInstructions
+    ch: int = -1 # For lowering to RankInstructions
+    steps_from_start:int  = -1
+    steps_to_end: int = -1 
+    prev: list = field(default_factory=list) # Previous ChunkOps
+    next: list = field(default_factory=list) # Next ChunkOps
+    visited = False
+    num = -1
+
+    def __repr__(self):
+        return f'ChunkOp({self.inst} {self.dst.rank} {self.dst.buffer} {self.dst.index})'
+
+    def __lt__(self, other):
+        return self.steps_from_start < other.steps_from_start
+
+    def __hash__(self):
+        return hash((self.inst, self.dst.rank, self.dst.index, self.dst.buffer)) # TODO 
+
+def same_slot(ref1, ref2):
+    return ref1.rank == ref2.rank and ref1.buffer == ref2.buffer and ref1.index == ref2.index
+
+# Returns if there is overlap between the refs
+def overlap_refs(ref1, ref2):
+    same_location = ref1.rank == ref2.rank and ref1.buffer == ref2.buffer
+    contained1 = ref1.index >= ref2.index and (ref1.index + ref1.size) <= (ref2.index + ref2.size)
+    contained2 = ref2.index >= ref1.index and (ref2.index + ref2.size) <= (ref1.index + ref1.size)
+    return same_location and (contained1 or contained2)
+
+class ChunkDAG:
+
+    def __init__(self):
+        self.chunks = []
+        self.chunk_paths = {} # chunk -> ChunkOp. Stores the entry point to where every chunk is created
+        self.max_hops = -1
+
+    # Initialize the ChunkDAG with starting chunks
+    def init_chunk(self, chunk, ref):
+        op = ChunkOp(ChunkInstruction.start, None, ref, steps_from_start=-1)
+        self.chunks.append(chunk)
+        self.chunk_paths[chunk] = op
+
+    def _find_prev_op_for_chunk(self, chunk, ref):
+        prev_op = None
+        frontier = [self.chunk_paths[chunk]]
+        while len(frontier) > 0:
+            current_op = frontier[0]
+            if overlap_refs(ref, current_op.dst):
+                prev_op = current_op
+            frontier = frontier[1:] + current_op.next
+        return prev_op
+
+    def add_send(self, chunks, src, dst, sendtb, recvtb, ch):
+        # Find the previous operation for these chunks
+        prev_ops = []
+        steps_from_start = 0
+        for chunk in chunks:
+            prev_op = self._find_prev_op_for_chunk(chunk, src)
+            steps_from_start = max(steps_from_start, prev_op.steps_from_start)
+            prev_ops.append(prev_op)
+        op = ChunkOp(ChunkInstruction.send, src, dst, sendtb, recvtb, ch, steps_from_start+1)
+        
+        for prev_op in prev_ops:
+            prev_op.next.append(op)
+        op.prev = prev_ops
+
+    def add_reduce(self, chunks1, chunks2, reduce_chunks, src, dst, sendtb, recvtb, ch):
+        # self.chunks.append(reduce_chunks)
+        prev_ops = []
+        steps_from_start = 0
+        # Find the previous operations that reduce builds off
+        for chunk1, chunk2 in zip(chunks1, chunks2):
+            prev_op_src = self._find_prev_op_for_chunk(chunk1, src)
+            prev_op_dst = self._find_prev_op_for_chunk(chunk2, dst)
+            steps_from_start = max(prev_op_src.steps_from_start, prev_op_dst.steps_from_start, steps_from_start)
+            prev_ops.append(prev_op_src)
+            prev_ops.append(prev_op_dst)
+            
+        op = ChunkOp(ChunkInstruction.reduce, src, dst, sendtb, recvtb, ch, steps_from_start+1)
+
+        for prev_op in prev_ops:
+            prev_op.next.append(op)
+            op.prev.append(prev_op)
+
+        # Reduce operations create new chunks, so keep a pointer to a new chunk
+        for rc in reduce_chunks:
+            self.chunk_paths[rc] = op
+
+    def _complete_metadata(self):
+        def dfs(op):
+            if len(op.next) == 0:
+                op.steps_to_end = 0
+            else:
+                for o in op.next:
+                    dfs(o)
+                op.steps_to_end = functools.reduce(lambda cur, x: max(cur, x.steps_to_end+1), op.next, 0)
+
+        for chunk, op in self.chunk_paths.items():
+            if op.inst == ChunkInstruction.start:
+                dfs(op)
+            
+    def lower_rank_dag(self, rank_dags):
+        frontier = []
+        visited = set()
+
+        for chunk, op in self.chunk_paths.items():
+            if len(op.prev) == 0: 
+                heapq.heappush(frontier, op)
+
+        while len(frontier) > 0:
+            op = heapq.heappop(frontier)
+            if op not in visited:
+                sendtb = op.sendtb
+                recvtb = op.recvtb
+                ch =  op.ch
+                if op.inst == ChunkInstruction.start:
+                    rank = op.dst.rank
+                    rank_dags[rank].add_start(op.dst.buffer, op.dst.index, op.dst)
+                elif op.inst == ChunkInstruction.send:
+                    sender = op.src.rank
+                    receiver = op.dst.rank
+                    if sender != receiver:
+                        sop = rank_dags[sender].add_send(op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2+1, sendtb, ch)
+                        rop = rank_dags[receiver].add_recv(op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
+                        sop.match = [rop]
+                        rop.match = [sop]
+                    else:
+                        rank_dags[sender].add_copy(op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb)
+                elif op.inst == ChunkInstruction.reduce:
+                    sender = op.src.rank
+                    receiver = op.dst.rank
+                    if sender != receiver:
+                        sop = rank_dags[sender].add_send(op.src, op.dst, op.steps_from_start*2,op.steps_to_end*2+1, sendtb, ch)
+                        rop = rank_dags[receiver].add_recv_reduce_copy(op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2+1, recvtb, ch)
+                        sop.match = [rop]
+                        rop.match = [sop]
+                    else:
+                        rank_dags[sender].add_reduce(op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb)
+
+                for o in op.next:
+                    heapq.heappush(frontier, o)
+                visited.add(op)

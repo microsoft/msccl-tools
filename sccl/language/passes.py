@@ -126,7 +126,7 @@ def update_slot_dependency(slot, ops):
             if tb not in depends or dep_op.step > depends[tb].step:
                 depends[tb] = dep_op
 
-# Check that there are no cyclic dependencies
+# Check that there are no cyclic dependencies within a Rank
 def check_dependency_cycles(tbs):
     for tb in tbs.values():
         for op in tb.ops:
@@ -148,7 +148,7 @@ def check_dependency_cycles(tbs):
                 deps = next_depends + deps[1:]
 
 
-# Check there are no ordering violations
+# Check there are no ordering violations between threadblocks across Ranks
 def check_threadblock_ordering(tbs, ranks):
     for tb in tbs.values():
         other_tbs = {} # TBs this TB communicates with (r, tb) -> step of last op
@@ -166,6 +166,6 @@ def check_threadblock_ordering(tbs, ranks):
                 other_tb_step, prev_tb_step = other_tbs[(next.rank, next.tb)]
                 if other_tb_step > next_step:
                     print("Ordering problem", other_tb_step, next_step, op)
-                    # sys.exit(1)
+                    sys.exit(1)
                 other_tbs[(next.rank, next.tb)] = (next_step, op.step)
                 

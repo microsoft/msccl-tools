@@ -24,7 +24,7 @@ class Gpu:
 
 @dataclass
 class Threadblock:
-    channel: int
+    channel: int = -1
     send: int = -1
     recv: int = -1
     ops: list = field(default_factory=list)
@@ -34,6 +34,14 @@ class Threadblock:
 
     def __hash__(self):
         return id(self)
+
+class ChunkInstruction(Enum):
+    start = 'start'
+    reduce = 'reduce'
+    send = 'send'
+
+    def __str__(self):
+        return self.value
 
 
 class Instruction(Enum):
@@ -47,6 +55,7 @@ class Instruction(Enum):
     copy = 'cpy'
     reduce = 're'
     delete = 'd' 
+    start = 'st'
 
     def __str__(self):
         return self.value
@@ -63,12 +72,13 @@ class Buffer(Enum):
 
 @dataclass
 class ChunkRef:
+    rank: int
     buffer: Buffer
     index: int
     size: int
 
     def __hash__(self):
-        return hash(self.buffer) + hash(self.index) + hash(self.size)
+        return hash((self.rank, self.buffer, self.index, self.size))
 
 
 @dataclass
@@ -82,6 +92,11 @@ class Op:
     tb: int = -1 # TB this op is assigned to
     prev: list = field(default_factory=list)
     next: list = field(default_factory=list)
+    num: int = -1
+    chunk_step: int = -1
+    priority: int = -1
+    match: list = field(default_factory=list) 
+    channel: int = -1
 
     def cnt(self):
         if self.src:
@@ -93,8 +108,24 @@ class Op:
         else:
             return 0
 
+    def is_send(self):
+         return self.inst == Instruction.send or \
+            self.inst == Instruction.recv_reduce_copy_send or \
+            self.inst == Instruction.recv_copy_send or \
+            self.inst == Instruction.recv_reduce_send
+
+    def is_recv(self):
+        return  self.inst == Instruction.recv or \
+            self.inst == Instruction.recv_reduce_copy or \
+            self.inst == Instruction.recv_reduce_copy_send or \
+            self.inst == Instruction.recv_copy_send or \
+            self.inst == Instruction.recv_reduce_send
+
     def __eq__(self, other):
         return self is other
+
+    def __lt__(self, other):
+        return self.priority > other.priority
 
     def __hash__(self):
         return id(self)

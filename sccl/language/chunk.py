@@ -22,6 +22,9 @@ class Chunk:
             assert True, "Trying to reduce with chunk of None"
             return None
 
+    def __hash__(self):
+        return hash((self.origin_rank, self.origin_index))
+
     def __eq__(self, other):
         return type(other) is Chunk and self.origin_rank == other.origin_rank and self.origin_index == other.origin_index
 
@@ -44,6 +47,9 @@ class ReduceChunk:
 
     def sort(self):
         self.chunks.sort()
+
+    def __hash__(self):
+        return hash(tuple(self.chunks))
 
     # Two reduce chunks are equal if they contain the same list of
     # chunks being reduced

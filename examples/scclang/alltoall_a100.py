@@ -7,7 +7,7 @@ from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllToAll
 
-def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
+def alltoall_hierarchical(num_nodes, gpus_per_node, instances, threadblocks, ib_channels):
     num_ranks = num_nodes * gpus_per_node
 
     # (node, local gpu) to rank
@@ -36,7 +36,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
     topology = fully_connected(num_ranks)
     collective = AllToAll(num_ranks, 1, inplace=False, name="alltoall")
     
-    with SCCLProgram("hierarchical_all_to_all", topology, collective, instances):
+    with SCCLProgram("hierarchical_all_to_all", topology, collective, instances, threadblocks=threadblocks):
         # Allocate scratch buffers to gather chunks to be sent over IB
         # 2 scratch buffers for each node-node pair for the sender and receiver
         for n1 in range(num_nodes):
@@ -82,14 +82,14 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
             # IB send divided across multiple parallel channels
             chunks = ib_chunk.split(ib_channels)
             for ch, chunk in enumerate(chunks):
-                chunk = chunk.send(scatter_rank, buffer=buffer_key, ch=ch%ib_channels)
+                chunk = chunk.send(scatter_rank, buffer=buffer_key)
                 # Local scatter
-                cs = chunk.split(gpus_per_node * gpus_per_node)
+                cs = chunk.split(gpus_per_node * gpus_per_node // ib_channels)
                 for i, c in enumerate(cs):
                     # Access the chunk's destination rank and index to route it to its final place
                     final_rank = c.get_dst_rank()
                     index = c.get_dst_index()
-                    c.send(final_rank, buffer=Buffer.output, index=index, ch=1)
+                    c.send(final_rank, buffer=Buffer.output, index=index)
 
         XML() # Prints the XML
         Check()
@@ -98,7 +98,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
 parser.add_argument('instances', type=int, help='number of instances')
+parser.add_argument('--threadblocks', type=int, default=-1, help='number of threadblocks per instance.')
 parser.add_argument('--ib_channels', type=int, default=1, help='Number of channels used for ib communication. Default 1')
 args = parser.parse_args()
 
-alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.ib_channels)
+alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.threadblocks, args.ib_channels)
