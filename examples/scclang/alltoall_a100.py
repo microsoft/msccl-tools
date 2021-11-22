@@ -98,7 +98,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
 parser.add_argument('instances', type=int, help='number of instances')
-parser.add_argument('--threadblocks', type=int, default=-1, help='number of threadblocks per instance.')
+parser.add_argument('--threadblocks', type=int, default=0, help='number of threadblocks per instance.')
 parser.add_argument('--ib_channels', type=int, default=1, help='Number of channels used for ib communication. Default 1')
 args = parser.parse_args()
 
