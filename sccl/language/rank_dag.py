@@ -300,23 +300,10 @@ class RankDAG:
                 for o in list(op.next):
                     heapq.heappush(ops, o)
 
-    def get_tb_options(self, dict, key, assigned_tbs, unassigned):
-        if key == -1: # Can go anywhere
-            x = set(list(i for i in range(0, assigned_tbs)))
-            return x
-        elif key in dict:
-            x = dict[key].union(unassigned)
-            return x
-        else:
-            return unassigned
-    
-    def _get_channel(self, send, recv):
-        channel = 0
-        for tb in self.tbs.values():
-            if (tb.send == send and tb.send != -1 and send != -1) \
-             or (tb.recv == recv and tb.recv != -1 and recv != -1):
-                channel = max(tb.channel + 1, channel)
-        return channel
+        # for tbid, tb in self.tbs.items():
+        #     print("TBID", tbid)
+        #     for op in tb.ops:
+        #         print(op.priority, op.chunk_step, op)
 
     def add_set(self, dict, key, value):
         if key in dict:
@@ -324,15 +311,62 @@ class RankDAG:
         else:
             dict[key] = set([value])
 
-    # Heuristic: Assign based 1) Operations that are ready
-    # 2) Priority of operation: cost function is steps until end
+
+    def _get_tb_options(self, mapping, send, recv, channel, num_tbs, num_channels):
+        if send == -1 and recv == -1: # Can go anywhere
+            return list(i for i in range(0, num_tbs))
+        elif channel == -1: # Can go on any channel that matches to send, recv
+            options = []
+            for ch in range(num_channels):
+                if (send, recv, ch) in mapping:
+                    options.append(mapping[(send, recv, ch)])
+            return options
+        elif (send, recv, channel) in mapping:
+            return [mapping[(send, recv, channel)]]
+        else:
+            return []
+
+    def _create_base_tbs(self):
+        ops = []
+        tbid = 0
+        tb_assignments = {} # (sender, receiver, channel) -> tbid
+        num_channels = 0
+
+        for slot, op in self.operations.items():
+            if op.inst == Instruction.start:
+                for o in list(op.next):
+                    heapq.heappush(ops, o)
+            elif op.inst != Instruction.copy:
+                heapq.heappush(ops, op)
+
+        visited = set()
+        while len(ops) > 0:
+            op = heapq.heappop(ops)
+            if op not in visited:
+                visited.add(op)
+                s = op.dst.rank if op.is_send() else -1
+                r = op.src.rank if op.is_recv() else -1
+                channel = 0 if op.channel == -1 else op.channel
+                if op.channel >= num_channels:
+                    num_channels = op.channel + 1
+                if (s != -1 or r != -1) and (s,r,channel) not in tb_assignments:
+                    self.tbs[tbid] = Threadblock(send=s, recv=r, channel=channel)
+                    tb_assignments[(s,r,channel)] = tbid
+                    tbid += 1
+                
+                for o in list(op.next):
+                    heapq.heappush(ops, o)
+        return tb_assignments, num_channels
+
+
     def auto_assign_tbs(self, num_tb):
-        recvs2tbch = {}
-        sends2tbch = {}
-        next_unassigned_tb = 0
+        # Allocate the base set of TBs
+        tb_assignments, num_channels = self._create_base_tbs()
+        current_num_tb = len(self.tbs)
         current_tb_step = {}
-        unassigned_recv = set()
-        unassigned_send = set()
+        for tbid in self.tbs.keys():
+            current_tb_step[tbid] = 0
+
 
         ops = []
         for slot, op in self.operations.items():
@@ -350,41 +384,24 @@ class RankDAG:
                 
                 s = op.dst.rank if op.is_send() else -1
                 r = op.src.rank if op.is_recv() else -1
+                channel = 0 if op.channel == -1 else op.channel
                 # Get all possible TBs this can be mapped to
-                recv_opts = self.get_tb_options(recvs2tbch, r, next_unassigned_tb, unassigned_recv)
-                send_opts = self.get_tb_options(sends2tbch, s, next_unassigned_tb, unassigned_send)
-                tb_options = recv_opts.intersection(send_opts)
-                # Can't map to existing TB - use a new one
-                if len(tb_options) == 0:
-                    if next_unassigned_tb >= num_tb and num_tb!=0:
-                        print("Too few threadblocks:",  num_tb)
-                        for tb in self.tbs.values():
-                            print("TB send", tb.send, "recv", tb.recv, "channel", tb.channel)
-                        sys.exit()
-                    tbid = next_unassigned_tb
-                    next_unassigned_tb += 1
-                    channel = 0 # First TB with this combination of s/r
-                    self.tbs[tbid] = Threadblock(send=s, recv=r, channel=channel)
-                    current_tb_step[tbid] = 0
-                else: 
-                    tbid = list(tb_options)[0]
+                tb_options = self._get_tb_options(tb_assignments, s, r, op.channel, current_num_tb, num_channels)
+               
+                # If there are multiple options choose the TB at the lowest step
+                tbid = tb_options[0]
+                if len(tb_options) > 1:
                     for tbid_opt in tb_options:
-                        if current_tb_step[tbid_opt] < current_tb_step[tbid]:
+                        if current_tb_step[tbid_opt] < current_tb_step[tbid] and self.verify_tb_op_compatible(self.tbs[tbid], op):
                             tbid = tbid_opt
-                    if op.chunk_step <= current_tb_step[tbid] and op.priority > 0 \
-                        and (next_unassigned_tb < num_tb or num_tb==0):
-                        tbid = next_unassigned_tb
-                        next_unassigned_tb += 1
-                        channel = self._get_channel(s, r)
-                        self.tbs[tbid] = Threadblock(send=s, recv=r, channel=channel)
-                        current_tb_step[tbid] = 0
-                # if not self.verify_tb_op_compatible(self.tbs[tbid], op):
-                #     print("Failing :(", tbid, op, op.channel)
-                    
-                self.add_set(recvs2tbch, r, tbid)
-                self.add_set(sends2tbch, s, tbid)
+
 
                 tb = self.tbs[tbid]
+                if not self.verify_tb_op_compatible(tb, op):
+                    print(f"Failing: Channel {op.channel}, send {s} recv {r} {op}")
+                    print("Threadblock", tb.send, tb.recv, tb.channel, tb)
+                    assert False
+
                 tb.ops.append(op)
                 tb.send = op.dst.rank if op.is_send() else tb.send
                 tb.recv = op.src.rank if op.is_recv() else tb.recv
@@ -393,14 +410,7 @@ class RankDAG:
                 op.channel = tb.channel
                 op.tb = tbid
                 current_tb_step[tbid] = op.chunk_step
-                if tb.recv == -1:
-                    unassigned_recv.add(tbid)
-                elif tbid in unassigned_recv:
-                    unassigned_recv.remove(tbid)
-                if tb.send == -1:
-                    unassigned_send.add(tbid)
-                elif tbid in unassigned_send:
-                    unassigned_send.remove(tbid)
+
                 # For correctness make certain the matching sends and receives
                 # happen on the same channel
                 for match in op.match:
@@ -412,7 +422,7 @@ class RankDAG:
         # for tbid, tb in self.tbs.items():
         #     print("TB:", tbid, "s", tb.send, "r", tb.recv)
         #     for op in tb.ops:
-        #         print("  ", op.chunk_step, op.priority, op)
+        #         print(f"  Chunk step:{op.chunk_step} Chunk priority:{op.priority} {op}")
 
     def lower_pt1(self, instances):
         self.infer_dependencies()

@@ -204,7 +204,7 @@ class Ref(ChunkRef):
         return Ref(self.rank, self.buffer, first.index, end - first.index, self.prog, missing) # Broken
         
 
-    def send(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=0):
+    def send(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=-1):
         assert (len(self.missing) == 0), f'Trying to send an incomplete concatenation. Missing indices {self.missing}'
 
         # If index is not specified assume it is going to the same place in the next gpu
@@ -400,7 +400,7 @@ class ChunkDAG:
                     receiver = op.dst.rank
                     if sender != receiver:
                         sop = rank_dags[sender].add_send(op.src, op.dst, op.steps_from_start*2,op.steps_to_end*2+1, sendtb, ch)
-                        rop = rank_dags[receiver].add_recv_reduce_copy(op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2+1, recvtb, ch)
+                        rop = rank_dags[receiver].add_recv_reduce_copy(op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
                         sop.match = [rop]
                         rop.match = [sop]
                     else:
