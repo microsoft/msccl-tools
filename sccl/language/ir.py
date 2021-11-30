@@ -69,9 +69,6 @@ class Buffer(Enum):
     def __str__(self):
         return self.value
 
-    def __lt__(self, other):
-        return self.value < other.value
-
 
 @dataclass
 class ChunkRef:
@@ -129,15 +126,15 @@ class Op:
 
     def __lt__(self, other):
         # Ordering of operations
-        # 1. Priority, 2. Buffer type, 3. Operation src index
+        # 1. Higher priority, 2. Lowesr chunk step, 3. Lower src index
         if self.priority == other.priority:
-            ref = self.src
-            other_ref = other.src
-            if ref.buffer == other_ref.buffer:
-                return ref.index < other_ref.index
-            return ref.buffer == Buffer.input
-
+            if self.chunk_step == other.chunk_step:
+                return self.src.index < other.src.index
+            return self.chunk_step < other.chunk_step
         return self.priority > other.priority
+
+    def __gt__(self, other):
+        return not self < other
 
     def __hash__(self):
         return id(self)

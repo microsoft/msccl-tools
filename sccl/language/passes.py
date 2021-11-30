@@ -39,13 +39,6 @@ def check_threadblock_ordering(tbs, ranks):
                 assert op.src == match.src and op.dst == match.dst
                 if op.step != match.step:
                     f"Op sends at step {op.step} and received at {match.step}"
-                    print("SEND", op.rank, op.tb)
-                    for o in tb.ops:
-                        print(o.priority, o)
-                    print("RECV", match.rank, match.tb)
-                    for o in ranks[match.rank].tbs[match.tb].ops:
-                        print(o.priority, o)
-                    break
 
                 
                 
