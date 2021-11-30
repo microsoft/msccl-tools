@@ -69,6 +69,9 @@ class Buffer(Enum):
     def __str__(self):
         return self.value
 
+    def __lt__(self, other):
+        return self.value < other.value
+
 
 @dataclass
 class ChunkRef:
@@ -95,7 +98,7 @@ class Op:
     num: int = -1
     chunk_step: int = -1
     priority: int = -1
-    match: list = field(default_factory=list) 
+    match: list = field(default_factory=list) # This should be another Op
     channel: int = -1
 
     def cnt(self):
@@ -125,21 +128,21 @@ class Op:
         return self is other
 
     def __lt__(self, other):
+        # Ordering of operations
+        # 1. Priority, 2. Buffer type, 3. Operation src index
+        if self.priority == other.priority:
+            ref = self.src
+            other_ref = other.src
+            if ref.buffer == other_ref.buffer:
+                return ref.index < other_ref.index
+            return ref.buffer == Buffer.input
+
         return self.priority > other.priority
 
     def __hash__(self):
         return id(self)
 
-    def _print_no_dep(self):
-        return f'(Op({self.inst}, {self.rank}, {self.src}, {self.dst}, step:{self.step}, tb:{self.tb})'
-
     def __repr__(self):
-        # if len(self.depends) > 0:
-        #     dep = ''
-        #     for i in range(len(self.depends)):
-        #         dep += self.depends[i]._print_no_dep()
-        # else:
-        #     dep = ''
         return f'Op({self.inst}, {self.rank}, {self.src}, {self.dst}, step:{self.step}, tb:{self.tb})'
 
 
@@ -277,7 +280,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                         op_elem.set('dstbuf', 'o')
                         op_elem.set('dstoff', '-1')
                 else:
-                    if op.is_send:
+                    if op.is_send():
                         if op.src is not None:
                             op_elem.set('buf', str(op.src.buffer))
                             op_elem.set('off', str(op.src.index))

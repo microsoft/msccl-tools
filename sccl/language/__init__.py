@@ -7,6 +7,7 @@ import functools
 from sccl.language.ir import *
 from sccl.language.misc import *
 from sccl.language.passes import *
+from sccl.language.tb_assignment import *
 from sccl.language.chunk import *
 from sccl.language.buffer import *
 from sccl.language.rank_dag import *
@@ -78,11 +79,18 @@ class SCCLProgram:
         for r in range(self.num_ranks):
             self.rank_dags[r].optimize()
             if self.threadblocks == -1:
-                self.rank_dags[r].assign_tbs()
+                manual_assign_tbs(self.rank_dags[r])
             else:
-                self.rank_dags[r].auto_assign_tbs(self.threadblocks)
+                create_base_tbs(self.rank_dags[r])
+
+        if self.threadblocks != -1:
+            for rank_dag in self.rank_dags:
+                auto_assign_tbs(rank_dag)
+
+        for r in range(self.num_ranks):
             self.rank_dags[r].lower_pt1(self.instances)
-            # check_threadblock_ordering(self.rank_dags[r].tbs, self.rank_dags)
+            check_dependency_cycles(self.rank_dags[r].tbs)
+            check_threadblock_ordering(self.rank_dags[r].tbs, self.rank_dags)
 
         gpu_prgms = []
         for r in range(self.num_ranks):
