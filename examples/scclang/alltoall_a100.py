@@ -24,17 +24,6 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
         r2 = RankFromNodeGpuPair(n2, LocalRank(n2, n1))
         return (r1, r2)
 
-    printn = 15
-    for n1 in range(num_nodes):
-        for n2 in range(num_nodes):
-            if n1 != n2 and (n1 == printn or n2 == printn):
-                r1, r2  = CrossNodeGpus(n1, n2)
-                print(f"{n1}->{n2} cross node traffic uses ranks {r1} and {r2}")
-                if n1 == printn:
-                    print(f"  {r1} sends channel {r1%2} IB {((r1%8)//2) *2 + r1%2}")
-                if n2 == printn:
-                    print(f"  {r2} receives channel {r2%2} IB {((r2%8)//2) * 2 + r2%2}")
-
     # Groups chunk reference into one large chunk reference (used for IB)
     # Save them under a key in the dictionary ib_chunks
     def AddChunk(ib_chunks, key, c):
@@ -97,7 +86,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
                 # to utilize both IB cards 
                 ib_channel = i*2 + (chunk.rank % 2)
                 chunk = chunk.send(scatter_rank, buffer=buffer_key, ch=ib_channel)
-                
+
                 # Local scatter
                 cs = chunk.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):
