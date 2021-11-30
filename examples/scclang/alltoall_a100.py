@@ -24,6 +24,17 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
         r2 = RankFromNodeGpuPair(n2, LocalRank(n2, n1))
         return (r1, r2)
 
+    printn = 15
+    for n1 in range(num_nodes):
+        for n2 in range(num_nodes):
+            if n1 != n2 and (n1 == printn or n2 == printn):
+                r1, r2  = CrossNodeGpus(n1, n2)
+                print(f"{n1}->{n2} cross node traffic uses ranks {r1} and {r2}")
+                if n1 == printn:
+                    print(f"  {r1} sends channel {r1%2} IB {((r1%8)//2) *2 + r1%2}")
+                if n2 == printn:
+                    print(f"  {r2} receives channel {r2%2} IB {((r2%8)//2) * 2 + r2%2}")
+
     # Groups chunk reference into one large chunk reference (used for IB)
     # Save them under a key in the dictionary ib_chunks
     def AddChunk(ib_chunks, key, c):
@@ -64,37 +75,36 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
                                 # Gather chunks destined for cross node ranks in scratch to route through IB
                                 gather_rank, _ = CrossNodeGpus(n1, n2)
                                 buffer_key = (n1, n2)
-                                # buffer_index = (g1 * gpus_per_node + g2) * instances + ch
                                 # Send chunk to the gather_rank. Send returns a chunk reference to the 
                                 # receiver's chunk
                                 c = c.send(gather_rank, buffer=buffer_key, ch=ch)
                                 # Group the chunks using a particular IB pair into one large chunk reference
-                                AddChunk(ib_chunks, buffer_key, c) # TODO: MEghan: Clean this up
+                                AddChunk(ib_chunks, buffer_key, c) 
                             else:
                                 # Directly send chunks destined for ranks within the node or
                                 # copy chunks destined for current rank into the output buffer
                                 c.send(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch)
-
 
         # IB Send and local scatters
         for buffer_key, ib_chunk in ib_chunks.items(): 
             (n1, n2) = buffer_key
             _, scatter_rank = CrossNodeGpus(n1, n2)
             # IB send divided across multiple parallel channels
-            # chunks = ib_chunk.split(ib_channels)
-            # for ch, chunk in enumerate(chunks):
-            
-            # Make certain even number ranks send on channel 0 and odd send on channel 1
-            # to utilize both IB cards 
-            ib_channel = ib_chunk.rank % 2
-            chunk = ib_chunk.send(scatter_rank, buffer=buffer_key, ch=ib_channel)
-            # Local scatter
-            cs = chunk.split(gpus_per_node * gpus_per_node)
-            for i, c in enumerate(cs):
-                # Access the chunk's destination rank and index to route it to its final place
-                final_rank = c.get_dst_rank()
-                index = c.get_dst_index()
-                c.send(final_rank, buffer=Buffer.output, index=index, ch=ch)
+            chunks = ib_chunk.split(ib_channels)
+            for i, chunk in enumerate(chunks):
+                # IB send
+                # Make certain even number ranks send on even channels and odd number ranks send on odd channels
+                # to utilize both IB cards 
+                ib_channel = i*2 + (chunk.rank % 2)
+                chunk = chunk.send(scatter_rank, buffer=buffer_key, ch=ib_channel)
+                
+                # Local scatter
+                cs = chunk.split(gpus_per_node * gpus_per_node)
+                for i, c in enumerate(cs):
+                    # Access the chunk's destination rank and index to route it to its final place
+                    final_rank = c.get_dst_rank()
+                    index = c.get_dst_index()
+                    c.send(final_rank, buffer=Buffer.output, index=index, ch=ch)
 
         XML() # Prints the XML
         Check()
@@ -103,7 +113,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
 parser.add_argument('instances', type=int, help='number of instances')
-parser.add_argument('--ib_channels', type=int, default=-1, help='Number of channels used for ib communication. Default: instances')
+parser.add_argument('--ib_channels', type=int, default=-1, help='Number of connections used for each IB send. Default: number of instances')
 args = parser.parse_args()
 
 if args.ib_channels == -1:
