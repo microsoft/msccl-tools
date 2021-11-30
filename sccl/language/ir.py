@@ -126,12 +126,12 @@ class Op:
 
     def __lt__(self, other):
         # Ordering of operations
-        # 1. Higher priority, 2. Lowesr chunk step, 3. Lower src index
-        if self.priority == other.priority:
-            if self.chunk_step == other.chunk_step:
+        # 1. Lower chunk step 2. Higher priority 3. Lower src index
+        if self.chunk_step == other.chunk_step:
+            if self.priority == other.priority:
                 return self.src.index < other.src.index
-            return self.chunk_step < other.chunk_step
-        return self.priority > other.priority
+            return self.priority > other.priority
+        return self.chunk_step < other.chunk_step
 
     def __gt__(self, other):
         return not self < other
