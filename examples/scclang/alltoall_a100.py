@@ -79,14 +79,15 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
             (n1, n2) = buffer_key
             _, scatter_rank = CrossNodeGpus(n1, n2)
             # IB send divided across multiple parallel channels
-            chunks = ib_chunk.split(ib_channels)
-            for i, chunk in enumerate(chunks):
-                # IB send
-                # Make certain even number ranks send on even channels and odd number ranks send on odd channels
-                # to utilize both IB cards 
-                ib_channel = i*2 + (chunk.rank % 2)
+            chunks = ib_chunk.split(ib_connections)
+            for ch, chunk in enumerate(chunks):
+                # Note: If we are only going to use 1 IB connection for each IB send
+                # alternate between channels 0 and 1 to utilize both IB links.
+                if ib_connections == 1:
+                    ib_channel = i*2 + (chunk.rank % 2)
+                else:
+                    ib_channel = ch
                 chunk = chunk.send(scatter_rank, buffer=buffer_key, ch=ib_channel)
-
                 # Local scatter
                 cs = chunk.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):
