@@ -1,13 +1,18 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+# For AllToAll on 9 A100 nodes
+# alltoall_a100.py 9 8 2
+# For AllToAll on 16 A100 nodes
+# alltoall_a100.py 16 8 2 --ib_connections 1
+
 import argparse
 
 from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllToAll
 
-def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_channels):
+def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
     num_ranks = num_nodes * gpus_per_node
 
     # (node, local gpu) to rank
@@ -103,10 +108,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
 parser.add_argument('instances', type=int, help='number of instances')
-parser.add_argument('--ib_channels', type=int, default=-1, help='Number of connections used for each IB send. Default: number of instances')
+parser.add_argument('--ib_connections', type=int, default=-1, help='Number of connections used for each IB send. Default: number of instances')
 args = parser.parse_args()
 
-if args.ib_channels == -1:
-    args.ib_channels = args.instances
+if args.ib_connections == -1:
+    args.ib_connections = args.instances
 
-alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.ib_channels)
+alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.ib_connections)
