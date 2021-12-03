@@ -8,32 +8,36 @@ from sccl.language.collectives import AllReduce
 
 def allreduce_allpairs(instances, threadblocks):
     size = 8
-    chunksperloop = 7
+    chunksperloop = 8
     topology = fully_connected(size)
     collective = AllReduce(size, chunksperloop, True, "allreduce")
     with SCCLProgram("allreduce_pairs", topology, collective, instances, protocol="LL", interleaved_replication=False, threadblocks=threadblocks):
         
         for r in range(size):
-            for r1 in range(size):
-                Rank(r).create_scratch(f'scratch{r1}') 
+            Rank(r).create_scratch('scratch') 
 
-        instances = 1
-        for i in range(instances):
-            index = 7 * i
-            for r1 in range(size):
-                for r2 in range(size):
-                    if r1 != r2:
-                        c = Rank(r1).input(index, 7)
-                        c = c.send(r2, f'scratch{r1}', index)
 
-        for i in range(instances):
-            for r1 in range(size):
-                for r2 in range(size):
-                    for chunk in range(0, 7):
-                        if r1 != r2:
-                            index = chunk * instances + i
-                            c = Rank(r1).scratch(f'scratch{r2}', index)
-                            c.reduce(r1, Buffer.input, index)
+        # Each rank sends the nth chunk to the nth rank into scratch space
+        for r1 in range(size):
+            for r2 in range(size):
+                if r1 != r2:
+                    index = r2
+                    c = Rank(r1).input(index)
+                    c.send(r2, f'scratch', sendtb=r2, recvtb=r1, ch=0)
+
+        # Each rank performs a local reduction on the nth chunk
+        for r in range(size):
+            for chunk in range(0, 7):
+                c = Rank(r).scratch('scratch', chunk)
+                c.reduce(r, Buffer.input, r, sendtb=r, ch=0)
+        
+        # Each rank sends the fully reduced nth chunk to all other gpus
+        for r1 in range(size):
+            for r2 in range(size):
+                if r1 != r2:
+                    index = r1
+                    c = Rank(r1).input(index)
+                    c.send(r2, Buffer.input, index, sendtb=r2, recvtb=r1, ch=0)
                 
         XML()
         Check()

@@ -33,7 +33,7 @@ def manual_assign_tbs(rank_dag):
         op = heapq.heappop(ops)
         if op not in visited:
             visited.add(op)
-            
+            tbid = op.tb
             if tbid not in rank_dag.tbs:
                 rank_dag.tbs[tbid] = Threadblock()
             tb = rank_dag.tbs[tbid]
@@ -163,7 +163,7 @@ def auto_assign_tbs(rank_dag):
             for o in list(op.next):
                 heapq.heappush(ops, o)
 
-    for tbid, tb in rank_dag.tbs.items():
-        print("rank", rank_dag.rank, "TB:", tbid, "s", tb.send, "r", tb.recv)
-        for op in tb.ops:
-            print(f"  Chunk step:{op.chunk_step} Chunk priority:{op.priority} {op}")
+    # for tbid, tb in rank_dag.tbs.items():
+    #     print("rank", rank_dag.rank, "TB:", tbid, "s", tb.send, "r", tb.recv)
+    #     for op in tb.ops:
+    #         print(f"  Chunk step:{op.chunk_step} Chunk priority:{op.priority} {op}")

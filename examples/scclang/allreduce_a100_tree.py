@@ -1,6 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+# Halving-doubling implementation of allreduce
+
 import argparse
 
 from sccl.language import *

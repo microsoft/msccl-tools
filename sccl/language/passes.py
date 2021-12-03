@@ -29,16 +29,23 @@ def check_dependency_cycles(tbs):
 # Check there are no ordering violations between threadblocks across Ranks
 def check_threadblock_ordering(tbs, ranks):
     for tb in tbs.values():
-        prev_step = {}
+        prev_steps = {} # tbid -> step of last recv from tbid
 
         # Check that sends and their corresponding receives between two threadblocks
         # happen in the same order.
         for op_step, op in enumerate(tb.ops):
             if op.is_send():
                 match = op.match[0]
-                assert op.src == match.src and op.dst == match.dst
-                if op.step != match.step:
-                    f"Op sends at step {op.step} and received at {match.step}"
+                if match.inst == Instruction.recv:
+                    assert op.src == match.src and op.dst == match.dst, f"Bug in SCCLang: Sends don't match receives"
+                else:
+                    assert op.src == match.src, f"Bug in SCCLang: Sends don't match receives"
+
+                other_tbid = match.tb
+                if other_tbid in prev_steps:
+                    assert match.step >  prev_steps[other_tbid], f"Rank {self.rank} sends op1 then op2 but {match.rank} receives op2 then op1"
+                prev_steps[other_tbid] = match.step
+
 
                 
                 
