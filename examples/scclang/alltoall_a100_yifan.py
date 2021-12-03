@@ -15,7 +15,6 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances):
         # Scratch space
         for rank in range(num_ranks):
             for node in range(num_nodes):
-                Rank(rank).create_scratch(f'recv_{node}')
                 Rank(rank).create_scratch(f'send_{node}')
 
        
@@ -44,14 +43,8 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances):
                     ib_peer = n2 * gpus_per_node + g1
                     # print(f"Trying to access on {rank1}")
                     chunk = Rank(rank).scratch(f'send_{n2}', 0, 8)
-                    chunk = chunk.send(ib_peer, buffer=f'recv_{n1}', index=0)
+                    chunk = chunk.send(ib_peer, Buffer.output, chunk.get_dst_index())
 
-                # Everyone has 8 chunks in recv_n1
-                for g in range(gpus_per_node):
-                    rank = n2 * gpus_per_node + g
-                    for index in range(gpus_per_node):
-                        chunk = Rank(rank).scratch(f'recv_{n1}', index)
-                        chunk.send(rank, buffer=Buffer.output, index=chunk.get_dst_index())
         
         # Handle local chunks within a node
         for rank in range(num_ranks):
