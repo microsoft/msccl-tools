@@ -5,22 +5,20 @@ from sccl.topologies import *
 from sccl.language.collectives import AllToAll
 
 
-def alltoall_hierarchical(num_nodes, gpus_per_node, instances):
+def alltoall_hierarchical(num_nodes, gpus_per_node):
     num_ranks = num_nodes * gpus_per_node
     topology = fully_connected(num_ranks)
     collective = AllToAll(num_ranks, 1, inplace=False, name="alltoall")
 
         
-    with SCCLProgram("hierarchical_all_to_all", topology, collective, instances):
+    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
         # Scratch space
         for rank in range(num_ranks):
             for node in range(num_nodes):
                 Rank(rank).create_scratch(f'send_{node}')
 
-       
         for n1 in range(num_nodes):
             for r in range(1,num_nodes):
-                # Node neighbor talking to
                 n2 = n1 ^ r
                 # print(f"r {r} n1 {n1} n2 {n2}")
 
@@ -41,15 +39,14 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances):
                 for g1 in range(gpus_per_node):
                     rank = n1 * gpus_per_node + g1
                     ib_peer = n2 * gpus_per_node + g1
-                    # print(f"Trying to access on {rank1}")
                     chunk = Rank(rank).scratch(f'send_{n2}', 0, 8)
                     chunk = chunk.send(ib_peer, Buffer.output, chunk.get_dst_index())
 
-        
-        # Handle local chunks within a node
+          
+          # Handle local chunks within a node
         for rank in range(num_ranks):
-            for i in range(gpus_per_node):
-                index = (rank // gpus_per_node) * gpus_per_node + i
+            for g in range(gpus_per_node):
+                index = (rank // gpus_per_node) * gpus_per_node + g
                 chunk = Rank(rank).input(index)
                 chunk.send(chunk.get_dst_rank(), Buffer.output, chunk.get_dst_index())
 
@@ -62,8 +59,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances):
 parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
-parser.add_argument('instances', type=int, help='number of instances')
 args = parser.parse_args()
 
 
-alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances)
+alltoall_hierarchical(args.num_nodes, args.gpus_per_node)
