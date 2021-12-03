@@ -19,7 +19,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
 
         for n1 in range(num_nodes):
             for r in range(1,num_nodes):
-                n2 = n1 ^ r
+                n2 = (n1 + r) % num_nodes
                 # print(f"r {r} n1 {n1} n2 {n2}")
 
                 # Gather all local chunks for the node neighbor
@@ -35,6 +35,8 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                         # print(f"Sending from {rank1} to {rank2}")
                         # chunk.print_chunk_info()
 
+            for r in range(1,num_nodes):
+                n2 = (n1 + r) % num_nodes
                 # IB send
                 for g1 in range(gpus_per_node):
                     rank = n1 * gpus_per_node + g1
