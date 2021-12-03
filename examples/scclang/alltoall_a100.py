@@ -7,7 +7,7 @@ from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllToAll
 
-def alltoall_hierarchical(num_nodes, gpus_per_node, instances, threadblocks, ib_channels):
+def alltoall_hierarchical(num_nodes, gpus_per_node, instances, threadblocks, ib_connections):
     num_ranks = num_nodes * gpus_per_node
 
     # (node, local gpu) to rank
@@ -80,17 +80,17 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, threadblocks, ib_
             (n1, n2) = buffer_key
             _, scatter_rank = CrossNodeGpus(n1, n2)
             # IB send divided across multiple parallel channels
-            chunks = ib_chunk.split(ib_channels)
+            chunks = ib_chunk.split(ib_connections)
             for ch, chunk in enumerate(chunks):
-                # Make certain we map to different IBs by specifying the channel
-                chunk = chunk.send(scatter_rank, buffer=buffer_key, ch=chunk.rank % 2)
+                chunk = chunk.send(scatter_rank, buffer=buffer_key, ch=ch)
                 # Local scatter
-                cs = chunk.split(gpus_per_node * gpus_per_node // ib_channels)
+                cs = chunk.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):
                     # Access the chunk's destination rank and index to route it to its final place
                     final_rank = c.get_dst_rank()
                     index = c.get_dst_index()
-                    c.send(final_rank, buffer=Buffer.output, index=index)
+                    c.send(final_rank, buffer=Buffer.output, index=index, ch=instances + ch)
+
 
         XML() # Prints the XML
         Check()
@@ -100,7 +100,7 @@ parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
 parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--threadblocks', type=int, default=0, help='number of threadblocks per instance.')
-parser.add_argument('--ib_channels', type=int, default=1, help='Number of channels used for ib communication. Default 1')
+parser.add_argument('--ib_connections', type=int, default=1, help='Number of channels used for ib communication. Default 1')
 args = parser.parse_args()
 
-alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.threadblocks, args.ib_channels)
+alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.threadblocks, args.ib_connections)
