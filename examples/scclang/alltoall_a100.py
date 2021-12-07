@@ -1,13 +1,18 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+# For AllToAll on 9 A100 nodes
+# alltoall_a100.py 9 8 2
+# For AllToAll on 16 A100 nodes
+# alltoall_a100.py 16 8 2 --ib_connections 1
+
 import argparse
 
 from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllToAll
 
-def alltoall_hierarchical(num_nodes, gpus_per_node, instances, threadblocks, ib_connections):
+def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
     num_ranks = num_nodes * gpus_per_node
 
     # (node, local gpu) to rank
@@ -34,9 +39,9 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, threadblocks, ib_
         
 
     topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, 1, inplace=False, name="alltoall")
+    collective = AllToAll(num_ranks, instances, inplace=False, name="alltoall")
     
-    with SCCLProgram("hierarchical_all_to_all", topology, collective, instances, threadblocks=threadblocks):
+    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
         # Allocate scratch buffers to gather chunks to be sent over IB
         # 2 scratch buffers for each node-node pair for the sender and receiver
         for n1 in range(num_nodes):
@@ -49,31 +54,59 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, threadblocks, ib_
         ib_chunks = {} # Keeps track of chunks going over IB buffer buffer name -> chunk
 
         # Local Gathers
+        # for n1 in range(num_nodes):
+        #     for g1 in range(gpus_per_node):
+        #         for n2 in range(num_nodes):
+        #             for g2 in range(gpus_per_node):
+        #                 for ch in range(instances):
+        #                     r1 = RankFromNodeGpuPair(n1, g1)
+        #                     r2 = RankFromNodeGpuPair(n2, g2)
+        #                     # Rank(r) gives accesses the rth rank of the program
+        #                     # input(i) gives a reference to ith chunk
+        #                     c = Rank(r1).input(r2 * instances + ch)
+                            
+        #                     if (n1 != n2): 
+        #                         # Gather chunks destined for cross node ranks in scratch to route through IB
+        #                         gather_rank, _ = CrossNodeGpus(n1, n2)
+        #                         buffer_key = (n1, n2)
+        #                         # Send chunk to the gather_rank. Send returns a chunk reference to the 
+        #                         # receiver's chunk
+        #                         c = c.send(gather_rank, buffer=buffer_key, ch=ch)
+        #                         # Group the chunks using a particular IB pair into one large chunk reference
+        #                         AddChunk(ib_chunks, buffer_key, c) 
+        #                     else:
+        #                         # Directly send chunks destined for ranks within the node or
+        #                         # copy chunks destined for current rank into the output buffer
+        #                         c.send(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch)
+
         for n1 in range(num_nodes):
             for g1 in range(gpus_per_node):
-                for n2 in range(num_nodes):
-                    for g2 in range(gpus_per_node):
+                for ch in range(instances):
+                    for n2 in range(num_nodes):
                         r1 = RankFromNodeGpuPair(n1, g1)
-                        r2 = RankFromNodeGpuPair(n2, g2)
                         # Rank(r) gives accesses the rth rank of the program
                         # input(i) gives a reference to ith chunk
-                        c = Rank(r1).input(r2)
-
                         if (n1 != n2): 
+                            # Send over all chunks destined for that node to the peer gpu that handles chunks to that node
+                            c = Rank(r1).input(n2 * gpus_per_node * instances + ch * gpus_per_node, gpus_per_node)
                             # Gather chunks destined for cross node ranks in scratch to route through IB
                             gather_rank, _ = CrossNodeGpus(n1, n2)
                             buffer_key = (n1, n2)
-                            # buffer_index = g1 * gpus_per_node + g2
                             # Send chunk to the gather_rank. Send returns a chunk reference to the 
                             # receiver's chunk
-                            c = c.send(gather_rank, buffer=buffer_key)
+                            c = c.send(gather_rank, buffer=buffer_key, ch=ch*2)
                             # Group the chunks using a particular IB pair into one large chunk reference
-                            AddChunk(ib_chunks, buffer_key, c)
+                            AddChunk(ib_chunks, buffer_key, c) 
                         else:
-                            # Directly send chunks destined for ranks within the node or
-                            # copy chunks destined for current rank into the output buffer
-                            c.send(r2, buffer=Buffer.output, index=c.get_dst_index())
+                            # Within a node - direct send/copy the chunks over nvlink to the output buffer. 
+                            # Use a different channel to ensure that we don't get in the way of sends/receives above
+                            # which are on the critical path.
+                            for g2 in range(gpus_per_node):
+                                r2 = RankFromNodeGpuPair(n2, g2)
+                                c = Rank(r1).input(r2 * instances + ch)
+                                c.send(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch*2)
 
+                    
 
         # IB Send and local scatters
         for buffer_key, ib_chunk in ib_chunks.items(): 
@@ -82,15 +115,20 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, threadblocks, ib_
             # IB send divided across multiple parallel channels
             chunks = ib_chunk.split(ib_connections)
             for ch, chunk in enumerate(chunks):
-                chunk = chunk.send(scatter_rank, buffer=buffer_key, ch=ch)
+                # Note: If we are only going to use 1 IB connection for each IB send
+                # alternate between channels 0 and 1 to utilize both IB links.
+                if ib_connections == 1:
+                    ib_channel = chunk.rank % 2
+                else:
+                    ib_channel = ch
+                chunk = chunk.send(scatter_rank, buffer=buffer_key, ch=ib_channel)
                 # Local scatter
                 cs = chunk.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):
                     # Access the chunk's destination rank and index to route it to its final place
                     final_rank = c.get_dst_rank()
                     index = c.get_dst_index()
-                    c.send(final_rank, buffer=Buffer.output, index=index, ch=instances + ch)
-
+                    c.send(final_rank, buffer=Buffer.output, index=index, ch=ch*2 + 1)
 
         XML() # Prints the XML
         Check()
@@ -99,8 +137,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
 parser.add_argument('instances', type=int, help='number of instances')
-parser.add_argument('--threadblocks', type=int, default=0, help='number of threadblocks per instance.')
-parser.add_argument('--ib_connections', type=int, default=1, help='Number of channels used for ib communication. Default 1')
+parser.add_argument('--ib_connections', type=int, default=-1, help='Number of connections used for each IB send. Default: number of instances')
 args = parser.parse_args()
 
-alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.threadblocks, args.ib_connections)
+if args.ib_connections == -1:
+    args.ib_connections = args.instances
+
+alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.ib_connections)
