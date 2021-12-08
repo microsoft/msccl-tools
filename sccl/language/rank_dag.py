@@ -31,6 +31,8 @@ def same_tb(op1, op2):
 def same_count(op1, op2):
     return op1.cnt() == op2.cnt()
     
+def same_buf_dst(op1, op2):
+    return op1.dst.buffer == op2.dst.buffer and op1.dst.index == op2.dst.index
 
 class RankDAG:
     def __init__(self, rank, buffers):
@@ -224,8 +226,8 @@ class RankDAG:
             while len(frontier) > 0:
                 op = frontier[0]
                 if len(op.next) == 1:
-                    next_op = list(op.next)[0] # TODO: FIX ME
-                    if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op):
+                    next_op = list(op.next)[0] 
+                    if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
                         op.inst = Instruction.recv_copy_send
                         op.dst = next_op.dst
                         op.match = op.match + next_op.match
