@@ -6,12 +6,12 @@ from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllReduce
 
-def allreduce_allpairs(instances, threadblocks):
+def allreduce_allpairs(instances):
     size = 8
     chunksperloop = 8
     topology = fully_connected(size)
     collective = AllReduce(size, chunksperloop, True, "allreduce")
-    with SCCLProgram("allreduce_pairs", topology, collective, instances, protocol="LL", interleaved_replication=False, threadblocks=threadblocks):
+    with SCCLProgram("allreduce_pairs", topology, collective, instances, protocol="LL", interleaved_replication=False, threadblocks=-1):
         
         for r in range(size):
             Rank(r).create_scratch('scratch') 
@@ -44,8 +44,8 @@ def allreduce_allpairs(instances, threadblocks):
 
 parser = argparse.ArgumentParser()
 parser.add_argument('instances', type=int, help='number of instances')
-parser.add_argument('threadblocks', type=int, default=0, help='number of threadblocks per instance')
+# parser.add_argument('threadblocks', type=int, default=0, help='number of threadblocks per instance')
 
 args = parser.parse_args()
 
-allreduce_allpairs(args.instances, args.threadblocks)
+allreduce_allpairs(args.instances)
