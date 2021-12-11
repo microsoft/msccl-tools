@@ -24,9 +24,8 @@ def manual_assign_tbs(rank_dag):
     for slot, op in rank_dag.operations.items():
         if op.inst == Instruction.start:
             for o in list(op.next):
-                heapq.heappush(ops, o)
-        elif op.inst != Instruction.copy:
-            heapq.heappush(ops, op)
+                if o.inst == Instruction.send or o.inst == Instruction.copy:
+                    heapq.heappush(ops, o)
 
     visited = set()
     while len(ops) > 0:
@@ -50,6 +49,8 @@ def manual_assign_tbs(rank_dag):
                 sys.exit()
             
             for o in list(op.next):
+                heapq.heappush(ops, o)
+            for o in op.match:
                 heapq.heappush(ops, o)
 
     # for tbid, tb in self.tbs.items():
@@ -127,10 +128,13 @@ def auto_assign_tbs(rank_dag):
     for slot, op in rank_dag.operations.items():
         if op.inst == Instruction.start:
             for o in list(op.next):
-                ops.append(o)
-        elif op.inst != Instruction.copy:
-            ops.append(op)
+                if o.inst == Instruction.send or o.inst == Instruction.copy:
+                    heapq.heappush(ops, o)
     heapq.heapify(ops)
+
+    for o in ops:
+        if o.inst == Instruction.recv:
+            print(o)
 
     visited = set()
     while len(ops) > 0:
@@ -170,6 +174,8 @@ def auto_assign_tbs(rank_dag):
                 match.channel = tb.channel
 
             for o in list(op.next):
+                heapq.heappush(ops, o)
+            for o in op.match:
                 heapq.heappush(ops, o)
 
     # for tbid, tb in rank_dag.tbs.items():

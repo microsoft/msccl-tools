@@ -393,7 +393,6 @@ class ChunkDAG:
                         sop = rank_dag.add_send(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2+1, sendtb, ch)
                         rop = rank_dag.add_recv(receiver, op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
                         sop.match = [rop]
-                        rop.match = [sop]
                     else:
                         rank_dag.add_copy(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb)
                 elif op.inst == ChunkInstruction.reduce:
@@ -403,7 +402,6 @@ class ChunkDAG:
                         sop = rank_dag.add_send(sender, op.src, op.dst, op.steps_from_start*2,op.steps_to_end*2+1, sendtb, ch)
                         rop = rank_dag.add_recv_reduce_copy(receiver, op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
                         sop.match = [rop]
-                        rop.match = [sop]
                     else:
                         rank_dag.add_reduce(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb)
 
