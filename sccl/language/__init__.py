@@ -39,7 +39,8 @@ class SCCLProgram:
         # Initialize the input buffers
         self.chunk_dag = ChunkDAG()
         self.buffers = collective.init_buffers()
-        self.rank_dags = [RankDAG(r, self.buffers[r]) for r in range(self.num_ranks)]
+        # self.rank_dags = [RankDAG(r, self.buffers[r]) for r in range(self.num_ranks)]
+        self.rank_dag = RankDAG(self.num_ranks, self.buffers)
         for r in range(self.num_ranks):
             self.ranks.append(Process(self, r, self.buffers[r]))
             for index, chunk in enumerate(self.buffers[r][Buffer.input]):
@@ -75,27 +76,19 @@ class SCCLProgram:
     # Lower program to XML
     def lower(self):
         self.chunk_dag._complete_metadata()
-        self.chunk_dag.lower_rank_dag(self.rank_dags)
-        for r in range(self.num_ranks):
-            self.rank_dags[r].optimize()
-            if self.threadblocks == -1:
-                manual_assign_tbs(self.rank_dags[r])
-            else:
-                create_base_tbs(self.rank_dags[r])
-
-        if self.threadblocks != -1:
-            for rank_dag in self.rank_dags:
-                auto_assign_tbs(rank_dag)
-
-        for r in range(self.num_ranks):
-            self.rank_dags[r].lower_pt1(self.instances)
-            check_dependency_cycles(self.rank_dags[r].tbs)
-            check_threadblock_ordering(self.rank_dags[r].tbs, self.rank_dags)
-
-        gpu_prgms = []
-        for r in range(self.num_ranks):
-            gpu_prgms.append(self.rank_dags[r].lower_pt2(self.instances, self.buffers, self.interleaved_replication))
-
+        self.chunk_dag.lower_rank_dag(self.rank_dag)
+       
+        self.rank_dag.optimize()
+        if self.threadblocks == -1:
+            manual_assign_tbs(self.rank_dag)
+        else:
+            create_base_tbs(self.rank_dag)
+            auto_assign_tbs(self.rank_dag)
+        self.rank_dag.lower_pt1(self.instances)
+        # TODO: get rid of buffers
+        gpu_prgms = self.rank_dag.lower_pt2(self.instances, self.buffers, self.interleaved_replication)
+        # check_dependency_cycles(self.rank_dag.tbs)
+        # check_threadblock_ordering(self.rank_dags.tbs, self.rank_dag)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
        
 
@@ -376,7 +369,7 @@ class ChunkDAG:
             if op.inst == ChunkInstruction.start:
                 dfs(op)
             
-    def lower_rank_dag(self, rank_dags):
+    def lower_rank_dag(self, rank_dag):
         frontier = []
         visited = set()
 
@@ -392,27 +385,27 @@ class ChunkDAG:
                 ch =  op.ch
                 if op.inst == ChunkInstruction.start:
                     rank = op.dst.rank
-                    rank_dags[rank].add_start(op.dst.buffer, op.dst.index, op.dst)
+                    rank_dag.add_start(rank, op.dst.buffer, op.dst.index, op.dst)
                 elif op.inst == ChunkInstruction.send:
                     sender = op.src.rank
                     receiver = op.dst.rank
                     if sender != receiver:
-                        sop = rank_dags[sender].add_send(op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2+1, sendtb, ch)
-                        rop = rank_dags[receiver].add_recv(op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
+                        sop = rank_dag.add_send(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2+1, sendtb, ch)
+                        rop = rank_dag.add_recv(receiver, op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
                         sop.match = [rop]
                         rop.match = [sop]
                     else:
-                        rank_dags[sender].add_copy(op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb)
+                        rank_dag.add_copy(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb)
                 elif op.inst == ChunkInstruction.reduce:
                     sender = op.src.rank
                     receiver = op.dst.rank
                     if sender != receiver:
-                        sop = rank_dags[sender].add_send(op.src, op.dst, op.steps_from_start*2,op.steps_to_end*2+1, sendtb, ch)
-                        rop = rank_dags[receiver].add_recv_reduce_copy(op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
+                        sop = rank_dag.add_send(sender, op.src, op.dst, op.steps_from_start*2,op.steps_to_end*2+1, sendtb, ch)
+                        rop = rank_dag.add_recv_reduce_copy(receiver, op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
                         sop.match = [rop]
                         rop.match = [sop]
                     else:
-                        rank_dags[sender].add_reduce(op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb)
+                        rank_dag.add_reduce(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb)
 
                 for o in op.next:
                     heapq.heappush(frontier, o)

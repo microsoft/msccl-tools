@@ -12,7 +12,7 @@ def not_send(op, slot):
     # If the instruction on this spot is a copy or reduce, check to see if the slot was the dst of the operation
     if op.inst == Instruction.copy or op.inst == Instruction.reduce:
         cpy_src = op.src
-        buffer, index = slot
+        _, buffer, index = slot
         return buffer != cpy_src.buffer or (index < cpy_src.index and index > (cpy_src.index + cpy_src.size))
     return op.inst != Instruction.send
 
@@ -35,23 +35,25 @@ def same_buf_dst(op1, op2):
     return op1.dst.buffer == op2.dst.buffer and op1.dst.index == op2.dst.index
 
 class RankDAG:
-    def __init__(self, rank, buffers):
-        self.rank = rank
+    def __init__(self, num_ranks, buffers):
+        self.num_ranks = num_ranks
         self.buffers = buffers
-        self.slots = []
+        self.slots = [] # slot = (rank, buffer, index)
         self.operations = {} # slot -> operations
         self.send_ranks = set() # Set of ranks this rank sends to
         self.recv_ranks = set() # Set of ranks this rank receives from
-        self.tbs = {}
+        self.tbs = [] 
+        for _ in range(num_ranks):
+            self.tbs.append({}) 
         self.tb_mapping = {}
         self.send_channel_mapping = {} # sender rank -> channels -> tbid
         self.recv_channel_mapping = {} 
 
-    def add_start(self, buffer, index, ref):
-        slot = (buffer, index)
+    def add_start(self, rank, buffer, index, ref):
+        slot = (rank, buffer, index)
         self.slots.append(slot)
 
-        op = Op(Instruction.start, self.rank, ref, ref, next=set(), prev=set())
+        op = Op(Instruction.start, rank, ref, ref, next=set(), prev=set())
         self.operations[slot] = op
 
     # Find the last write to happen on this slot
@@ -90,8 +92,8 @@ class RankDAG:
             frontier = frontier[1:] + list(op.next)   
         return last_ops
 
-    def add_copy(self, send_ref, recv_ref, step, priority, tb):
-        op = Op(Instruction.copy, self.rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
+    def add_copy(self, rank, send_ref, recv_ref, step, priority, tb):
+        op = Op(Instruction.copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
         srcbuffer = send_ref.buffer
@@ -101,14 +103,14 @@ class RankDAG:
 
         # Sending part of copy
         for i in range(srcindex, srcindex+size):
-            slot = (srcbuffer, i)
+            slot = (rank, srcbuffer, i)
             prev_op = self.find_last_recv(slot) # All operations that need to happen before
             prev_op.next.add(op)
             op.prev.add(prev_op)
 
         # Receiving part of copy
         for i in range(dstindex, dstindex+size):
-            slot = (dstbuffer, i)
+            slot = (rank, dstbuffer, i)
             if slot in self.operations:
                 slot_ops = self.operations[slot]
                 prev_ops = self.find_last_ops(slot_ops) # All operations that need to happen before
@@ -120,8 +122,8 @@ class RankDAG:
             else:
                 self.operations[slot] = op
 
-    def add_reduce(self, send_ref, recv_ref, step, priority, tb):
-        op = Op(Instruction.reduce, self.rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
+    def add_reduce(self, rank, send_ref, recv_ref, step, priority, tb):
+        op = Op(Instruction.reduce, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
         srcbuffer = send_ref.buffer
@@ -131,14 +133,14 @@ class RankDAG:
 
         # B
         for i in range(srcindex, srcindex+size):
-            slot = (srcbuffer, i)
+            slot = (rank, srcbuffer, i)
             prev_op = self.find_last_recv(slot) # All operations that need to happen before
             prev_op.next.add(op)
             op.prev.add(prev_op)
 
         # A
         for i in range(dstindex, dstindex+size):
-            slot = (dstbuffer, i)
+            slot = (rank, dstbuffer, i)
             if slot in self.operations:
                 slot_ops = self.operations[slot]
                 prev_ops = self.find_last_ops(slot_ops) # All operations that need to happen before
@@ -150,15 +152,15 @@ class RankDAG:
             else:
                 self.operations[slot] = op
 
-    def add_send(self, send_ref, recv_ref, step, priority, tb, ch):
-        self.send_ranks.add(recv_ref.rank)
-        op = Op(Instruction.send, self.rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_send(self, rank, send_ref, recv_ref, step, priority, tb, ch):
+        # self.send_ranks.add(recv_ref.rank)
+        op = Op(Instruction.send, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = send_ref.buffer
         index = send_ref.index
         size = send_ref.size
         prev_ops = []
         for i in range(index, index+size):
-            slot = (buffer, i)
+            slot = (rank, buffer, i)
             prev_op = self.find_last_recv(slot)
             prev_ops.append(prev_op) # All operations that need to happen before
 
@@ -168,15 +170,15 @@ class RankDAG:
                 op.prev.add(prev_op)
         return op
 
-    def add_recv(self, send_ref, recv_ref, step, priority, tb, ch):
-        self.recv_ranks.add(send_ref.rank)
-        op = Op(Instruction.recv, self.rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_recv(self, rank, send_ref, recv_ref, step, priority, tb, ch):
+        # self.recv_ranks.add(send_ref.rank)
+        op = Op(Instruction.recv, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
         size = recv_ref.size
 
         for i in range(index, index+size):
-            slot = (buffer, i)
+            slot = (rank, buffer, i)
 
             if slot in self.operations:
                 slot_ops = self.operations[slot]
@@ -189,15 +191,15 @@ class RankDAG:
                 self.operations[slot] = op
         return op
 
-    def add_recv_reduce_copy(self, send_ref, recv_ref, step, priority, tb, ch):
-        self.recv_ranks.add(send_ref.rank)
-        op = Op(Instruction.recv_reduce_copy, self.rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_recv_reduce_copy(self, rank, send_ref, recv_ref, step, priority, tb, ch):
+        # self.recv_ranks.add(send_ref.rank)
+        op = Op(Instruction.recv_reduce_copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
         size = recv_ref.size
 
         for i in range(index, index+size):
-            slot = (buffer, i)
+            slot = (rank, buffer, i)
             if slot in self.operations:
                 slot_ops = self.operations[slot]
                 prev_ops = self.find_last_ops(slot_ops) # All operations that need to happen before
@@ -293,21 +295,26 @@ class RankDAG:
 
     # Assigns each scratch buffer an offset into the global scratch buffer
     def lower_buffers(self, instances):
-        offset = 0
-        for key, buf in self.buffers.items():
-            if key is not Buffer.input and key is not Buffer.output:
-                buf.set_offset(offset)
-                offset += buf.instance_size() * instances
+        for rank_buffers in self.buffers:
+            offset = 0
+            for key, buf in rank_buffers.items():
+                if key is not Buffer.input and key is not Buffer.output:
+                    buf.set_offset(offset)
+                    offset += buf.instance_size() * instances
 
     # Preprocess the threadblocks for lowering into xml
+    # TODO: remove buffers
     def lower_tbs(self, buffers):
-        tbs = [None] * len(self.instanced_tbs)
-        for tbid, tb in self.instanced_tbs.items():
-            for op in tb.ops:
-                op.src = self.lower_chunk(op.src, buffers)
-                op.dst = self.lower_chunk(op.dst, buffers)
-            tbs[tbid] = tb
-        return Gpu(self.rank, tbs)
+        gpus = []
+        for rank, rank_tbs in enumerate(self.instanced_tbs):
+            lowered_tbs = [None] * len(rank_tbs)
+            for tbid, tb in rank_tbs.items():
+                for op in tb.ops:
+                    op.src = self.lower_chunk(op.src, buffers)
+                    op.dst = self.lower_chunk(op.dst, buffers)
+                lowered_tbs[tbid] = tb
+            gpus.append(Gpu(rank, lowered_tbs))
+        return gpus
 
 
     # Automatically replicates the algorithm instance number of times
@@ -323,7 +330,9 @@ class RankDAG:
             self.instanced_tbs = self.tbs
             return 
 
-        self.instanced_tbs = {}
+        self.instanced_tbs = []
+        for _ in range(self.num_ranks):
+            self.instanced_tbs.append({})
 
         def is_scratch(buffer):
             return buffer != Buffer.input and buffer != Buffer.output
@@ -347,29 +356,31 @@ class RankDAG:
 
         for i in range(instances):
             # Generate all the threadblocks and ops
-            for tbid, tb in self.tbs.items():
-                # TODO: Handle channels correctly
-                itb = Threadblock(tb.channel+i, tb.send, tb.recv)
-                itbid = tbid * instances + i
-                itb.ops = [None] * len(tb.ops)
-                for s, op in enumerate(tb.ops):
-                    isrc = get_instance_ref(op.src)
-                    idst = get_instance_ref(op.dst)
-                    idepends = [] 
-                    iop = Op(op.inst, op.rank, isrc, idst, idepends, op.step, itbid) # Note: We don't need the fill out the rest of the metadata
-                    itb.ops[s] = iop
-                self.instanced_tbs[itbid] = itb
+            for rank, rank_tbs in enumerate(self.tbs):
+                for tbid, tb in rank_tbs.items():
+                    # TODO: Handle channels correctly
+                    itb = Threadblock(tb.channel+i, tb.send, tb.recv)
+                    itbid = tbid * instances + i
+                    itb.ops = [None] * len(tb.ops)
+                    for s, op in enumerate(tb.ops):
+                        isrc = get_instance_ref(op.src)
+                        idst = get_instance_ref(op.dst)
+                        idepends = [] 
+                        iop = Op(op.inst, op.rank, isrc, idst, idepends, op.step, itbid) # Note: We don't need the fill out the rest of the metadata
+                        itb.ops[s] = iop
+                    self.instanced_tbs[op.rank][itbid] = itb
         
         # Redo dependency analysis
-        for tbid, tb in self.tbs.items():
-            for i in range(instances):
-                itbid = tbid * instances + i
-                itb = self.instanced_tbs[itbid]
-                for op, iop in zip(tb.ops, itb.ops):
-                    iop.depends = [None] * len(op.depends)
-                    for s, dep in enumerate(op.depends):
-                        dep_tbid = dep.tb
-                        dep_itbid = dep_tbid * instances + i
-                        dep_step = dep.step
-                        iop.depends[s] = self.instanced_tbs[dep_itbid].ops[dep_step] 
+        for rank, rank_tbs in enumerate(self.tbs):
+            for tbid, tb in rank_tbs.items():
+                for i in range(instances):
+                    itbid = tbid * instances + i
+                    itb = self.instanced_tbs[rank][itbid]
+                    for op, iop in zip(tb.ops, itb.ops):
+                        iop.depends = [None] * len(op.depends)
+                        for s, dep in enumerate(op.depends):
+                            dep_tbid = dep.tb
+                            dep_itbid = dep_tbid * instances + i
+                            dep_step = dep.step
+                            iop.depends[s] = self.instanced_tbs[op.rank][dep_itbid].ops[dep_step] 
 
