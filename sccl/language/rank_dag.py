@@ -40,8 +40,6 @@ class RankDAG:
         self.buffers = buffers
         self.slots = [] # slot = (rank, buffer, index)
         self.operations = {} # slot -> operations
-        self.send_ranks = set() # Set of ranks this rank sends to
-        self.recv_ranks = set() # Set of ranks this rank receives from
         self.tbs = [] 
         for _ in range(num_ranks):
             self.tbs.append({}) 
@@ -81,10 +79,9 @@ class RankDAG:
 
     # Find the last set of operations that happened on this slot
     # There may be multiple as sends can happen in parallel
-    def find_last_ops(self, slot_ops):
-        frontier = [slot_ops]
+    def find_last_ops(self, slot):
+        frontier = [self.operations[slot]]
         last_ops = []
-
         while len(frontier) > 0:
             op = frontier[0]
             if len(op.next) == 0:
@@ -109,18 +106,17 @@ class RankDAG:
             op.prev.add(prev_op)
 
         # Receiving part of copy
+        prev_ops = set()
         for i in range(dstindex, dstindex+size):
             slot = (rank, dstbuffer, i)
             if slot in self.operations:
-                slot_ops = self.operations[slot]
-                prev_ops = self.find_last_ops(slot_ops) # All operations that need to happen before
+                prev_op = self.find_last_recv(slot)
+                prev_ops.append(prev_op) # All operations that need to happen before
 
-                if len(prev_ops) > 0:
-                    for prev_op in prev_ops:
-                        prev_op.next.add(op)
-                        op.prev.add(prev_op)
-            else:
-                self.operations[slot] = op
+        for prev_op in prev_ops:
+            if op not in prev_op.next:
+                prev_op.next.add(op)
+                op.prev.add(prev_op)
 
     def add_reduce(self, rank, send_ref, recv_ref, step, priority, tb):
         op = Op(Instruction.reduce, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
@@ -139,21 +135,19 @@ class RankDAG:
             op.prev.add(prev_op)
 
         # A
+        prev_ops = []
         for i in range(dstindex, dstindex+size):
             slot = (rank, dstbuffer, i)
             if slot in self.operations:
-                slot_ops = self.operations[slot]
-                prev_ops = self.find_last_ops(slot_ops) # All operations that need to happen before
+                prev_op = self.find_last_recv(slot)
+                prev_ops.append(prev_op) # All operations that need to happen before
 
-                if len(prev_ops) > 0:
-                    for prev_op in prev_ops:
-                        prev_op.next.add(op)
-                        op.prev.add(prev_op)
-            else:
-                self.operations[slot] = op
+        for prev_op in prev_ops:
+            if op not in prev_op.next:
+                prev_op.next.add(op)
+                op.prev.add(prev_op)
 
     def add_send(self, rank, send_ref, recv_ref, step, priority, tb, ch):
-        # self.send_ranks.add(recv_ref.rank)
         op = Op(Instruction.send, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = send_ref.buffer
         index = send_ref.index
@@ -171,45 +165,43 @@ class RankDAG:
         return op
 
     def add_recv(self, rank, send_ref, recv_ref, step, priority, tb, ch):
-        # self.recv_ranks.add(send_ref.rank)
         op = Op(Instruction.recv, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
         size = recv_ref.size
 
+        prev_ops = set()
         for i in range(index, index+size):
             slot = (rank, buffer, i)
-
             if slot in self.operations:
-                slot_ops = self.operations[slot]
-                prev_ops = self.find_last_ops(slot_ops) # All operations that need to happen before
-                if len(prev_ops) > 0:
-                    for prev_op in prev_ops:
-                        prev_op.next.add(op)
-                        op.prev.add(prev_op)
+                slot_prev_ops = self.find_last_ops(slot) # All operations that need to happen before
+                prev_ops = prev_ops.union(slot_prev_ops)        
             else:
                 self.operations[slot] = op
+        if len(prev_ops) > 0:
+                for prev_op in prev_ops:
+                    prev_op.next.add(op)
+                    op.prev.add(prev_op)
         return op
 
     def add_recv_reduce_copy(self, rank, send_ref, recv_ref, step, priority, tb, ch):
-        # self.recv_ranks.add(send_ref.rank)
         op = Op(Instruction.recv_reduce_copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
         size = recv_ref.size
 
+        prev_ops = set()
         for i in range(index, index+size):
             slot = (rank, buffer, i)
             if slot in self.operations:
-                slot_ops = self.operations[slot]
-                prev_ops = self.find_last_ops(slot_ops) # All operations that need to happen before
-
-                if len(prev_ops) > 0:
-                    for prev_op in prev_ops:
-                        prev_op.next.add(op)
-                        op.prev.add(prev_op)
+                slot_prev_ops = self.find_last_ops(slot) # All operations that need to happen before
+                prev_ops = prev_ops.union(slot_prev_ops)        
             else:
                 self.operations[slot] = op
+        if len(prev_ops) > 0:
+                for prev_op in prev_ops:
+                    prev_op.next.add(op)
+                    op.prev.add(prev_op)
         return op
 
     def optimize(self):

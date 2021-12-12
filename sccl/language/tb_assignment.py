@@ -70,8 +70,17 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs, num_channels):
         return options
     elif (send, recv, channel) in mapping:
         return [mapping[(send, recv, channel)]]
+    # Double up if necessary
     else:
-        return []
+        options = []
+        for requirements, tbid in mapping.items():
+            tb_s, tb_r, tb_c = requirements
+            sender_ok = send == -1 or tb_s == -1 or tb_s == send
+            receiver_ok = recv == -1 or tb_r == -1 or tb_r == recv
+            channel_ok = channel == -1 or channel == tb_c
+            if sender_ok and receiver_ok and channel_ok:
+                options.append(tbid)
+        return options
 
 def create_base_tbs(rank_dag):
     ops = []
@@ -147,6 +156,7 @@ def auto_assign_tbs(rank_dag):
             # Get all possible TBs this can be mapped to
             tb_options = _get_tb_options(tb_assignments[rank], s, r, op.channel, current_num_tb[rank], num_channels[rank])
             # If there are multiple options choose the TB at the lowest step
+
             tbid = tb_options[0]
             if len(tb_options) > 1:
                 for tbid_opt in tb_options:
