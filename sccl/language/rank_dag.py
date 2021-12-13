@@ -349,9 +349,11 @@ class RankDAG:
         for i in range(instances):
             # Generate all the threadblocks and ops
             for rank, rank_tbs in enumerate(self.tbs):
+                rank_channels = self.num_channels [rank]
                 for tbid, tb in rank_tbs.items():
                     # TODO: Handle channels correctly
-                    itb = Threadblock(tb.channel+i, tb.send, tb.recv)
+                    instance_channel = rank_channels * i + tb.channel
+                    itb = Threadblock(instance_channel, tb.send, tb.recv)
                     itbid = tbid * instances + i
                     itb.ops = [None] * len(tb.ops)
                     for s, op in enumerate(tb.ops):

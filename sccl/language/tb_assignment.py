@@ -27,6 +27,7 @@ def manual_assign_tbs(rank_dag):
                 if o.inst == Instruction.send or o.inst == Instruction.copy:
                     heapq.heappush(ops, o)
 
+    rank_dag.num_channels = [1] * rank_dag.num_ranks
     visited = set()
     while len(ops) > 0:
         op = heapq.heappop(ops)
@@ -43,6 +44,7 @@ def manual_assign_tbs(rank_dag):
                 tb.send = op.dst.rank if op.is_send() else tb.send
                 tb.recv = op.src.rank if op.is_recv() else tb.recv
                 op.step = len(tb.ops)-1
+                rank_dag.num_channels[rank] = max(op.channel+1, rank_dag.num_channels[rank] )
             else:
                 print("Illegal TB assignment")
                 print("TODO: Add Debug messages")
