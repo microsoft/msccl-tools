@@ -47,7 +47,10 @@ def manual_assign_tbs(rank_dag):
                 rank_dag.num_channels[rank] = max(op.channel+1, rank_dag.num_channels[rank] )
             else:
                 print("Illegal TB assignment")
-                print("TODO: Add Debug messages")
+                print("Trying to add:", op)
+                print("to TB:", tb)
+                for tbid, tb in rank_dag.tbs[rank].items():
+                    print(tbid, tb.send, tb.recv, tb.channel)
                 sys.exit()
             
             for o in list(op.next):
@@ -62,8 +65,8 @@ def manual_assign_tbs(rank_dag):
 
 
 def _get_tb_options(mapping, send, recv, channel, num_tbs, num_channels):
-    if send == -1 and recv == -1: # Can go anywhere
-        return list(i for i in range(0, num_tbs))
+    # if send == -1 and recv == -1: # Can go anywhere
+    #     return list(i for i in range(0, num_tbs))
     if channel == -1: # Can go on any channel that matches to send, recv
         options = []
         for ch in range(num_channels):
@@ -84,7 +87,7 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs, num_channels):
                 options.append(tbid)
         return options
 
-def create_base_tbs(rank_dag):
+def create_base_tbs(rank_dag, local_tb):
     ops = []
     tbid = [0] * rank_dag.num_ranks
     tb_assignments = [] # rank -> (sender, receiver, channel) -> tbid
@@ -111,7 +114,7 @@ def create_base_tbs(rank_dag):
             if op.channel >= num_channels[rank]:
                 num_channels[rank] = op.channel + 1
 
-            if (s != -1 or r != -1) and (s,r,channel) not in tb_assignments[rank]:
+            if (s != -1 or r != -1 or local_tb) and (s,r,channel) not in tb_assignments[rank]:
                 rank_dag.tbs[rank][tbid[rank]] = Threadblock(send=s, recv=r, channel=channel)
                 tb_assignments[rank][(s,r,channel)] = tbid[rank]
                 tbid[rank] += 1

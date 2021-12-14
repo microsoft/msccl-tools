@@ -82,7 +82,7 @@ class SCCLProgram:
         if self.threadblocks == -1:
             manual_assign_tbs(self.rank_dag)
         else:
-            create_base_tbs(self.rank_dag)
+            create_base_tbs(self.rank_dag, self.threadblocks == 100) # TODO: this is a hack 
             auto_assign_tbs(self.rank_dag)
         self.rank_dag.lower_pt1(self.instances)
         # TODO: get rid of buffers
