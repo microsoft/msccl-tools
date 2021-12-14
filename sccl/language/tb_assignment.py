@@ -115,7 +115,9 @@ def create_base_tbs(rank_dag):
                 rank_dag.tbs[rank][tbid[rank]] = Threadblock(send=s, recv=r, channel=channel)
                 tb_assignments[rank][(s,r,channel)] = tbid[rank]
                 tbid[rank] += 1
-        ops = ops[1:] + list(op.next)
+            ops = ops[1:] + list(op.next)
+        else:
+            ops = ops[1:]
 
     rank_dag.tb_assignments = tb_assignments
     rank_dag.num_channels = num_channels
