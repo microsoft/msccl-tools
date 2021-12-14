@@ -72,7 +72,7 @@ class RankDAG:
                 if not_send(op, slot) and not last_recvs:
                     return True, op
                 return False, op
-                
+        
         result, op = dfs(self.operations[slot])
         assert result
         return op
@@ -110,8 +110,10 @@ class RankDAG:
         for i in range(dstindex, dstindex+size):
             slot = (rank, dstbuffer, i)
             if slot in self.operations:
-                prev_op = self.find_last_recv(slot)
+                prev_op = self.find_last_ops(slot)
                 prev_ops.append(prev_op) # All operations that need to happen before
+            else:
+                self.operations[slot] = op
 
         for prev_op in prev_ops:
             if op not in prev_op.next:
@@ -139,7 +141,7 @@ class RankDAG:
         for i in range(dstindex, dstindex+size):
             slot = (rank, dstbuffer, i)
             if slot in self.operations:
-                prev_op = self.find_last_recv(slot)
+                prev_op = self.find_last_ops(slot)
                 prev_ops.append(prev_op) # All operations that need to happen before
 
         for prev_op in prev_ops:
