@@ -88,7 +88,7 @@ class SCCLProgram:
         # TODO: get rid of buffers
         gpu_prgms = self.rank_dag.lower_pt2(self.instances, self.buffers, self.interleaved_replication)
         # check_dependency_cycles(self.rank_dag.tbs)
-        # check_threadblock_ordering(self.rank_dags.tbs, self.rank_dag)
+        check_threadblock_ordering(self.rank_dag)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
        
 
