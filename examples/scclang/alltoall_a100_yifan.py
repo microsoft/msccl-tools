@@ -42,7 +42,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                     rank = n1 * gpus_per_node + g1
                     ib_peer = n2 * gpus_per_node + g1
                     chunk = Rank(rank).scratch(f'send_{n2}', 0, 8)
-                    chunk = chunk.send(ib_peer, Buffer.output, chunk.get_dst_index())
+                    chunk = chunk.send(ib_peer, Buffer.output, chunk.get_dst_index(), ch=(n2 % 8)*2+(rank%2)+2)
 
           
           # Handle local chunks within a node
