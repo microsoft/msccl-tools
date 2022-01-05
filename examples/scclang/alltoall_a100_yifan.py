@@ -30,7 +30,6 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                         rank2 = n1 * gpus_per_node + g2
                         # chunk to send: g2 on n2
                         index = n2 * gpus_per_node + g2 
-                        # chunk = Rank(rank1).input(index)
                         c = chunk(Buffer.input, rank1, index)
                         c = c.send(rank2, f'send_{n2}')
 
@@ -40,23 +39,19 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                 for g1 in range(gpus_per_node):
                     rank = n1 * gpus_per_node + g1
                     ib_peer = n2 * gpus_per_node + g1
-                    # chunk = Rank(rank).scratch(f'send_{n2}', 0, 8)
                     c = chunk(f'send_{n2}', rank, 0, 8)
-                    c = c.send(ib_peer, Buffer.output, c.get_dst_index())
+                    c = c.send(ib_peer, Buffer.output, c.get_dst_index(), ch=(n2 % 8)*2+(rank%2)+2)
 
           
-          # Handle local chunks within a node
+        # Handle local chunks within a node
         for rank in range(num_ranks):
             for g in range(gpus_per_node):
                 index = (rank // gpus_per_node) * gpus_per_node + g
-                # chunk = Rank(rank).input(index)
                 c = chunk(Buffer.input, rank, index)
                 c.send(c.get_dst_rank(), Buffer.output, c.get_dst_index())
 
-
         XML() # Prints the XML
         Check()
-
 
 
 parser = argparse.ArgumentParser()
