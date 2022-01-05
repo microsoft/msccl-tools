@@ -40,7 +40,7 @@ class AllToAll(Collective):
         chunks_per_node = self.num_ranks * self.instances
         correct = True
         for r in range(self.num_ranks):
-            output = prog.ranks[r].buffers[Buffer.output]
+            output = prog.buffers[r][Buffer.output]
             for i in range(self.num_ranks):
                 for ch in range(self.instances):
                     index = ch + i * self.instances
@@ -80,7 +80,7 @@ class AllGather(Collective):
         correct = True
         buf = Buffer.output
         for r in range(self.num_ranks):
-            output = prog.ranks[r].buffers[buf]
+            output = progbuffers[r][buf]
             for i in range(self.num_ranks):
                 for ch in range(self.instances):
                     index = i*self.instances + ch
@@ -112,7 +112,7 @@ class AllReduce(Collective):
             input_buffer = []
             output_buffer = [None] * chunks_per_node
             for c in range(chunks_per_node):
-                # TODO: Chunk starts at rank r index c, and ends on all ranks (-1) at index r, also reduced (?? how to indicate??)
+                # Chunks start at rank r index c, and ends on all ranks (-1) at index r
                 input_buffer.append(Chunk(r, c, -1, c))
             if self.inplace:
                 buffers = {Buffer.input : input_buffer}
@@ -135,7 +135,7 @@ class AllReduce(Collective):
 
         correct = True
         for r in range(self.num_ranks):
-            output = prog.ranks[r].buffers[buf]
+            output = prog.buffers[r][buf]
             for c in range(chunks_per_node):
                 chunk = output[c]
                 if chunk is None or chunk != expected_chunks[c]:
@@ -178,7 +178,7 @@ class ReduceScatter(Collective):
 
         correct = True
         for r in range(self.num_ranks):
-            output = prog.ranks[r].buffers[buf]
+            output = prog.buffers[r][buf]
             for c in range(self.instances):
                 correct_idx = r * self.instances + c
                 if self.inplace:

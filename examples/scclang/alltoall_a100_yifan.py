@@ -15,7 +15,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
         # Scratch space
         for rank in range(num_ranks):
             for node in range(num_nodes):
-                Rank(rank).create_scratch(f'send_{node}')
+                create_scratch(rank, f'send_{node}')
 
         for n1 in range(num_nodes):
             for r in range(1,num_nodes):
@@ -30,10 +30,9 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                         rank2 = n1 * gpus_per_node + g2
                         # chunk to send: g2 on n2
                         index = n2 * gpus_per_node + g2 
-                        chunk = Rank(rank1).input(index)
-                        chunk = chunk.send(rank2, f'send_{n2}')
-                        # print(f"Sending from {rank1} to {rank2}")
-                        # chunk.print_chunk_info()
+                        # chunk = Rank(rank1).input(index)
+                        c = chunk(Buffer.input, rank1, index)
+                        c = c.send(rank2, f'send_{n2}')
 
             for r in range(1,num_nodes):
                 n2 = (n1 + r) % num_nodes
@@ -41,16 +40,18 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
                 for g1 in range(gpus_per_node):
                     rank = n1 * gpus_per_node + g1
                     ib_peer = n2 * gpus_per_node + g1
-                    chunk = Rank(rank).scratch(f'send_{n2}', 0, 8)
-                    chunk = chunk.send(ib_peer, Buffer.output, chunk.get_dst_index())
+                    # chunk = Rank(rank).scratch(f'send_{n2}', 0, 8)
+                    c = chunk(f'send_{n2}', rank, 0, 8)
+                    c = c.send(ib_peer, Buffer.output, c.get_dst_index())
 
           
           # Handle local chunks within a node
         for rank in range(num_ranks):
             for g in range(gpus_per_node):
                 index = (rank // gpus_per_node) * gpus_per_node + g
-                chunk = Rank(rank).input(index)
-                chunk.send(chunk.get_dst_rank(), Buffer.output, chunk.get_dst_index())
+                # chunk = Rank(rank).input(index)
+                c = chunk(Buffer.input, rank, index)
+                c.send(c.get_dst_rank(), Buffer.output, c.get_dst_index())
 
 
         XML() # Prints the XML

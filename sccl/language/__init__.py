@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from enum import Enum
 import functools
 from sccl.language.ir import *
-from sccl.language.misc import *
 from sccl.language.passes import *
 from sccl.language.tb_assignment import *
 from sccl.language.chunk import *
@@ -23,15 +22,15 @@ def _curr():
     return _current_program
 
 class SCCLProgram:
-    def __init__(self, name, topo, collective, instances, threadblocks=0, protocol='Simple', interleaved_replication=True):
+    def __init__(self, name, topo, collective, instances, protocol='Simple', \
+            threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True):
         self.name = name
         self.topo = topo
         self.collective = collective       
         self.num_ranks = topo.num_nodes()
-        self.ranks = []
         self.instances = instances
-        self.threadblocks = threadblocks
         self.protocol = protocol
+        self.threadblock_policy = threadblock_policy
         self.interleaved_replication = interleaved_replication
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
@@ -39,13 +38,23 @@ class SCCLProgram:
         # Initialize the input buffers
         self.chunk_dag = ChunkDAG()
         self.buffers = collective.init_buffers()
-        # self.rank_dags = [RankDAG(r, self.buffers[r]) for r in range(self.num_ranks)]
         self.rank_dag = RankDAG(self.num_ranks, self.buffers)
         for r in range(self.num_ranks):
-            self.ranks.append(Process(self, r, self.buffers[r]))
             for index, chunk in enumerate(self.buffers[r][Buffer.input]):
-                ref = self.get_ref(r, Buffer.input, index, 1)
+                ref = self.get_ref(Buffer.input, r, index, 1)
                 self.chunk_dag.init_chunk(chunk, ref)
+
+    def __enter__(self):
+        global _current_program
+        if _current_program != None:
+            raise RuntimeError("There is already a SCCL Program in context")
+        _current_program = self
+    
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        global _current_program
+        if _current_program != self:
+            raise RuntimeError("This program is not currently in context")
+        _current_program = None
 
     def add_send(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
         sb = self.buffers[src][src_buffer]
@@ -61,12 +70,20 @@ class SCCLProgram:
             sent_chunk = sb[src_index + i]
             db[dst_index + i] = reduce_chunk.reduce(sent_chunk)
 
-    def get_ref(self, rank, buffer, index, size):
+    def get_ref(self, buffer, rank, index, size):
+        if buffer == Buffer.input or buffer == Buffer.output:
+            buffer, index = self.collective.get_buffer_index(rank, buffer, index)
         return Ref(rank, buffer, index, size, self)
 
-    # Returns a Process corresponding to rank number
-    def rank(self, rank):
-        return self.ranks[rank]
+    def get_chunks(self, buffer, rank, index, size=1):
+        chunks = [None] * size
+        for i in range(index, index+size):
+            chunks[i-index] = self.buffers[rank][buffer][i]
+        return chunks
+
+    def create_scratch(self, rank, name):
+        assert (name not in self.buffers[rank]), f'Scratch buffer, {name}, already created'
+        self.buffers[rank][name] = BufferSlice(Buffer.scratch, name)
 
     # Checks that all chunks that should be on each rank
     # are present in the output buffer.
@@ -79,30 +96,16 @@ class SCCLProgram:
         self.chunk_dag.lower_rank_dag(self.rank_dag)
        
         self.rank_dag.optimize()
-        if self.threadblocks == -1:
+        if self.threadblock_policy == ThreadblockPolicy.manual:
             manual_assign_tbs(self.rank_dag)
         else:
-            create_base_tbs(self.rank_dag, self.threadblocks == 100) # TODO: this is a hack 
+            create_base_tbs(self.rank_dag)
             auto_assign_tbs(self.rank_dag)
         self.rank_dag.lower_pt1(self.instances)
-        # TODO: get rid of buffers
-        gpu_prgms = self.rank_dag.lower_pt2(self.instances, self.buffers, self.interleaved_replication)
-        # check_dependency_cycles(self.rank_dag.tbs)
+        gpu_prgms = self.rank_dag.lower_pt2(self.instances, self.interleaved_replication)
+        check_dependency_cycles(self.rank_dag.tbs)
         check_threadblock_ordering(self.rank_dag)
-        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
-       
-
-    def __enter__(self):
-        global _current_program
-        if _current_program != None:
-            raise RuntimeError("There is already a SCCL Program in context")
-        _current_program = self
-    
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        global _current_program
-        if _current_program != self:
-            raise RuntimeError("This program is not currently in context")
-        _current_program = None
+        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
 
     def print_chunk_dag(self):
         visualize_chunk_dag(self.chunk_dag.chunk_paths)
@@ -117,8 +120,11 @@ class SCCLProgram:
 def Print():
     _curr().print_chunk_dag()
 
-def Rank(index):
-    return _curr().rank(index)
+def chunk(buffer, rank, index, size=1):
+    return _curr().get_ref(buffer, rank, index, size)
+
+def create_scratch(rank, name):
+    return _curr().create_scratch(rank, name)
 
 def XML():
    print(ir_to_xml(_curr().lower()))
@@ -126,48 +132,9 @@ def XML():
 def Check():
     return _curr().check()
 
-class Process:
-    def __init__(self, prog, rank, buffers):
-        self.prog = prog
-        self.rank = rank
-        self.buffers = buffers
-        self.tbs = {}
-        self.tb_mapping = {}
-        self.send_channel_mapping = {} # sender rank -> channels -> tbid
-        self.recv_channel_mapping = {} # receiver rank -> channels -> tbid
-        self.tb_count = 0
-
-    def get_ref(self, buffer, index, size):
-        return Ref(self.rank, buffer, index, size, self.prog)
-
-    def get_chunks(self, buffer, index, size=1):
-        chunks = [None] * size
-        for i in range(index, index+size):
-            chunks[i-index] = self.buffers[buffer][i]
-        return chunks
-
-    # Returns a reference to the chunk located at index of the input buffer.
-    def input(self, index, size=1):
-        buffer, index = self.prog.collective.get_buffer_index(self.rank, Buffer.input, index)
-        return self.get_ref(buffer, index, size)
-
-    def output(self, index, size=1):
-        buffer, index = self.prog.collective.get_buffer_index(self.rank, Buffer.output, index)
-        return self.get_ref(buffer, index, size)
-
-    def scratch(self, name, index, size=1):
-        return self.get_ref(name, index, size)
-
-    # Creates a scratch buffer with a name
-    def create_scratch(self, name):
-        assert (name not in self.buffers), f'Scratch buffer, {name}, already created'
-        self.buffers[name] = BufferSlice(Buffer.scratch, name)
-
 @dataclass
 class Ref(ChunkRef):
     prog: SCCLProgram
-    missing: set = field(default_factory=set)
-    creator: list = field(default_factory=list) # The operation(s) that created this chunk on this rank
 
     def __repr__(self):
         return f'Ref(Buffer:{self.buffer}, Index:{self.index}, Size:{self.size}, Rank:{self.rank})'
@@ -176,7 +143,7 @@ class Ref(ChunkRef):
         return self.index + self.size
 
     def _get_chunk(self, index):
-        return self.prog.ranks[self.rank].buffers[self.buffer][index]
+        return self.prog.buffers[self.rank][self.buffer][index]
 
     def split(self, num):
         assert (self.size % num == 0), f'Trying to split a chunk of {self.size} elements into {num} parts'
@@ -184,10 +151,9 @@ class Ref(ChunkRef):
         size = self.size // num
         for i in range(num):
             index = self.index + i * size
-            chunks[i] = self.prog.ranks[self.rank].get_ref(self.buffer, index, size)
+            chunks[i] = self.prog.get_ref(self.buffer, self.rank, index, size)
         return chunks
 
-    # TODO: this is weird...
     def group(self, other):
         assert (self.rank == other.rank), f'Trying to concatenate chunks on ranks {self.rank} and {other.rank}'
         assert (self.buffer == other.buffer), f'Trying to concatenate chunks in {self.buffer} and {other.buffer}'
@@ -199,51 +165,47 @@ class Ref(ChunkRef):
             second = self
 
         end = max(first._end(), second._end())
-        missing = set(range(first.index, end))
-        missing.difference_update(set(range(first.index, first._end())).difference(first.missing))
-        missing.difference_update(set(range(second.index, second._end())).difference(second.missing))
-        return Ref(self.rank, self.buffer, first.index, end - first.index, self.prog, missing) # Broken
+        return Ref(self.rank, self.buffer, first.index, end - first.index, self.prog)
         
 
     def send(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=-1):
-        assert (len(self.missing) == 0), f'Trying to send an incomplete concatenation. Missing indices {self.missing}'
+        # TODO: missing check
 
         # If index is not specified assume it is going to the same place in the next gpu
         if index == -1 and buffer == None:
             index = self.index
             buffer = self.buffer
         elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
-            index = self.prog.ranks[dst].buffers[buffer].instance_size()
+            index = self.prog.buffers[dst][buffer].instance_size()
 
         # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
         buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
 
         # Direct send
         assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
-        dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
+        dst_chunkref = self.prog.get_ref(buffer, dst, index, self.size)
 
         self.prog.add_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
-        chunks = self.prog.ranks[self.rank].get_chunks(self.buffer, self.index, self.size)
+        chunks = self.prog.get_chunks(self.buffer, self.rank, self.index, self.size)
         self.prog.chunk_dag.add_send(chunks, self, dst_chunkref, sendtb, recvtb, ch)
 
         return dst_chunkref
 
     def reduce(self, dst, buffer, index=-1, sendtb=-1, recvtb=-1, ch=0):
-
         # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
         buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
 
         # Receive reduce copy
         assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
-        dst_chunkref = self.prog.ranks[dst].get_ref(buffer, index, self.size)
+        dst_chunkref = self.prog.get_ref(buffer, dst, index, self.size)
 
-        chunks1 = self.prog.ranks[self.rank].get_chunks(self.buffer, self.index, self.size)
-        chunks2 = self.prog.ranks[dst].get_chunks(buffer, index, self.size)
+        chunks1 = self.prog.get_chunks(self.buffer, self.rank, self.index, self.size)
+        chunks2 = self.prog.get_chunks(buffer, dst, index, self.size)
 
         self.prog.add_reduce(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
-        reduce_chunks = self.prog.ranks[dst].get_chunks(buffer, index, self.size)
+        reduce_chunks = self.prog.get_chunks(buffer, dst, index, self.size)
         self.prog.chunk_dag.add_reduce(chunks1, chunks2, reduce_chunks, self, dst_chunkref, sendtb, recvtb, ch)
         return dst_chunkref
 

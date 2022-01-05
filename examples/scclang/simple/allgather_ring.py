@@ -12,7 +12,7 @@ def allgather_ring(size):
         # Loop over each chunk's root
         for r in range(size):
             # Get the chunk at rank r, input[r]
-            c = Rank(r).input(0)
+            c = chunk(Buffer.input, r, 0)
             # Copy chunk to the output buffer
             c = c.send(r, buffer=Buffer.output, index=r, sendtb=0)
 
@@ -23,26 +23,8 @@ def allgather_ring(size):
                 # same rank can be merged into a receive-copy-send
                 c = c.send(next, buffer=Buffer.output, index=r)
                 next = (next + 1) % size
-        Print()
-        # XML()
-        # Check()
-
-def test(size):
-    topology = fully_connected(size)
-    collective = AllGather(size, 2, False, "allgather")
-    with SCCLProgram("allgather_ring", topology, collective, 1):
-        # Loop over each chunk's root
-        for r in range(1):
-            # Get the chunk at rank r, input[r]
-            c = Rank(r).input(0, 2)
-            # Copy chunk to the output buffer
-            c = c.send(r, buffer=Buffer.output, index=0, sendtb=0)
-            cs = c.split(2)
-            cs[1].send(r+1, buffer=Buffer.output, index=1)
-        Print()
-        # XML()
-        # Check()
-
+        XML()
+        Check()
 
 def allgather_ring_inplace(size):
     topology = fully_connected(size)
@@ -51,7 +33,7 @@ def allgather_ring_inplace(size):
         # Loop over each chunk's root
         for r in range(size):
             # Get the chunk at rank r, input[r]
-            c = Rank(r).input(0)
+            c = chunk(Buffer.input, r, 0)
 
             next = (r + 1) % size
             while next != r:
@@ -64,5 +46,4 @@ def allgather_ring_inplace(size):
         Check()
 
 # allgather_ring(4)
-test(4)
-# allgather_ring_inplace(4)
+allgather_ring_inplace(4)

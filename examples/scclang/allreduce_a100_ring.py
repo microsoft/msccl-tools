@@ -14,25 +14,26 @@ def allreduce_ring(instances, channels):
     size = 8
     topology = fully_connected(size)
     collective = AllReduce(size, size, True, "allreduce")
-    with SCCLProgram(f"allreduce_ring_{channels}channelsperring", topology, collective, instances, protocol="LL128", threadblocks=-1):
+    with SCCLProgram(f"allreduce_ring_{channels}channelsperring", topology, collective, instances,
+         protocol="LL128", threadblock_policy=ThreadblockPolicy.manual):
         # Reduce ring
         for step in range(0, size-1):
-            for chunk in range(0, size):
-                index = chunk
-                start = (chunk + step) % size
-                c = Rank(start).input(index)
-                next = (chunk + step + 1) % size
-                channel = chunk%channels
-                c = c.reduce(next, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
+            for index in range(0, size):
+                rank = (index + step) % size
+                # c = Rank(start).input(index)
+                c = chunk(Buffer.input, rank, index)
+                next_rank = (index + step + 1) % size
+                channel = index%channels
+                c = c.reduce(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
         # Propagate ring
         for step in range(-1, size-2):
-            for chunk in range(0, size):
-                index = chunk
-                start = (chunk + step) % size
-                c = Rank(start).input(index)
-                next = (chunk + step + 1) % size
-                channel = chunk%channels
-                c = c.send(next, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
+            for index in range(0, size):
+                rank = (index + step) % size
+                # c = Rank(start).input(index)
+                c = chunk(Buffer.input, rank, index)
+                next_rank = (index + step + 1) % size
+                channel = index%channels
+                c = c.send(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
                
         XML()
         Check()

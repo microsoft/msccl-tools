@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 from enum import Enum
 import heapq
+import sys
 
 from sccl.language.ir import *
 from sccl.language.rank_dag import *
@@ -46,22 +47,16 @@ def manual_assign_tbs(rank_dag):
                 op.step = len(tb.ops)-1
                 rank_dag.num_channels[rank] = max(op.channel+1, rank_dag.num_channels[rank] )
             else:
-                print("Illegal TB assignment")
-                print("Trying to add:", op)
-                print("to TB:", tb)
-                for tbid, tb in rank_dag.tbs[rank].items():
-                    print(tbid, tb.send, tb.recv, tb.channel)
+                print("Illegal threadblock assignment")
+                print(f"Trying to add {op} to threadblock {tbid}")
+                print(f"Threadblock {tbid} send:{tb.send} recv:{tb.recv} channel:{tb.channel}")
+                print(f"Operation send:{op.dst.rank if op.is_send() else -1} recv:{op.dst.rank if op.is_recv() else -1} channel:{op.channel}")
                 sys.exit()
             
             for o in list(op.next):
                 heapq.heappush(ops, o)
             for o in op.match:
                 heapq.heappush(ops, o)
-
-    # for tbid, tb in self.tbs.items():
-    #     print("TBID", tbid)
-    #     for op in tb.ops:
-    #         print(op.priority, op.chunk_step, op)
 
 
 def _get_tb_options(mapping, send, recv, channel, num_tbs, num_channels):
@@ -87,7 +82,7 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs, num_channels):
                 options.append(tbid)
         return options
 
-def create_base_tbs(rank_dag, local_tb):
+def create_base_tbs(rank_dag):
     ops = []
     tbid = [0] * rank_dag.num_ranks
     tb_assignments = [] # rank -> (sender, receiver, channel) -> tbid
@@ -114,7 +109,7 @@ def create_base_tbs(rank_dag, local_tb):
             if op.channel >= num_channels[rank]:
                 num_channels[rank] = op.channel + 1
 
-            if (s != -1 or r != -1 or local_tb) and (s,r,channel) not in tb_assignments[rank]:
+            if (s != -1 or r != -1) and (s,r,channel) not in tb_assignments[rank]:
                 rank_dag.tbs[rank][tbid[rank]] = Threadblock(send=s, recv=r, channel=channel)
                 tb_assignments[rank][(s,r,channel)] = tbid[rank]
                 tbid[rank] += 1
@@ -173,7 +168,7 @@ def auto_assign_tbs(rank_dag):
             if not _verify_tb_op_compatible(tb, op):
                 print(f"Failing: Channel {op.channel}, send {s} recv {r} {op}")
                 print("Threadblock", tb.send, tb.recv, tb.channel, tb)
-                assert False
+                sys.exit()
 
             tb.ops.append(op)
             tb.send = op.dst.rank if op.is_send() else tb.send
@@ -193,8 +188,3 @@ def auto_assign_tbs(rank_dag):
                 heapq.heappush(ops, o)
             for o in op.match:
                 heapq.heappush(ops, o)
-
-    # for tbid, tb in rank_dag.tbs.items():
-    #     print("rank", rank_dag.rank, "TB:", tbid, "s", tb.send, "r", tb.recv)
-    #     for op in tb.ops:
-    #         print(f"  Chunk step:{op.chunk_step} Chunk priority:{op.priority} {op}")

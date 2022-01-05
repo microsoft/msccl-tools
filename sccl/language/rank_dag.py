@@ -8,8 +8,9 @@ import heapq
 from sccl.language.ir import *
 from sccl.language.passes import *
 
-def not_send(op, slot):
-    # If the instruction on this spot is a copy or reduce, check to see if the slot was the dst of the operation
+# Returns whether an operation writes to a particular slot
+def writes_to_slot(op, slot):
+    # If the instruction is a copy or reduce, check to see if the destination matches the slot
     if op.inst == Instruction.copy or op.inst == Instruction.reduce:
         cpy_src = op.src
         _, buffer, index = slot
@@ -44,8 +45,7 @@ class RankDAG:
         for _ in range(num_ranks):
             self.tbs.append({}) 
         self.tb_mapping = {}
-        self.send_channel_mapping = {} # sender rank -> channels -> tbid
-        self.recv_channel_mapping = {} 
+
 
     def add_start(self, rank, buffer, index, ref):
         slot = (rank, buffer, index)
@@ -59,7 +59,7 @@ class RankDAG:
         def dfs(op):
             # Found the last operation on the slot
             if len(op.next) == 0:
-                return not_send(op, slot), op
+                return writes_to_slot(op, slot), op
             else:
                 last_recvs = False
                 # Check if any of the children is the last write
@@ -69,7 +69,7 @@ class RankDAG:
                         return True, recv_op
                     last_recvs = last_recvs or is_last_recv
                 # Check if we are the last write
-                if not_send(op, slot) and not last_recvs:
+                if writes_to_slot(op, slot) and not last_recvs:
                     return True, op
                 return False, op
         
@@ -142,8 +142,8 @@ class RankDAG:
             slot = (rank, dstbuffer, i)
             if slot in self.operations:
                 prev_op = self.find_last_ops(slot)
-                prev_ops.append(prev_op) # All operations that need to happen before
-
+                prev_ops = prev_ops + prev_op # All operations that need to happen before
+       
         for prev_op in prev_ops:
             if op not in prev_op.next:
                 prev_op.next.add(op)
@@ -237,9 +237,9 @@ class RankDAG:
             while len(frontier) > 0:
                 op = frontier[0]
                 if len(op.next) == 1:
-                    next_op = list(op.next)[0] # TODO: FIX ME
+                    next_op = list(op.next)[0]
                     if len(next_op.next) == 1:
-                        nnext_op = list(next_op.next)[0] # TODO: FIX ME
+                        nnext_op = list(next_op.next)[0]
                         if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and nnext_op.inst == Instruction.recv and same_tb(op, next_op) and same_count(op, next_op):
                             op.inst = Instruction.recv_reduce_send
                             op.dst = next_op.dst
@@ -257,9 +257,9 @@ class RankDAG:
         self.infer_dependencies()
         self.lower_buffers(instances)
     
-    def lower_pt2(self, instances, buffers, interleaved):
-        self.replicate(instances, buffers, interleaved)
-        return self.lower_tbs(buffers)
+    def lower_pt2(self, instances, interleaved):
+        self.replicate(instances, interleaved)
+        return self.lower_tbs()
 
 
     def infer_dependencies(self):
@@ -280,10 +280,10 @@ class RankDAG:
                 frontier = frontier[1:] + list(op.next)
 
     # Convert local scratch buffers to index into one global scratch buffer
-    def lower_chunk(self, chunk, buffers):
+    def lower_chunk(self, chunk):
         if chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
-            buffer = buffers[chunk.rank][chunk.buffer].get_buffer()
-            index = buffers[chunk.rank][chunk.buffer].get_global_index(chunk.index)
+            buffer = self.buffers[chunk.rank][chunk.buffer].get_buffer()
+            index = self.buffers[chunk.rank][chunk.buffer].get_global_index(chunk.index)
             return ChunkRef(chunk.rank, buffer, index, chunk.size)
         return chunk
 
@@ -297,17 +297,16 @@ class RankDAG:
                     offset += buf.instance_size() * instances
 
     # Preprocess the threadblocks for lowering into xml
-    # TODO: remove buffers
-    def lower_tbs(self, buffers):
+    def lower_tbs(self):
         gpus = []
         for rank, rank_tbs in enumerate(self.instanced_tbs):
-            lowered_tbs = [None] * len(rank_tbs)
+            lowered_tbs = {}
             for tbid, tb in rank_tbs.items():
                 for op in tb.ops:
-                    op.src = self.lower_chunk(op.src, buffers)
-                    op.dst = self.lower_chunk(op.dst, buffers)
+                    op.src = self.lower_chunk(op.src)
+                    op.dst = self.lower_chunk(op.dst)
                 lowered_tbs[tbid] = tb
-            gpus.append(Gpu(rank, lowered_tbs))
+            gpus.append(Gpu(rank, lowered_tbs.values()))
         return gpus
 
 
@@ -319,7 +318,7 @@ class RankDAG:
     # only interleaved replication will be correct
     # Interleaved policy only supports single count sends/receives from the input/output buffer
     # (multicount ops are fine between scratch)
-    def replicate(self, instances, buffers, interleaved):
+    def replicate(self, instances, interleaved):
         if instances == 1:
             self.instanced_tbs = self.tbs
             return 
@@ -334,14 +333,14 @@ class RankDAG:
         def get_new_index(rank, buffer, index, size, i):
             # Scratch buffers always use batched
             if is_scratch(buffer):
-                buf_instance_len = buffers[rank][buffer].instance_size()
+                buf_instance_len = self.buffers[rank][buffer].instance_size()
                 return buf_instance_len * i + index
             # If this is operating on the input/output buffer then replication strategy can be either interleaved or batched
             # This is to fit with the semantics of certain collectives
             elif interleaved:
                 return  index * instances + i * size
             else:
-                return  len(buffers[rank][buffer]) * i + index
+                return  len(self.buffers[rank][buffer]) * i + index
 
         def get_instance_ref(ref):
             iindex = get_new_index(ref.rank, ref.buffer, ref.index, ref.size, i)
@@ -353,7 +352,6 @@ class RankDAG:
             for rank, rank_tbs in enumerate(self.tbs):
                 rank_channels = self.num_channels [rank]
                 for tbid, tb in rank_tbs.items():
-                    # TODO: Handle channels correctly
                     instance_channel = rank_channels * i + tb.channel
                     itb = Threadblock(instance_channel, tb.send, tb.recv)
                     itbid = tbid * instances + i
@@ -362,7 +360,8 @@ class RankDAG:
                         isrc = get_instance_ref(op.src)
                         idst = get_instance_ref(op.dst)
                         idepends = [] 
-                        iop = Op(op.inst, op.rank, isrc, idst, idepends, op.step, itbid) # Note: We don't need the fill out the rest of the metadata
+                        # Note: We don't need the fill out the rest of the metadata since replication is the last optimization
+                        iop = Op(op.inst, op.rank, isrc, idst, idepends, op.step, itbid) 
                         itb.ops[s] = iop
                     self.instanced_tbs[op.rank][itbid] = itb
         

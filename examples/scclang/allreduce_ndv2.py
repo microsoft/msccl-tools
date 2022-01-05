@@ -23,20 +23,20 @@ def allreduce(instances):
                     continue
                 within_socket_nghr = lc + (4 if (r >= num_local_gpus//2) else 0)
                 index = lc * 2
-                c = Rank(r).input(index, 2)
+                c = chunk(Buffer.input, r, index, 2)
                 c.reduce(within_socket_nghr, buffer=Buffer.input, index=index)
         #  cross-socket reduce_scatter
         for r in range(num_local_gpus):
             index = (r % (num_local_gpus//2)) * 2
             if r >= num_local_gpus // 2:
                 index += 1 # Handle the odd chunk
-            lc = Rank(r).input(index)
+            lc = chunk(Buffer.input, r, index)
             lc = lc.reduce((r+num_local_gpus//2) % num_local_gpus, buffer=Buffer.input, index=index)
             lc.send(r, Buffer.input, index, ch=1) # Reduce and send should be on different tbs
         #  local all_gather
         for r in range(num_local_gpus):
             index = (r % (num_local_gpus//2)) * 2
-            lc = Rank(r).input(index, 2)
+            lc = chunk(Buffer.input, r, index, 2)
             for t in range(num_local_gpus//2):
                 local_nghr = t + (num_local_gpus//2 if (r >= num_local_gpus//2) else 0)
                 if local_nghr == r:

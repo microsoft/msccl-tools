@@ -15,7 +15,7 @@ def allreduce_ring(size, instances, threadblocks):
     with SCCLProgram("allreduce_ring_inplace", topology, collective, instances, threadblocks):
         for r in range(size):
             index = r
-            c = Rank(r).input(index)
+            c = chunk(Buffer.input, r, index)
             next = (r + 1) % size
             # Chunk travels around the ring being reduced
             while next != r:

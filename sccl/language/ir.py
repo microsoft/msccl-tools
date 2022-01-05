@@ -35,10 +35,19 @@ class Threadblock:
     def __hash__(self):
         return id(self)
 
+
 class ChunkInstruction(Enum):
     start = 'start'
     reduce = 'reduce'
     send = 'send'
+
+    def __str__(self):
+        return self.value
+
+
+class ThreadblockPolicy(Enum):
+    auto = 'auto'
+    manual = 'manual'
 
     def __str__(self):
         return self.value

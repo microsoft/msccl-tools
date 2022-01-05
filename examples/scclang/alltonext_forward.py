@@ -29,7 +29,7 @@ class Pipeline(Collective):
     def check(self, prog):
         correct = True
         for r in range(1, self.num_ranks):
-            output = prog.ranks[r].buffers[Buffer.output]
+            output = prog.buffers[r][Buffer.output]
             for c in range(self.instances):
                 chunk = output[c]
                 # Check we got the previous rank's chunks
@@ -51,15 +51,15 @@ def pipeline(num_nodes, instances):
     def rank(node, local_rank):
         return node * num_local_gpus + local_rank
     
-    with SCCLProgram("pipeline-forward", topology, collective, 1):
+    with SCCLProgram("alltonext-forward", topology, collective, 1):
 
         # Allocate scratch space
         for n in range(num_nodes):
             for g in range(num_local_gpus):
                 r1 = rank(n, g)
                 # Creates extra scratch buffers but they are unused and won't show up in the xml
-                Rank(r1).create_scratch('scatter') 
-                Rank(r1).create_scratch('gather') 
+                create_scratch(r1, 'scatter') 
+                create_scratch(r1, 'gather') 
 
         for i in range(instances):
             for n in range(num_nodes):
@@ -73,7 +73,7 @@ def pipeline(num_nodes, instances):
                     # Cross node send - cooperative
                     if g == num_local_gpus -1:
                         for ch in range(chunks):
-                            c = Rank(r).input(ch*instances + i)
+                            c = chunk(Buffer.input, r, ch*instances+i)
                             if ch == 0: # 2 steps: Scatter - send to (node, 0), IB send to (node+1, 0)
                                 c = c.send(rank(n, ch), 'scatter', i, ch=ch%2+i*2)
 
@@ -89,7 +89,7 @@ def pipeline(num_nodes, instances):
                             
                     # Normal send - directly
                     else:
-                        c = Rank(r).input(i * chunks, chunks)
+                        c = chunk(Buffer.input, r, i*chunks, chunks)
                         c.send(r+1, Buffer.output, i * chunks, ch=g%2+i*2)
         
         Check()

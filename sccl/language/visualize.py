@@ -44,9 +44,6 @@ def visualize_chunk_dag(chunk_paths):
             frontier = frontier[1:] + op.next
             visited.add(op)
 
-    # print(nnodes)
-    # print(edges)
-    # print(vertex_label)
     g = ig.Graph(nnodes, edges, directed=True)
     layout = g.layout(layout=ig.Graph.layout_grid)
     ig.plot(g, vertex_label=vertex_label, vertex_color=vertex_colors, layout='auto')

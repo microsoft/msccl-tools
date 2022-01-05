@@ -41,7 +41,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
     topology = fully_connected(num_ranks)
     collective = AllToAll(num_ranks, instances, inplace=False, name="alltoall")
     
-    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1, threadblocks=100):
+    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
         # Allocate scratch buffers to gather chunks to be sent over IB
         # 2 scratch buffers for each node-node pair for the sender and receiver
         for n1 in range(num_nodes):
@@ -49,8 +49,8 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
                 if n1 != n2:
                     # Determine which are the two ranks that handle this cross node traffic
                     r1, r2 = CrossNodeGpus(n1, n2)
-                    Rank(r1).create_scratch((n1, n2)) # Sender's buffer named (n1, n2)
-                    Rank(r2).create_scratch((n1, n2)) # Receiver's buffer named (n1, n2)
+                    create_scratch(r1, (n1, n2)) # Sender's buffer named (n1, n2)
+                    create_scratch(r2, (n1, n2)) # Receiver's buffer named (n1, n2)
         ib_chunks = {} # Keeps track of chunks going over IB buffer buffer name -> chunk
 
         # Local Gathers
@@ -84,11 +84,9 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
                 for ch in range(instances):
                     for n2 in range(num_nodes):
                         r1 = RankFromNodeGpuPair(n1, g1)
-                        # Rank(r) gives accesses the rth rank of the program
-                        # input(i) gives a reference to ith chunk
                         if (n1 != n2): 
                             # Send over all chunks destined for that node to the peer gpu that handles chunks to that node
-                            c = Rank(r1).input(n2 * gpus_per_node * instances + ch * gpus_per_node, gpus_per_node)
+                            c = chunk(Buffer.input, r1, n2 * gpus_per_node * instances + ch * gpus_per_node, gpus_per_node)
                             # Gather chunks destined for cross node ranks in scratch to route through IB
                             gather_rank, _ = CrossNodeGpus(n1, n2)
                             buffer_key = (n1, n2)
@@ -103,7 +101,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
                             # which are on the critical path.
                             for g2 in range(gpus_per_node):
                                 r2 = RankFromNodeGpuPair(n2, g2)
-                                c = Rank(r1).input(r2 * instances + ch)
+                                c = chunk(Buffer.input, r1, r2 * instances + ch)
                                 c.send(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch*2)
 
                     
@@ -114,16 +112,16 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
             _, scatter_rank = CrossNodeGpus(n1, n2)
             # IB send divided across multiple parallel channels
             chunks = ib_chunk.split(ib_connections)
-            for ch, chunk in enumerate(chunks):
+            for ch, c in enumerate(chunks):
                 # Note: If we are only going to use 1 IB connection for each IB send
                 # alternate between channels 0 and 1 to utilize both IB links.
                 if ib_connections == 1:
-                    ib_channel = chunk.rank % 2
+                    ib_channel = c.rank % 2
                 else:
                     ib_channel = ch
-                chunk = chunk.send(scatter_rank, buffer=buffer_key, ch=ib_channel)
+                c = c.send(scatter_rank, buffer=buffer_key, ch=ib_channel)
                 # Local scatter
-                cs = chunk.split(gpus_per_node * gpus_per_node)
+                cs = c.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):
                     # Access the chunk's destination rank and index to route it to its final place
                     final_rank = c.get_dst_rank()

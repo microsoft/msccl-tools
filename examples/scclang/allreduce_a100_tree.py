@@ -28,7 +28,7 @@ def allreduce(ways, instances):
                 block = 2 ** pairs
                 for x in range(count):
                     index = current_index[r] + offset + lc*8 + x
-                    c = Rank(r).input(index)
+                    c = chunk(Buffer.input, r, index)
                     c.reduce(next, Buffer.input, index, ch=lc, sendtb=sendtb, recvtb=recvtb)
 
 
@@ -40,7 +40,7 @@ def allreduce(ways, instances):
                 offset = (count if r > next else 0) 
                 next_index[r] -= offset
                 index = current_index[r] + lc*8
-                c = Rank(r).input(index, count)
+                c = chunk(Buffer.input, r, index, count)
                 c.send(next, Buffer.input, index, ch=lc, sendtb=sendtb, recvtb=recvtb)
 
         next_index = [0] * 8

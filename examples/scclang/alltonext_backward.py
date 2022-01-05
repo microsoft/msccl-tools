@@ -28,7 +28,7 @@ class Pipeline(Collective):
     def check(self, prog):
         correct = True
         for r in range(0, self.num_ranks-1):
-            output = prog.ranks[r].buffers[Buffer.output]
+            output = prog.buffers[r][Buffer.output]
             for c in range(self.instances):
                 chunk = output[c]
                 if chunk is None or chunk.origin_rank != r+1 or chunk.origin_index != c:
@@ -49,14 +49,14 @@ def pipeline(num_nodes, instances):
     def rank(node, local_rank):
         return node * num_local_gpus + local_rank
     
-    with SCCLProgram("pipeline-backwards", topology, collective, 1):
+    with SCCLProgram("alltonext-backwards", topology, collective, 1):
 
         # Allocate scratch space
         for n in range(num_nodes):
             for g in range(num_local_gpus):
                 r1 = rank(n, g)
-                Rank(r1).create_scratch('gather') 
-                Rank(r1).create_scratch('scatter') 
+                create_scratch(r1, 'gather') 
+                create_scratch(r1, 'scatter') 
 
         for i in range(instances):
             for n in range(num_nodes):
@@ -70,7 +70,7 @@ def pipeline(num_nodes, instances):
                     # Cross node send - cooperative
                     if g == 0:
                         for ch in range(chunks):
-                            c = Rank(r).input(ch*instances + i)
+                            c = chunk(Buffer.input, r, ch*instances+i)
                             if ch == 0:
                                 # 2 steps: IB send to (node-1, g) then gather onto (node+1, num_local_gpus-1)
                                 c = c.send(rank(n-1, ch), 'gather', i, ch=ch%2+i*2)
@@ -85,7 +85,7 @@ def pipeline(num_nodes, instances):
                             
                     # Normal send - directly
                     else:
-                        c = Rank(r).input(i * chunks, chunks)
+                        c = chunk(Buffer.input, r, i*chunks, chunks)
                         c.send(r-1, Buffer.output, i * chunks, ch=g%2+i*2)
         
         Check()

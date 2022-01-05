@@ -20,23 +20,23 @@ def allreduce(num_nodes, instances):
     def rank(n, g):
         return local_ring_order[g] + n * num_local_gpus
         
-    with SCCLProgram("allreduce_ring_dgx1", topology, collective, 1):
+    with SCCLProgram("allreduce_ring_dgx1", topology, collective, 1, threadblock_policy=ThreadblockPolicy.manual):
 
         # Chunks travels around local rings being reduced (local_gpus-1 hops) starting at local gpu 1
         # At the end of the most reduced chunk ends up on local gpu 0 every each node
         for ch in range(instances):
             for n in range(num_nodes):
                 r = rank(n, 0) # Start at local gpu 1 (index 0 in local_ring_order)
-                c = Rank(r).input(ch)
+                c = chunk(Buffer.input, r, ch)
                 for g in range(1, 8):
                     next = rank(n, g)
                     c = c.reduce(next, buffer=Buffer.input, index=ch, ch=ch, sendtb=0+3*ch, recvtb=0+3*ch)
 
             # At this point gpu0 and gpu8 have the two most reduced chunks
             # 1 IB send to fully reduce chunk + 1 IB send to update other node 
-            c0 = Rank(0).input(ch)
+            c0 = chunk(Buffer.input, 0, ch)
             c0 = c0.send(9, buffer=Buffer.input, index=ch, ch=ch, sendtb=0+3*ch, recvtb=0+3*ch)
-            c1 = Rank(8).input(ch)
+            c1 = chunk(Buffer.input, 8, ch)
             c1 = c1.send(1, buffer=Buffer.input, index=ch, ch=ch, sendtb=0+3*ch, recvtb=0+3*ch)
 
             c0 = c0.reduce(8, buffer=Buffer.input, index=ch, ch=ch, sendtb=2+3*ch, recvtb=2+3*ch) # Completely reduced chunk on node 1, gpu0
@@ -45,7 +45,7 @@ def allreduce(num_nodes, instances):
             #  Propagate the fully reduced chunks going backwards around the ring
             for n in range(num_nodes):
                 r = rank(n, -1) 
-                c = Rank(r).input(ch)
+                c = chunk(Buffer.input, r, ch)
                 for g in range(6, -1, -1):
                     next = rank(n, g)
                     c = c.send(next, buffer=Buffer.input, index=ch, ch=ch, sendtb=2+3*ch, recvtb=2+3*ch)
