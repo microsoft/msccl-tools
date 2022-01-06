@@ -8,6 +8,10 @@ import os
 import atexit
 import humanfriendly
 
+from sccl.language import SCCLProgram, ir_to_xml
+import sccl.language.collectives as lang_collectives
+from sccl.topologies import distributed_fully_connected
+
 # The plans are keyed by (collective, machine_type) and each entry is a tuple
 # (name, function, machines, size_range, protocol, priority).
 synthesis_plans = defaultdict(list)
@@ -51,6 +55,40 @@ def register_synthesis_plan(collective, machine_type, machines=lambda x: True, s
             atexit.register(os.remove, path)
             return path
         _register_ef_provider(f'call {fun.__name__}', wrapped, collective,
+                             machine_type, machines, sizes, protocol, priority)
+        # Return the original function to not break other usage
+        return fun
+    return decorator
+
+
+def register_sccl_program(local_topology, collective, machine_type, machines=lambda x: True, sizes=None, protocol='Simple', priority=0, collective_obj=None, instances=1, inplace=False):
+    def decorator(fun):
+        name = fun.__name__
+        def wrapped(machines):
+            topology = distributed_fully_connected(local_topology, machines, 1)
+            co = collective_obj
+            if co == None:
+                if collective == 'allreduce':
+                    co = lang_collectives.AllReduce(topology.num_nodes(), instances, inplace, collective)
+                elif collective == 'allgather':
+                    co = lang_collectives.AllGather(topology.num_nodes(), instances, inplace, collective)
+                elif collective == 'alltoall':
+                    co = lang_collectives.AllToAll(topology.num_nodes(), instances, inplace, collective)
+                elif collective == 'reduce_scatter':
+                    co = lang_collectives.ReduceScatter(topology.num_nodes(), instances, inplace, collective)
+                else:
+                    raise RuntimeError(f'No collective_obj in sccl.language.collectives known for "{collective}"')
+            prog = SCCLProgram(name, topology, co, instances, protocol)
+            with prog:
+                fun(prog)
+            prog.check()
+            ef = ir_to_xml(prog.lower())
+            fd, path = tempfile.mkstemp()
+            with os.fdopen(fd, 'w') as f:
+                f.write(ef)
+            atexit.register(os.remove, path)
+            return path
+        _register_ef_provider(f'run {name}', wrapped, collective,
                              machine_type, machines, sizes, protocol, priority)
         # Return the original function to not break other usage
         return fun

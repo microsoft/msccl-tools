@@ -55,3 +55,19 @@ register_synthesis_plan(sccl.Collective.alltoall, 'ndv9000', lambda m: m == 1, (
 sccl.init('ndv9000', 1, (sccl.Collective.alltoall, ('2KB', None)))
 
 show()
+
+
+print('=== SCCLang program ===')
+
+from sccl.autosynth.registry import register_sccl_program
+from sccl.topologies import line
+from sccl.language import *
+
+@register_sccl_program(line(2), 'allgather', 'two_gpus', machines= lambda m: m == 1)
+def trivial_allgather(prog):
+    Rank(0).input(0).send(0, Buffer.output, 0).send(1)
+    Rank(1).input(0).send(1, Buffer.output, 1).send(0)
+
+sccl.init('two_gpus', 1, (sccl.Collective.allgather, (0, None)))
+
+show()
