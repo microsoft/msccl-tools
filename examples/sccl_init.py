@@ -85,5 +85,4 @@ def ndv4_ring_allreduce(prog, nodes):
 
 sccl.init('ndv4', 1, (sccl.Collective.allreduce, (0, None)))
 
-
 show()

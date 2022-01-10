@@ -5,7 +5,7 @@ from sccl.language import *
 @dataclass
 class Collective():
     num_ranks: int 
-    instances: int
+    chunk_factor: int
     inplace: bool
     name: str
 
@@ -22,13 +22,13 @@ class Collective():
 class AllToAll(Collective):
 
     def init_buffers(self):
-        chunks_per_node = self.num_ranks * self.instances
+        chunks_per_node = self.num_ranks * self.chunk_factor
         rank_buffers = []
         for r in range(self.num_ranks):
             input_buffer = [None] * chunks_per_node
             output_buffer = [None] * chunks_per_node
             for index in range(chunks_per_node):
-                chunk = Chunk(r, index, index//self.instances, index % self.instances + r*self.instances)
+                chunk = Chunk(r, index, index//self.chunk_factor, index % self.chunk_factor + r*self.chunk_factor)
                 input_buffer[index] = chunk
             buffers = {Buffer.input : input_buffer, 
                     Buffer.output : output_buffer}
@@ -37,15 +37,15 @@ class AllToAll(Collective):
 
     # Expected output buffer for alltoall
     def check(self, prog):
-        chunks_per_node = self.num_ranks * self.instances
+        chunks_per_node = self.num_ranks * self.chunk_factor
         correct = True
         for r in range(self.num_ranks):
             output = prog.buffers[r][Buffer.output]
             for i in range(self.num_ranks):
-                for ch in range(self.instances):
-                    index = ch + i * self.instances
+                for ch in range(self.chunk_factor):
+                    index = ch + i * self.chunk_factor
                     chunk = output[index]
-                    expected_origin_index = ch + r * self.instances
+                    expected_origin_index = ch + r * self.chunk_factor
                     if chunk is None or chunk.origin_rank != i or chunk.origin_index != expected_origin_index:
                         print(f'Rank {r} chunk {index} is incorrect should be chunk({i},{expected_origin_index}) given {chunk}')
                         correct = False
@@ -59,17 +59,17 @@ class AllGather(Collective):
         if self.inplace:
             # Inplace AllGather only uses the output buffer   
             for r in range(self.num_ranks):
-                output_buffer = [None] * (self.num_ranks * self.instances)
-                for ch in range(self.instances):
-                    output_buffer[r*self.instances+ch] = Chunk(r, ch, -1, r*self.instances+ch)
+                output_buffer = [None] * (self.num_ranks * self.chunk_factor)
+                for ch in range(self.chunk_factor):
+                    output_buffer[r*self.chunk_factor+ch] = Chunk(r, ch, -1, r*self.chunk_factor+ch)
                 buffers = {Buffer.output : output_buffer}
                 rank_buffers.append(buffers)
         else:
             for r in range(self.num_ranks):
-                input_buffer = [None] * self.instances
-                output_buffer = [None] * (self.num_ranks * self.instances)
-                for ch in range(self.instances):
-                    input_buffer[ch] = Chunk(r, ch, -1, r*self.instances+ch)
+                input_buffer = [None] * self.chunk_factor
+                output_buffer = [None] * (self.num_ranks * self.chunk_factor)
+                for ch in range(self.chunk_factor):
+                    input_buffer[ch] = Chunk(r, ch, -1, r*self.chunk_factor+ch)
                 buffers = {Buffer.input : input_buffer, 
                            Buffer.output : output_buffer}
                 rank_buffers.append(buffers)
@@ -82,8 +82,8 @@ class AllGather(Collective):
         for r in range(self.num_ranks):
             output = prog.buffers[r][buf]
             for i in range(self.num_ranks):
-                for ch in range(self.instances):
-                    index = i*self.instances + ch
+                for ch in range(self.chunk_factor):
+                    index = i*self.chunk_factor + ch
                     chunk = output[index]
                     if chunk is None:
                         print(f'Rank {r} chunk {index} is incorrect should be ({i}, {ch}) given None')
@@ -97,7 +97,7 @@ class AllGather(Collective):
     def get_buffer_index(self, rank, buffer, index):
         # For inplace AllGathers, the input buffer points into the output buffer
         if self.inplace and buffer == Buffer.input:
-            return Buffer.output, index + rank * self.instances
+            return Buffer.output, index + rank * self.chunk_factor
         else:
             return buffer, index
 
@@ -106,7 +106,7 @@ class AllGather(Collective):
 class AllReduce(Collective):
 
     def init_buffers(self):
-        chunks_per_node = self.instances
+        chunks_per_node = self.chunk_factor
         rank_buffers = []
         for r in range(self.num_ranks):
             input_buffer = []
@@ -123,7 +123,7 @@ class AllReduce(Collective):
         return rank_buffers
 
     def check(self, prog):
-        chunks_per_node = self.instances
+        chunks_per_node = self.chunk_factor
         expected_chunks = []
         buf = Buffer.input if self.inplace else Buffer.output
 
@@ -152,16 +152,16 @@ class ReduceScatter(Collective):
             if self.inplace:
                 input_buffer = []
                 for i in range(self.num_ranks):
-                    for c in range(self.instances):
-                        input_buffer.append(Chunk(r, i*self.instances + c, i, c))
+                    for c in range(self.chunk_factor):
+                        input_buffer.append(Chunk(r, i*self.chunk_factor + c, i, c))
                 buffers = {Buffer.input : input_buffer}
                 rank_buffers.append(buffers)
             else:
                 input_buffer = []
-                output_buffer = [None] * self.instances
+                output_buffer = [None] * self.chunk_factor
                 for i in range(self.num_ranks):
-                    for c in range(self.instances):
-                        input_buffer.append(Chunk(r, i*self.instances + c, i, c))
+                    for c in range(self.chunk_factor):
+                        input_buffer.append(Chunk(r, i*self.chunk_factor + c, i, c))
                 buffers = {Buffer.input : input_buffer, 
                         Buffer.output : output_buffer}
                 rank_buffers.append(buffers)
@@ -170,7 +170,7 @@ class ReduceScatter(Collective):
     def check(self, prog):
         expected_chunks = []
         buf = Buffer.input if self.inplace else Buffer.output
-        for c in range(self.num_ranks * self.instances):
+        for c in range(self.num_ranks * self.chunk_factor):
             chunk = ReduceChunk([])
             for r in range(self.num_ranks):
                 chunk = chunk.reduce(Chunk(r, c))
@@ -179,8 +179,8 @@ class ReduceScatter(Collective):
         correct = True
         for r in range(self.num_ranks):
             output = prog.buffers[r][buf]
-            for c in range(self.instances):
-                correct_idx = r * self.instances + c
+            for c in range(self.chunk_factor):
+                correct_idx = r * self.chunk_factor + c
                 if self.inplace:
                     c = correct_idx
                 chunk = output[c]
@@ -192,7 +192,7 @@ class ReduceScatter(Collective):
     def get_buffer_index(self, rank, buffer, index):
         # For inplace ReduceScatter the output buffer is a pointer into the input buffer
         if self.inplace and buffer == Buffer.output:
-            return Buffer.input, index + rank * self.instances
+            return Buffer.input, index + rank * self.chunk_factor
         else:
             return buffer, index
 
