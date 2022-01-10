@@ -80,7 +80,7 @@ class AllGather(Collective):
         correct = True
         buf = Buffer.output
         for r in range(self.num_ranks):
-            output = progbuffers[r][buf]
+            output = prog.buffers[r][buf]
             for i in range(self.num_ranks):
                 for ch in range(self.instances):
                     index = i*self.instances + ch

@@ -25,7 +25,7 @@ def visualize_chunk_dag(chunk_paths):
                 vertex_colors.append('blue')
             elif op.inst == ChunkInstruction.reduce:
                 vertex_label.append(f'Reduce with {op.dst.rank} {op.dst.index}. {op.steps_to_end}, {op.steps_from_start}')
-                vertex_colors.append(colors[op.tb])
+                vertex_colors.append('green')
         return nnodes
 
     for chunk, op in chunk_paths.items():
