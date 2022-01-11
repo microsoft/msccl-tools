@@ -62,7 +62,8 @@ class AllGather(Collective):
                 output_buffer = [None] * (self.num_ranks * self.chunk_factor)
                 for ch in range(self.chunk_factor):
                     output_buffer[r*self.chunk_factor+ch] = Chunk(r, ch, -1, r*self.chunk_factor+ch)
-                buffers = {Buffer.output : output_buffer}
+                buffers = {Buffer.input : [output_buffer[r]],
+                           Buffer.output : output_buffer}
                 rank_buffers.append(buffers)
         else:
             for r in range(self.num_ranks):
@@ -114,8 +115,10 @@ class AllReduce(Collective):
             for c in range(chunks_per_node):
                 # Chunks start at rank r index c, and ends on all ranks (-1) at index r
                 input_buffer.append(Chunk(r, c, -1, c))
+            # Input and output buffer are the same.
             if self.inplace:
-                buffers = {Buffer.input : input_buffer}
+                buffers = {Buffer.input : input_buffer, 
+                           Buffer.output : input_buffer}
             else:
                 buffers = {Buffer.input : input_buffer, 
                            Buffer.output : output_buffer}
@@ -142,6 +145,12 @@ class AllReduce(Collective):
                     print(f'Rank {r} chunk {c} is incorrect should be ReduceChunk index {c} from all ranks, given {chunk}')
                     correct = False
         return correct
+
+    def get_buffer_index(self, rank, buffer, index):
+        if self.inplace and buffer == Buffer.output:
+            return Buffer.input, index
+        else:
+            return buffer, index
 
 
 class ReduceScatter(Collective):

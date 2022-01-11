@@ -306,7 +306,7 @@ class RankDAG:
                     op.src = self.lower_chunk(op.src)
                     op.dst = self.lower_chunk(op.dst)
                 lowered_tbs[tbid] = tb
-            gpus.append(Gpu(rank, lowered_tbs.values()))
+            gpus.append(Gpu(rank, list(lowered_tbs.values())))
         return gpus
 
 

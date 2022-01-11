@@ -57,12 +57,16 @@ class SCCLProgram:
         _current_program = None
 
     def add_send(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
+        src_buffer, src_index = self.collective.get_buffer_index(src, src_buffer, src_index)
+        dst_buffer, dst_index = self.collective.get_buffer_index(dst, dst_buffer, dst_index)
         sb = self.buffers[src][src_buffer]
         db = self.buffers[dst][dst_buffer]
         for i in range(size):
             db[dst_index + i] = sb[src_index + i]
 
     def add_reduce(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
+        src_buffer, src_index = self.collective.get_buffer_index(src, src_buffer, src_index)
+        dst_buffer, dst_index = self.collective.get_buffer_index(dst, dst_buffer, dst_index)
         sb = self.buffers[src][src_buffer]
         db = self.buffers[dst][dst_buffer]
         for i in range(size):
@@ -71,8 +75,7 @@ class SCCLProgram:
             db[dst_index + i] = reduce_chunk.reduce(sent_chunk)
 
     def get_ref(self, buffer, rank, index, size):
-        if buffer == Buffer.input or buffer == Buffer.output:
-            buffer, index = self.collective.get_buffer_index(rank, buffer, index)
+        buffer, index = self.collective.get_buffer_index(rank, buffer, index)
         return Ref(rank, buffer, index, size, self)
 
     def get_chunks(self, buffer, rank, index, size=1):

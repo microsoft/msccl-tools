@@ -1,8 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-from sccl.topologies import line
+from sccl.topologies import line, fully_connected
 from sccl.language import *
-from sccl.language.collectives import Collective
+from sccl.language.collectives import *
 
 def test_send():
     num_gpus = 3
@@ -85,3 +85,44 @@ def test_reduce():
     with SCCLProgram("reduce", topology, collective, instances):
         chunk(Buffer.input, 0, 0).reduce(1, Buffer.input, 0).reduce(2, Buffer.input, 0)
         assert Check()
+
+def test_allgather():
+    topology = fully_connected(2)
+    collective = AllGather(2, 1, True, "allgather")
+    with SCCLProgram("allgather", topology, collective, 1):
+        chunk(Buffer.input, 0, 0).send(1, Buffer.output, 0)
+        chunk(Buffer.input, 1, 0).send(0, Buffer.output, 1)
+        assert Check()
+
+def test_alltoall():
+    topology = fully_connected(2)
+    collective = AllToAll(2, 1, False, "alltoall")
+    with SCCLProgram("alltoall", topology, collective, 1):
+        chunk(Buffer.input, 0, 0).send(0, Buffer.output, 0)
+        chunk(Buffer.input, 0, 1).send(1, Buffer.output, 0)
+        chunk(Buffer.input, 1, 0).send(0, Buffer.output, 1)
+        chunk(Buffer.input, 1, 1).send(1, Buffer.output, 1)
+        assert Check()
+
+def test_allreduce():
+    topology = fully_connected(2)
+    collective = AllReduce(2, 2, True, "allreduce")
+    with SCCLProgram("allreduce", topology, collective, 1):
+        chunk(Buffer.input, 0, 0).reduce(1, Buffer.output, 0).send(0, Buffer.input, 0)
+        chunk(Buffer.input, 1, 1).reduce(0, Buffer.input, 1).send(1, Buffer.input, 1)
+        assert Check()
+
+def test_instruction_fusion():
+    topology = fully_connected(3)
+    collective = AllReduce(3, 3, True, "allreduce")
+    prgm = SCCLProgram("allreduce", topology, collective, 1, threadblock_policy=ThreadblockPolicy.manual)
+    with prgm:
+        c = chunk(Buffer.input, 0, 0, 3).reduce(1, Buffer.input, 0,sendtb=0, recvtb=0).reduce(2, Buffer.input, 0, sendtb=0, recvtb=0)
+        c.send(0, Buffer.input, 0, sendtb=0, recvtb=0).send(1, Buffer.input, 0, sendtb=0, recvtb=0)
+        assert Check()
+    lowered_prgm = prgm.lower()
+    assert lowered_prgm.gpus[0].threadblocks[0].ops[0].inst == Instruction.send
+    assert lowered_prgm.gpus[0].threadblocks[0].ops[1].inst == Instruction.recv_copy_send
+    assert lowered_prgm.gpus[1].threadblocks[0].ops[0].inst == Instruction.recv_reduce_send
+    assert lowered_prgm.gpus[1].threadblocks[0].ops[1].inst == Instruction.recv
+    assert lowered_prgm.gpus[2].threadblocks[0].ops[0].inst == Instruction.recv_reduce_copy_send
