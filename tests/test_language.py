@@ -1,8 +1,11 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
+
+import sccl
 from sccl.topologies import line, fully_connected
 from sccl.language import *
 from sccl.language.collectives import *
+import os
 
 def test_send():
     num_gpus = 3
@@ -11,7 +14,7 @@ def test_send():
     class Send(Collective):
         # Initial state is chunk0 is on rank0 in the input buffer
         def init_buffers(self):
-            chunks_per_node = self.instances
+            chunks_per_node = self.chunk_factor
             rank_buffers = []
             for r in range(self.num_ranks):
                 input_buffer = [None] * chunks_per_node
@@ -29,7 +32,7 @@ def test_send():
         def check(self, prog):
             correct = True
             output = prog.buffers[2][Buffer.output]
-            for c in range(self.instances):
+            for c in range(self.chunk_factor):
                 chunk = output[c]
                 # Check that we got chunk 0 from rank 0
                 if chunk is None or chunk.origin_rank != 0 or chunk.origin_index != 0:
@@ -53,7 +56,7 @@ def test_reduce():
         # Initial state is chunk0,0 is on rank0 in the input buffer
         # and chunk0,1 is on rank1 in the input buffer, etc.
         def init_buffers(self):
-            chunks_per_node = self.instances
+            chunks_per_node = self.chunk_factor
             rank_buffers = []
             for r in range(self.num_ranks):
                 input_buffer = [None] * chunks_per_node
@@ -150,3 +153,37 @@ def test_replication():
 
     for gpu1, gpu2 in zip(lowered_prgm.gpus, lowered_replicated_prgm.gpus):
         assert len(gpu1.threadblocks) * instances == len(gpu2.threadblocks)
+
+def show():
+    print()
+    print(f"SCCL_CONFIG = {os.environ['SCCL_CONFIG']}")
+    print(f"NCCL_MIN_NCHANNELS = {os.environ['NCCL_MIN_NCHANNELS']}")
+    print(f"NCCL_NET_SHARED_BUFFERS = {os.environ['NCCL_NET_SHARED_BUFFERS']}")
+    print(f"Contents of {os.environ['SCCL_CONFIG']}:")
+    with open(os.environ['SCCL_CONFIG']) as f:
+        print(f.read())
+    print()
+
+def test_registered_alltoall():
+    from sccl.programs.alltoall_a100_yifan import alltoall_hierarchical 
+
+    num_nodes = 4
+    gpus_per_node = 8
+    num_ranks = num_nodes * gpus_per_node
+    topology = fully_connected(num_ranks)
+    collective = AllToAll(num_ranks, 1, inplace=False, name="alltoall")
+    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
+        alltoall_hierarchical(num_nodes, gpus_per_node)
+        assert Check()
+
+def test_registered_allreduce():
+    from sccl.programs.allreduce_a100_ring import allreduce_ring 
+
+    num_ranks = 8
+    instances = 4
+    topology = fully_connected(num_ranks)
+    collective = AllReduce(num_ranks, num_ranks, inplace=True, name="allreduce")
+    with SCCLProgram(f"allreduce", topology, collective, instances,
+        protocol="LL128", threadblock_policy=ThreadblockPolicy.manual):
+        allreduce_ring(num_ranks, num_ranks)
+        assert Check()

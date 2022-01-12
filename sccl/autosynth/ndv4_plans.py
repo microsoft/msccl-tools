@@ -15,7 +15,7 @@ def register_ndv4_plans():
         allreduce_ring(size=8, channels=8)
 
     @register_sccl_program(fully_connected(8), 'alltoall', 'ndv4', machines=lambda x: x >= 2)
-    def ndv4_ring_allreduce(prog, nodes):
+    def ndv4_alltoall(prog, nodes):
         alltoall_hierarchical(num_nodes=nodes, gpus_per_node=8)
 
     @register_synthesis_plan('alltoall', 'ndv4', machines=lambda x: x == 9)

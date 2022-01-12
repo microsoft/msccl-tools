@@ -5,7 +5,7 @@ import igraph as ig
 from sccl.language.ir import *
 from sccl.language.rank_dag import *
 
-def visualize_chunk_dag(chunk_paths):
+def visualize_chunk_dag(chunk_paths): # pragma: no cover
     frontier = []
     nnodes = 0
     vertex_label = []
@@ -48,7 +48,7 @@ def visualize_chunk_dag(chunk_paths):
     layout = g.layout(layout=ig.Graph.layout_grid)
     ig.plot(g, vertex_label=vertex_label, vertex_color=vertex_colors, layout='auto')
 
-def visualize_rank_dag(operations):
+def visualize_rank_dag(operations): # pragma: no cover
     frontier = []
     nnodes = 0
     vertex_label = []
