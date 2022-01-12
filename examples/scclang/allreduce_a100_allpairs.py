@@ -14,9 +14,6 @@ def allreduce_allpairs(instances):
     with SCCLProgram("allreduce_pairs", topology, collective, instances, protocol="LL", 
         interleaved_replication=False, threadblock_policy=ThreadblockPolicy.manual):
         
-        for r in range(size):
-            create_scratch(r, 'scratch') 
-
         # Each rank sends the nth chunk to the nth rank into scratch space
         for r1 in range(size):
             for r2 in range(size):

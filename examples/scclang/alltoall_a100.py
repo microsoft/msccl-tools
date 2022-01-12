@@ -42,15 +42,6 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
     collective = AllToAll(num_ranks, instances, inplace=False, name="alltoall")
     
     with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
-        # Allocate scratch buffers to gather chunks to be sent over IB
-        # 2 scratch buffers for each node-node pair for the sender and receiver
-        for n1 in range(num_nodes):
-            for n2 in range(num_nodes):
-                if n1 != n2:
-                    # Determine which are the two ranks that handle this cross node traffic
-                    r1, r2 = CrossNodeGpus(n1, n2)
-                    create_scratch(r1, (n1, n2)) # Sender's buffer named (n1, n2)
-                    create_scratch(r2, (n1, n2)) # Receiver's buffer named (n1, n2)
         ib_chunks = {} # Keeps track of chunks going over IB buffer buffer name -> chunk
 
         # Local Gathers

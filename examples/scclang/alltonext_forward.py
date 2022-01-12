@@ -53,14 +53,6 @@ def pipeline(num_nodes, instances):
     
     with SCCLProgram("alltonext-forward", topology, collective, instances):
 
-        # Allocate scratch space
-        for n in range(num_nodes):
-            for g in range(num_local_gpus):
-                r1 = rank(n, g)
-                # Creates extra scratch buffers but they are unused and won't show up in the xml
-                create_scratch(r1, 'scatter') 
-                create_scratch(r1, 'gather') 
-
         for n in range(num_nodes):
             for g in range(num_local_gpus):
                 r = rank(n, g)

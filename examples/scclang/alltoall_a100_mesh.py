@@ -29,11 +29,6 @@ def alltoall_mesh(nnodes: int, ngpus: int, nchannels: int, threadblocks: int) ->
         # get device on all ranks
         devices: List[sccl.language.Process] = list(map(lambda r: sccl.language.Rank(r), range(nranks)))
 
-        # create buffer
-        for r in range(nranks):
-            for p in range(4):
-                devices[r].create_scratch(f'phase-{p}')
-
         for ch in range(nchannels):
             # phase-0: per-gpu (step=ngpus) stride copy
             for r in range(nranks):

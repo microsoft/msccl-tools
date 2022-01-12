@@ -7,10 +7,6 @@ from sccl.language.collectives import AllToAll
 
 def alltoall_hierarchical(num_nodes, gpus_per_node):
     num_ranks = num_nodes * gpus_per_node
-    # Scratch space
-    for rank in range(num_ranks):
-        for node in range(num_nodes):
-            create_scratch(rank, f'send_{node}')
 
     for n1 in range(num_nodes):
         for r in range(1,num_nodes):

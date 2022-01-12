@@ -12,11 +12,6 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
 
         
     with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
-        # Scratch space
-        for rank in range(num_ranks):
-            for node in range(num_nodes):
-                create_scratch(rank, f'send_{node}')
-
         for n1 in range(num_nodes):
             for r in range(1,num_nodes):
                 n2 = (n1 + r) % num_nodes

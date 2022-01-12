@@ -84,9 +84,9 @@ class SCCLProgram:
             chunks[i-index] = self.buffers[rank][buffer][i]
         return chunks
 
-    def create_scratch(self, rank, name):
-        assert (name not in self.buffers[rank]), f'Scratch buffer, {name}, already created'
-        self.buffers[rank][name] = BufferSlice(Buffer.scratch, name)
+    def check_buffer_exists(self, rank, name):
+        if name not in self.buffers[rank]:
+            self.buffers[rank][name] = BufferSlice(Buffer.scratch, name)
 
     # Checks that all chunks that should be on each rank
     # are present in the output buffer.
@@ -172,7 +172,7 @@ class Ref(ChunkRef):
         
 
     def send(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=-1):
-        # TODO: missing check
+        self.prog.check_buffer_exists(dst, buffer)
 
         # If index is not specified assume it is going to the same place in the next gpu
         if index == -1 and buffer == None:
@@ -196,6 +196,8 @@ class Ref(ChunkRef):
         return dst_chunkref
 
     def reduce(self, dst, buffer, index=-1, sendtb=-1, recvtb=-1, ch=0):
+        self.prog.check_buffer_exists(dst, buffer)
+
         # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
         buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
 
