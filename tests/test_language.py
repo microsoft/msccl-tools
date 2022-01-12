@@ -126,3 +126,27 @@ def test_instruction_fusion():
     assert lowered_prgm.gpus[1].threadblocks[0].ops[0].inst == Instruction.recv_reduce_send
     assert lowered_prgm.gpus[1].threadblocks[0].ops[1].inst == Instruction.recv
     assert lowered_prgm.gpus[2].threadblocks[0].ops[0].inst == Instruction.recv_reduce_copy_send
+
+def test_replication():
+    topology = fully_connected(2)
+    collective = AllToAll(2, 1, False, "alltoall")
+    prgm = SCCLProgram("alltoall", topology, collective, 1)
+    with prgm:
+        chunk(Buffer.input, 0, 0).send(0, Buffer.output, 0)
+        chunk(Buffer.input, 0, 1).send(1, Buffer.output, 0)
+        chunk(Buffer.input, 1, 0).send(0, Buffer.output, 1)
+        chunk(Buffer.input, 1, 1).send(1, Buffer.output, 1)
+
+    instances = 2
+    replicated_prgm = SCCLProgram("alltoall", topology, collective, instances)
+    with replicated_prgm:
+            chunk(Buffer.input, 0, 0).send(0, Buffer.output, 0)
+            chunk(Buffer.input, 0, 1).send(1, Buffer.output, 0)
+            chunk(Buffer.input, 1, 0).send(0, Buffer.output, 1)
+            chunk(Buffer.input, 1, 1).send(1, Buffer.output, 1)
+
+    lowered_prgm = prgm.lower()
+    lowered_replicated_prgm = replicated_prgm.lower()
+
+    for gpu1, gpu2 in zip(lowered_prgm.gpus, lowered_replicated_prgm.gpus):
+        assert len(gpu1.threadblocks) * instances == len(gpu2.threadblocks)
