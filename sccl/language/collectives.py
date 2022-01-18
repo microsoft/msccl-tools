@@ -62,7 +62,7 @@ class AllGather(Collective):
                 output_buffer = [None] * (self.num_ranks * self.chunk_factor)
                 for ch in range(self.chunk_factor):
                     output_buffer[r*self.chunk_factor+ch] = Chunk(r, ch, -1, r*self.chunk_factor+ch)
-                buffers = {Buffer.input : [output_buffer[r]],
+                buffers = {Buffer.input : output_buffer[r*self.chunk_factor:(r+1)*self.chunk_factor],
                            Buffer.output : output_buffer}
                 rank_buffers.append(buffers)
         else:
