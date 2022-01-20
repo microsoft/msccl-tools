@@ -14,7 +14,7 @@ def allreduce(num_nodes, instances):
     remote_bw = 1
     topology = distributed_fully_connected(local_topology, num_nodes, remote_bw)
     size = topology.num_nodes()
-    collective = AllReduce(size, instances, True, "allreduce")
+    collective = AllReduce(size, instances, True)
     local_ring_order = [1,3,2,6,7,5,4,0] # Reductions will happen locally within a node in this order.
 
     def rank(n, g):

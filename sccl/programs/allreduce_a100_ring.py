@@ -36,7 +36,7 @@ if __name__ == '__main__':
 
     num_ranks = 8
     topology = fully_connected(num_ranks)
-    collective = AllReduce(num_ranks, num_ranks, True, "allreduce")
+    collective = AllReduce(num_ranks, num_ranks, True)
     with SCCLProgram(f"allreduce_ring_{args.channels}channelsperring", topology, collective, args.instances,
         protocol="LL128", threadblock_policy=ThreadblockPolicy.manual):
         allreduce_ring(num_ranks, args.channels)

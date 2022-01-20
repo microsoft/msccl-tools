@@ -8,7 +8,7 @@ from sccl.language.collectives import AllToAll
 def alltoall_hierarchical(num_nodes, gpus_per_node):
     num_ranks = num_nodes * gpus_per_node
     topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, 1, inplace=False, name="alltoall")
+    collective = AllToAll(num_ranks, 1, inplace=False)
 
         
     with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):

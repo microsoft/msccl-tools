@@ -10,7 +10,7 @@ def allreduce_allpairs(instances):
     size = 8
     chunksperloop = 8
     topology = fully_connected(size)
-    collective = AllReduce(size, chunksperloop, True, "allreduce")
+    collective = AllReduce(size, chunksperloop, True)
     with SCCLProgram("allreduce_pairs", topology, collective, instances, protocol="LL", 
         interleaved_replication=False, threadblock_policy=ThreadblockPolicy.manual):
         

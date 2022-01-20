@@ -71,13 +71,13 @@ def register_sccl_program(local_topology, collective, machine_type, machines=lam
             co = collective_obj
             if co == None:
                 if collective == 'allreduce':
-                    co = lang_collectives.AllReduce(topology.num_nodes(), chunk_factor, inplace, collective)
+                    co = lang_collectives.AllReduce(topology.num_nodes(), chunk_factor, inplace)
                 elif collective == 'allgather':
-                    co = lang_collectives.AllGather(topology.num_nodes(), chunk_factor, inplace, collective)
+                    co = lang_collectives.AllGather(topology.num_nodes(), chunk_factor, inplace)
                 elif collective == 'alltoall':
-                    co = lang_collectives.AllToAll(topology.num_nodes(), chunk_factor, inplace, collective)
+                    co = lang_collectives.AllToAll(topology.num_nodes(), chunk_factor, inplace)
                 elif collective == 'reduce_scatter':
-                    co = lang_collectives.ReduceScatter(topology.num_nodes(), chunk_factor, inplace, collective)
+                    co = lang_collectives.ReduceScatter(topology.num_nodes(), chunk_factor, inplace)
                 else:
                     raise RuntimeError(f'No collective_obj in sccl.language.collectives known for "{collective}"')
             prog = SCCLProgram(name, topology, co, instances, protocol, threadblock_policy)

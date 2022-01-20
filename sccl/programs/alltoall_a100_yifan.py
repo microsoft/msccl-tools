@@ -50,7 +50,7 @@ if __name__ == '__main__':
 
     num_ranks = args.gpus_per_node * args.num_nodes
     topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, 1, inplace=False, name="alltoall")
+    collective = AllToAll(num_ranks, 1, inplace=False)
     with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
         alltoall_hierarchical(args.num_nodes, args.gpus_per_node)
         XML() # Prints the XML

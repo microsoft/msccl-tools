@@ -50,8 +50,7 @@ def custom_example1():
     size = 3
     topology = fully_connected(size) 
     # Collectives take in number of ranks in the network, chunksperloop of the collective, whether it is inplace, 
-    # and the name of the collective (custom collectives must be named collective)
-    collective = CollEx(size, 1, inplace=False, name="custom")
+    collective = CollEx(size, 1, inplace=False")
     with SCCLProgram("allgather_ring", topology, collective, 1, protocol="Simple"):
         # Get the chunk at rank 0 index 0 of the input buffer
         c = chunk(Buffer.input, 0, 0)
@@ -70,7 +69,7 @@ def custom_example2():
     size = 3
     topology = fully_connected(size) 
 
-    collective = CollEx(size, 1, inplace=False, name="custom")
+    collective = CollEx(size, 1, inplace=False)
     with SCCLProgram("allgather_ring", topology, collective, 1, protocol="Simple"):
         c = chunk(Buffer.input, 0, 0)
         # This is the same program as above but instead of rank 0 sending to 1 and 2

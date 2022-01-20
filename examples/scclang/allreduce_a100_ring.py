@@ -13,7 +13,7 @@ from sccl.language.collectives import AllReduce
 def allreduce_ring(instances, channels):
     size = 8
     topology = fully_connected(size)
-    collective = AllReduce(size, size, True, "allreduce")
+    collective = AllReduce(size, size, True)
     with SCCLProgram(f"allreduce_ring_{channels}channelsperring", topology, collective, instances,
          protocol="LL128", threadblock_policy=ThreadblockPolicy.manual):
         # Reduce ring

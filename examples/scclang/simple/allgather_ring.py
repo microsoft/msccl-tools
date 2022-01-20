@@ -7,7 +7,7 @@ from sccl.language.collectives import AllGather
 
 def allgather_ring(size):
     topology = fully_connected(size)
-    collective = AllGather(size, 1, False, "allgather")
+    collective = AllGather(size, 1, False)
     with SCCLProgram("allgather_ring", topology, collective, 1):
         # Loop over each chunk's root
         for r in range(size):
@@ -28,7 +28,7 @@ def allgather_ring(size):
 
 def allgather_ring_inplace(size):
     topology = fully_connected(size)
-    collective = AllGather(size, 1, True, "allgather")
+    collective = AllGather(size, 1, True)
     with SCCLProgram("allgather_ring", topology, collective, 1):
         # Loop over each chunk's root
         for r in range(size):

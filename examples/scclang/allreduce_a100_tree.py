@@ -15,7 +15,7 @@ def allreduce(ways, instances):
     size = topology.num_nodes() #  Number of gpus
     logical_chunk = 8 * ways
     tb_per_channel = 12
-    collective = AllReduce(size, logical_chunk, True, "allreduce")
+    collective = AllReduce(size, logical_chunk, True)
     with SCCLProgram("allreduce_a100_tree", topology, collective, instances, 'Simple', interleaved_replication=False):
         # 1 reduction between pairs of gpus of count
         def reduce_tree(pairs, count, next_index, lc, sendtb, recvtb):

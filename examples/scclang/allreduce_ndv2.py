@@ -13,7 +13,7 @@ def allreduce(instances):
     num_local_gpus = 8
     size = topology.num_nodes() #  Number of gpus
     logical_chunk = 8
-    collective = AllReduce(size, logical_chunk, True, "allreduce")
+    collective = AllReduce(size, logical_chunk, True)
     with SCCLProgram("allreduce_ndv2", topology, collective, instances, interleaved_replication=False):
         # local reduce_scatter
         instances = 1

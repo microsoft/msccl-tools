@@ -2,12 +2,12 @@ from dataclasses import dataclass, field
 from sccl.language.ir import Buffer
 from sccl.language import *
 
-@dataclass
 class Collective():
-    num_ranks: int 
-    chunk_factor: int
-    inplace: bool
-    name: str
+    def __init__(self, num_ranks, chunk_factor, inplace):
+        self.num_ranks = num_ranks
+        self.chunk_factor = chunk_factor
+        self.inplace = inplace
+        self.name = "custom"
 
     def init_buffers(self):
         pass
@@ -20,6 +20,10 @@ class Collective():
 
 
 class AllToAll(Collective):
+
+    def __init__(self, num_ranks, chunk_factor, inplace):
+        Collective.__init__(self, num_ranks, chunk_factor, inplace)
+        self.name = 'alltoall'
 
     def init_buffers(self):
         chunks_per_node = self.num_ranks * self.chunk_factor
@@ -53,6 +57,10 @@ class AllToAll(Collective):
 
 
 class AllGather(Collective):
+    def __init__(self, num_ranks, chunk_factor, inplace):
+        Collective.__init__(self, num_ranks, chunk_factor, inplace)
+        self.name = 'allgather'
+
     # Initializes input buffer for an allgather
     def init_buffers(self):
         rank_buffers = []
@@ -106,6 +114,10 @@ class AllGather(Collective):
             
 class AllReduce(Collective):
 
+    def __init__(self, num_ranks, chunk_factor, inplace):
+        Collective.__init__(self, num_ranks, chunk_factor, inplace)
+        self.name = 'allreduce'
+
     def init_buffers(self):
         chunks_per_node = self.chunk_factor
         rank_buffers = []
@@ -154,6 +166,9 @@ class AllReduce(Collective):
 
 
 class ReduceScatter(Collective):
+    def __init__(self, num_ranks, chunk_factor, inplace):
+        Collective.__init__(self, num_ranks, chunk_factor, inplace)
+        self.name = 'reduce_scatter'
 
     def init_buffers(self):
         rank_buffers = []

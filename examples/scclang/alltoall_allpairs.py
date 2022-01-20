@@ -9,7 +9,7 @@ from sccl.language.collectives import AllToAll
 
 def alltoall(num_ranks, instances, protocol):
     topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, 1, inplace=False, name="alltoall")
+    collective = AllToAll(num_ranks, 1, inplace=False)
 
     with SCCLProgram("alltoall_allpairs", topology, collective, instances=instances, protocol=protocol):
         for r in range(num_ranks):

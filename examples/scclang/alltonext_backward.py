@@ -44,7 +44,7 @@ def pipeline(num_nodes, instances):
     remote_bw = 1
     size = num_local_gpus * num_nodes
     topology = fully_connected(size)
-    collective = Pipeline(size, chunk_factor, False, "custom")
+    collective = Pipeline(size, chunk_factor, False)
 
     def rank(node, local_rank):
         return node * num_local_gpus + local_rank

@@ -39,7 +39,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
         
 
     topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, instances, inplace=False, name="alltoall")
+    collective = AllToAll(num_ranks, instances, inplace=False)
     
     with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
         ib_chunks = {} # Keeps track of chunks going over IB buffer buffer name -> chunk

@@ -11,7 +11,7 @@ from sccl.language.collectives import AllReduce
 
 def allreduce_ring(size, instances, threadblocks):
     topology = fully_connected(size)
-    collective = AllReduce(size, size, inplace=True, name="allreduce")
+    collective = AllReduce(size, size, inplace=True)
     with SCCLProgram("allreduce_ring_inplace", topology, collective, instances, threadblocks):
         for r in range(size):
             index = r
