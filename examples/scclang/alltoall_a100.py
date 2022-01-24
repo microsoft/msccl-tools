@@ -77,7 +77,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
                         r1 = RankFromNodeGpuPair(n1, g1)
                         if (n1 != n2): 
                             # Send over all chunks destined for that node to the peer gpu that handles chunks to that node
-                            c = chunk(Buffer.input, r1, n2 * gpus_per_node * instances + ch * gpus_per_node, gpus_per_node)
+                            c = chunk(r1, Buffer.input, n2 * gpus_per_node * instances + ch * gpus_per_node, gpus_per_node)
                             # Gather chunks destined for cross node ranks in scratch to route through IB
                             gather_rank, _ = CrossNodeGpus(n1, n2)
                             buffer_key = (n1, n2)
@@ -92,7 +92,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
                             # which are on the critical path.
                             for g2 in range(gpus_per_node):
                                 r2 = RankFromNodeGpuPair(n2, g2)
-                                c = chunk(Buffer.input, r1, r2 * instances + ch)
+                                c = chunk(r1, Buffer.input, r2 * instances + ch)
                                 c.send(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch*2)
 
                     

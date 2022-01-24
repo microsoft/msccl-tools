@@ -53,7 +53,7 @@ def custom_example1():
     collective = CollEx(size, 1, inplace=False")
     with SCCLProgram("allgather_ring", topology, collective, 1, protocol="Simple"):
         # Get the chunk at rank 0 index 0 of the input buffer
-        c = chunk(Buffer.input, 0, 0)
+        c = chunk(0, Buffer.input, 0)
         # Send chunks to 1 and 2
         # Can specify the sender's tb, receiver's tb, and channel for the send operation
         # SCCLang provides a default threadblock assignment if they aren't specified
@@ -71,7 +71,7 @@ def custom_example2():
 
     collective = CollEx(size, 1, inplace=False)
     with SCCLProgram("allgather_ring", topology, collective, 1, protocol="Simple"):
-        c = chunk(Buffer.input, 0, 0)
+        c = chunk(0, Buffer.input, 0)
         # This is the same program as above but instead of rank 0 sending to 1 and 2
         # 0 sends to 1 which sends to 2
         # send returns the chunk on the receiver's side

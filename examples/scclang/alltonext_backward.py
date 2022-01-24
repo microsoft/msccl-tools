@@ -62,7 +62,7 @@ def pipeline(num_nodes, instances):
                 # Cross node send - cooperative
                 if g == 0:
                     for ch in range(chunks):
-                        c = chunk(Buffer.input, r, ch)
+                        c = chunk(r, Buffer.input, ch)
                         if ch == 0:
                             # 2 steps: IB send to (node-1, g) then gather onto (node+1, num_local_gpus-1)
                             c = c.send(rank(n-1, ch), 'gather', 0, ch=ch%2)
@@ -77,7 +77,7 @@ def pipeline(num_nodes, instances):
                         
                 # Normal send - directly
                 else:
-                    c = chunk(Buffer.input, r, 0, chunks)
+                    c = chunk(r, Buffer.input, 0, chunks)
                     c.send(r-1, Buffer.output, 0, ch=g%2)
         
         Check()

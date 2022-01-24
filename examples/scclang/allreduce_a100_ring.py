@@ -20,8 +20,7 @@ def allreduce_ring(instances, channels):
         for step in range(0, size-1):
             for index in range(0, size):
                 rank = (index + step) % size
-                # c = Rank(start).input(index)
-                c = chunk(Buffer.input, rank, index)
+                c = chunk(rank, Buffer.input, index)
                 next_rank = (index + step + 1) % size
                 channel = index%channels
                 c = c.reduce(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
@@ -29,8 +28,7 @@ def allreduce_ring(instances, channels):
         for step in range(-1, size-2):
             for index in range(0, size):
                 rank = (index + step) % size
-                # c = Rank(start).input(index)
-                c = chunk(Buffer.input, rank, index)
+                c = chunk(rank, Buffer.input, index)
                 next_rank = (index + step + 1) % size
                 channel = index%channels
                 c = c.send(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)

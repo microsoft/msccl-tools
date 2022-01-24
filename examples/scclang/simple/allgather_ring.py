@@ -12,7 +12,7 @@ def allgather_ring(size):
         # Loop over each chunk's root
         for r in range(size):
             # Get the chunk at rank r, input[r]
-            c = chunk(Buffer.input, r, 0)
+            c = chunk(r, Buffer.input, 0)
             # Copy chunk to the output buffer
             c = c.send(r, buffer=Buffer.output, index=r, sendtb=0)
 
@@ -33,7 +33,7 @@ def allgather_ring_inplace(size):
         # Loop over each chunk's root
         for r in range(size):
             # Get the chunk at rank r, input[r]
-            c = chunk(Buffer.input, r, 0)
+            c = chunk(r, Buffer.input, 0)
 
             next = (r + 1) % size
             while next != r:

@@ -44,7 +44,3 @@ def check_threadblock_ordering(rank_dag):
                     if other_tbid in prev_steps:
                         assert match.step >  prev_steps[other_tbid], f"Rank {self.rank} sends op1 then op2 but {match.rank} receives op2 then op1"
                     prev_steps[other_tbid] = match.step
-
-
-                
-                

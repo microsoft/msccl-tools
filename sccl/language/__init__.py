@@ -41,7 +41,7 @@ class SCCLProgram:
         self.rank_dag = RankDAG(self.num_ranks, self.buffers)
         for r in range(self.num_ranks):
             for index, chunk in enumerate(self.buffers[r][Buffer.input]):
-                ref = self.get_ref(Buffer.input, r, index, 1)
+                ref = self.get_ref(r, Buffer.input, index, 1)
                 self.chunk_dag.init_chunk(chunk, ref)
 
     def __enter__(self):
@@ -74,11 +74,11 @@ class SCCLProgram:
             sent_chunk = sb[src_index + i]
             db[dst_index + i] = reduce_chunk.reduce(sent_chunk)
 
-    def get_ref(self, buffer, rank, index, size):
+    def get_ref(self, rank, buffer, index, size):
         buffer, index = self.collective.get_buffer_index(rank, buffer, index)
         return Ref(rank, buffer, index, size, self)
 
-    def get_chunks(self, buffer, rank, index, size=1):
+    def get_chunks(self, rank, buffer, index, size=1):
         chunks = [None] * size
         for i in range(index, index+size):
             chunks[i-index] = self.buffers[rank][buffer][i]
@@ -123,8 +123,8 @@ class SCCLProgram:
 def Print():
     _curr().print_chunk_dag()
 
-def chunk(buffer, rank, index, size=1):
-    return _curr().get_ref(buffer, rank, index, size)
+def chunk(rank, buffer, index, size=1):
+    return _curr().get_ref(rank, buffer, index, size)
 
 def create_scratch(rank, name):
     return _curr().create_scratch(rank, name)
@@ -186,11 +186,11 @@ class Ref(ChunkRef):
 
         # Direct send
         assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
-        dst_chunkref = self.prog.get_ref(buffer, dst, index, self.size)
+        dst_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
 
         self.prog.add_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
-        chunks = self.prog.get_chunks(self.buffer, self.rank, self.index, self.size)
+        chunks = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
         self.prog.chunk_dag.add_send(chunks, self, dst_chunkref, sendtb, recvtb, ch)
 
         return dst_chunkref
@@ -203,14 +203,14 @@ class Ref(ChunkRef):
 
         # Receive reduce copy
         assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
-        dst_chunkref = self.prog.get_ref(buffer, dst, index, self.size)
+        dst_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
 
-        chunks1 = self.prog.get_chunks(self.buffer, self.rank, self.index, self.size)
-        chunks2 = self.prog.get_chunks(buffer, dst, index, self.size)
+        chunks1 = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
+        chunks2 = self.prog.get_chunks(dst, buffer, index, self.size)
 
         self.prog.add_reduce(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
-        reduce_chunks = self.prog.get_chunks(buffer, dst, index, self.size)
+        reduce_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
         self.prog.chunk_dag.add_reduce(chunks1, chunks2, reduce_chunks, self, dst_chunkref, sendtb, recvtb, ch)
         return dst_chunkref
 

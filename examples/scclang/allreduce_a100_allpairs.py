@@ -19,7 +19,7 @@ def allreduce_allpairs(instances):
             for r2 in range(size):
                 if r1 != r2:
                     index = r2
-                    c = chunk(Buffer.input, r1, index)
+                    c = chunk(r1, Buffer.input, index)
                     c.send(r2, 'scratch', sendtb=r2, recvtb=r1, ch=0)
 
         # Each rank performs a local reduction on the nth chunk
@@ -33,7 +33,7 @@ def allreduce_allpairs(instances):
             for r2 in range(size):
                 if r1 != r2:
                     index = r1
-                    c = chunk(Buffer.input, r1, index)
+                    c = chunk(r1, Buffer.input, index)
                     c.send(r2, Buffer.input, index, sendtb=r2, recvtb=r1, ch=0)
                 
         XML()

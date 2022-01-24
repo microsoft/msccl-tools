@@ -65,7 +65,7 @@ def program(num_ranks, groups, instances, protocol):
                 output_index = y * groups + x
                 input_index = x
                 gpu = y * groups + (x+1) % gpus_per_group
-                c = chunk(Buffer.input, gpu, input_index)
+                c = chunk(gpu, Buffer.input, input_index)
                 # Use the input buffer to perform reduction across groups
                 for x_ in range(1, gpus_per_group):
                     c = c.reduce(y * groups + (x + 1 + x_) % gpus_per_group, Buffer.input, input_index)
@@ -75,7 +75,7 @@ def program(num_ranks, groups, instances, protocol):
 
         # Ring Allgather
         for r in range(num_ranks):
-            c = chunk(Buffer.output, r, r)
+            c = chunk(r, Buffer.output, r)
             next = (r + 1) % num_ranks
             while next != r:
                 c = c.send(next, Buffer.output, r)
@@ -87,7 +87,7 @@ def program(num_ranks, groups, instances, protocol):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('num_ranks', type=int, help ='number of ranks')
-    parser.add_argument('groups', type=int, help='number of groups')
+    parser.add_argument('groups', type=int, help='number of reduction groups')
     parser.add_argument('--instances', type=int, default=1, help='number of instances')
     parser.add_argument('--protocol', type=str, default='Simple', 
         choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol')
