@@ -68,9 +68,9 @@ def program(num_ranks, groups, instances, protocol):
                 c = chunk(gpu, Buffer.input, input_index)
                 # Use the input buffer to perform reduction across groups
                 for x_ in range(1, gpus_per_group):
-                    c = c.reduce(y * groups + (x + 1 + x_) % gpus_per_group, Buffer.input, input_index)
+                    c = c.reduce(y * groups + (x + 1 + x_) % gpus_per_group, Buffer.input, input_index, ch=0)
                 # Copy reduced chunk into the output buffer
-                c = c.send(c.rank, Buffer.output, output_index)
+                c = c.send(c.rank, Buffer.output, output_index, ch=0)
 
 
         # Ring Allgather
@@ -78,7 +78,7 @@ def program(num_ranks, groups, instances, protocol):
             c = chunk(r, Buffer.output, r)
             next = (r + 1) % num_ranks
             while next != r:
-                c = c.send(next, Buffer.output, r)
+                c = c.send(next, Buffer.output, r, ch=1)
                 next = (next + 1) % num_ranks
 
         Check()
