@@ -6,6 +6,7 @@ from sccl.topologies import line, fully_connected
 from sccl.language import *
 from sccl.language.collectives import *
 import os
+import pytest
 
 class Send(Collective):
     # Initial state is chunk0 is on rank0 in the input buffer
@@ -111,6 +112,20 @@ def test_local_reduce():
         chunk(0, Buffer.input, 0).reduce(1, Buffer.input, 0).reduce(2, 'scratch', 0).send(2, Buffer.input, 0)
         assert Check()
 
+def test_scratch_buffers():
+    num_gpus = 3
+    topology = fully_connected(num_gpus)
+
+    chunksperloop = num_gpus
+    instances = 1
+    collective = AllReduce(num_gpus, chunksperloop, inplace=False)
+    with SCCLProgram("test", topology, collective, instances):
+        chunk(0, Buffer.input, 0).send(2, 'scratch', 2)
+        c = chunk(2, 'scratch', 2)
+        assert c.index == 2
+        c = chunk(1, Buffer.input, 0).send(2, 'scratch')
+        assert c.index == 3
+
 def test_allgather():
     topology = fully_connected(2)
     collective = AllGather(2, 1, True)
@@ -185,16 +200,17 @@ def test_replication():
     for gpu1, gpu2 in zip(lowered_prgm.gpus, lowered_replicated_prgm.gpus):
         assert len(gpu1.threadblocks) * instances == len(gpu2.threadblocks)
 
-
-def show():
-    print()
-    print(f"SCCL_CONFIG = {os.environ['SCCL_CONFIG']}")
-    print(f"NCCL_MIN_NCHANNELS = {os.environ['NCCL_MIN_NCHANNELS']}")
-    print(f"NCCL_NET_SHARED_BUFFERS = {os.environ['NCCL_NET_SHARED_BUFFERS']}")
-    print(f"Contents of {os.environ['SCCL_CONFIG']}:")
-    with open(os.environ['SCCL_CONFIG']) as f:
-        print(f.read())
-    print()
+def test_illegal_tb_assignment():
+    num_gpus = 3
+    topology = fully_connected(num_gpus)
+    collective = AllToAll(num_gpus, 1, False)
+    prgm = SCCLProgram("alltoall", topology, collective, 1, threadblock_policy=ThreadblockPolicy.manual)
+    with prgm:
+        with pytest.raises(Exception):
+            # Cannot send to two different gpus on the same threadblock
+            chunk(0, Buffer.input, 0).send(1, Buffer.output, 0, sendtb=0, recvtb=1)
+            chunk(0, Buffer.input, 1).send(2, Buffer.output, 0, sendtb=0, recvtb=1)
+            XML()
 
 def test_registered_alltoall():
     from sccl.programs.alltoall_a100_yifan import alltoall_hierarchical 

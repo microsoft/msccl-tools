@@ -4,7 +4,6 @@
 from dataclasses import dataclass
 from enum import Enum
 import heapq
-import sys
 
 from sccl.language.ir import *
 from sccl.language.rank_dag import *
@@ -47,11 +46,9 @@ def manual_assign_tbs(rank_dag):
                 op.step = len(tb.ops)-1
                 rank_dag.num_channels[rank] = max(op.channel+1, rank_dag.num_channels[rank] )
             else:
-                print("Illegal threadblock assignment")
-                print(f"Trying to add {op} to threadblock {tbid}")
-                print(f"Threadblock {tbid} send:{tb.send} recv:{tb.recv} channel:{tb.channel}")
-                print(f"Operation send:{op.dst.rank if op.is_send() else -1} recv:{op.dst.rank if op.is_recv() else -1} channel:{op.channel}")
-                sys.exit()
+                raise Exception(f"Illegal threadblock assignment. Trying to add {op} to threadblock {tbid}\n" \
+                    f"Threadblock {tbid} send:{tb.send} recv:{tb.recv} channel:{tb.channel}\n" \
+                    f"Operation send:{op.dst.rank if op.is_send() else -1} recv:{op.dst.rank if op.is_recv() else -1} channel:{op.channel}")
             
             for o in list(op.next):
                 heapq.heappush(ops, o)
@@ -165,10 +162,8 @@ def auto_assign_tbs(rank_dag):
                         tbid = tbid_opt
 
             tb = rank_dag.tbs[rank][tbid]
-            if not _verify_tb_op_compatible(tb, op):
-                print(f"Failing: Channel {op.channel}, send {s} recv {r} {op}")
-                print("Threadblock", tb.send, tb.recv, tb.channel, tb)
-                sys.exit()
+            assert _verify_tb_op_compatible(tb, op), f"Failing: Channel {op.channel}, send {s} recv {r} {op}\n" \
+                    f"Threadblock send:{tb.send} recv:{tb.recv}  channel{tb.channel}"
 
             tb.ops.append(op)
             tb.send = op.dst.rank if op.is_send() else tb.send
