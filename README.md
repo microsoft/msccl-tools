@@ -1,141 +1,102 @@
 # SCCL
 
-The Synthesized Collective Communication Library is a tool for synthesizing collective algorithms tailored to a particular hardware topology.
+SCCL is a programmable GPU communication library that offers synthesis tools and a programming language, SCCLang, for
+building collective algorithms tailored to a particular hardware and workload.
 
 ## Installation
 
-To install:
+### Python package and tool
+
+To install either clone this repo and run "`pip install .`" or run:
 ```
-pip install .
+pip install git+https://github.com/microsoft/sccl.git
 ```
 This installs the Python package and the `sccl` command line tool.
 
-To enable Bash completion for `sccl`:
+To enable Bash completion for the `sccl` tool:
 ```
 echo 'eval "$(register-python-argcomplete sccl)"' >> ~/.bashrc
 ```
 
-## Synthesizing Algorithms
+### Runtime
 
-At its core SCCL answers synthesis queries is there an algorithm for a given *topology* that implements a given *collective* in a given number of steps, bandwidth usage, memory limits, etc. These additional parameters are called the *instance*.
+SCCL's algorithms run in [a modified version of NCCL that includes an interpreter](https://github.com/microsoft/msccl),
+which is API compatible with NCCL and is installed as normal. See https://github.com/microsoft/msccl for instructions.
 
-SCCL groups its solver strategies under the `sccl solve` subcommand. For example, to synthesize a specific `instance` of an Allgather algorithm for the [NVIDIA DGX-1](https://www.nvidia.com/en-us/data-center/dgx-1/) that completes in 4 steps:
+To use SCCL with PyTorch, the built in NCCL submodule has to be replaced with SCCL's version. Additionally, to expose
+the new native Alltoall support that SCCL adds, PyTorch's `torch.distributed` package can optionally be patched. The
+following commands perform these steps and install PyTorch with SCCL:
 ```
-$ sccl solve instance DGX1 Allgather --steps 4
-Solving instance steps=4... synthesized! (0.7s)
-Wrote to Allgather.n8-DGX1-steps4.sccl.json
-```
-The instance is satisfiable and `sccl` saves it to a file.
-
-Four steps is not necessarily the least number of steps required. To find the least steps:
-```
-$ sccl solve least-steps DGX1 Allgather
-Algorithms need at least 2 steps.
-Solving instance steps=2... synthesized! (0.2s)
-Wrote to Allgather.n8-DGX1-steps2.sccl.json
-```
-The `least-steps` strategy statically determines that any Allgather in a DGX-1 requires at least 2 steps and starting from that finds the smallest satisfiable number of steps.
-
-While this two step algorithm is a latency-optimal one, there may be other algorithms that achieve higher bandwidth. The `pareto-optimal` strategy searches through different latency-bandwidth tradeoffs:
-```
-$ sccl solve pareto-optimal DGX1 Allgather
-Algorithms need at least 2 steps.
-Algorithms need at least 7/6 rounds per chunk.
-Solving instance steps=2... synthesized! (0.5s)
-Solving instance steps=2,rounds=3,chunks=2... synthesized! (0.9s)
-Solving instance steps=2,rounds=4,chunks=3... unsatisfiable. (1.1s)
-Assuming 2 step algorithms need at least 4/3 rounds per chunk.
-Solving instance steps=3,rounds=4,chunks=3... synthesized! (2.9s)
-Solving instance steps=3,rounds=5,chunks=4... synthesized! (6.5s)
-Solving instance steps=3,rounds=6,chunks=5... synthesized! (44.0s)
-Solving instance steps=3,rounds=7,chunks=6... synthesized! (56.1s)
-Bandwidth optimal algorithm found!
-Found 2 Pareto optimal algorithms. Pruned 4 non-optimal algorithms.
-Wrote to Allgather.n8-DGX1-steps2.rounds3.chunks2.sccl.json
-Wrote to Allgather.n8-DGX1-steps3.rounds7.chunks6.sccl.json
+git clone https://github.com/pytorch/pytorch.git
+cd pytorch    
+git checkout tags/v1.9.0 -b v1.9.0_sccl
+perl -p -i -e  's/url = https:\/\/github\.com\/NVIDIA\/nccl/url = https:\/\/github\.com\/microsoft\/msccl/g' .gitmodules
+git submodule sync third_party/nccl
+git submodule update --init --recursive
+git submodule update --init --recursive --remote third_party/nccl
+git apply third_party/nccl/nccl/patches/nccl.cpp.patch
+python setup.py install
 ```
 
-## Collectives
+## Usage
 
-SCCL includes a number of built in common collectives.
+The SCCL Python package ships with a registry of synthesis strategies and hand optimized algorithms. These can be loaded
+into [the runtime](https://github.com/parasailteam/msccl) through the `sccl.init` function, which must be called before
+the application creates its NCCL communicator. For PyTorch this means before `torch.distributed` is initialized.
 
-| Collective | Arguments | Description | Kind |
-| - | - | - | - |
-| Broadcast | `--root N` | Send data from root to all nodes. | NC |
-| Reduce | `--root N` | Combine data from all nodes to root. | CR |
-| Scatter | `--root N` | Send slices of data from root to all nodes. | NC |
-| Gather | `--root N` | Send slices of data from all nodes to root. | NC |
-| Allgather | | Send slices of data from all nodes to all nodes. | NC |
-| Allreduce | | Combine data from all nodes to all nodes. | CNR |
-| Alltoall | | Transpose data between all nodes. | NC |
-| ReduceScatter | | Combine slices of data to all nodes. | CR |
-| Scan | | Combine partial prefixes of data to all nodes in sequence. | CNR |
-| MultirootBroadcast | `--roots N [N ...]` | Like Broadcast, but set of nodes have slices of input. | NC |
-| MultirootScatter | `--roots N [N ...]` | Like Scatter, but set of nodes have slices of input. | NC |
-| MultirootGather | `--roots N [N ...]` | Like Gather, but output is sent in slices to a set of nodes. | NC |
-| custom | `--collective-file` | Arbitrary collective serialized by the user. | ? |
-
-Custom collectives may be defined by instantiating the `Collective` class, which is easiest through the `build_collective` function. For example, a send from rank 2 to rank 7 in an 8 node topology can be defined and saved with:
+The following snippet requests `sccl.init` to provide an Alltoall algorithm in a configuration of 2 Azure NDv2 machines:
 ```
-from sccl.collectives import build_collective
-from sccl.serialization import save_sccl_object
-
-precondition = lambda r, c: r == 2
-postcondition = lambda r, c: r == 7
-coll = build_collective('Send', 8, 1, precondition, postcondition)
-save_sccl_object(coll, 'send.json')
+import sccl
+sccl.init('ndv2', 2, (sccl.Collective.alltoall, ('1MB')))
 ```
+The call will finds an algorithm provider that can create an Alltoall algorithm that is expected to be good with 1MB of
+data. That will call a synthesis routine that writes the algorithm to disk. `sccl.init` will then pass a configuration
+file pointing to this algorithm to the runtime through environment variables.
 
-The *kind* of the collective determines support for some features of SCCL:
-- **NC** are non-combining collectives, and are always supported.
-- **CR** are combining collectives that have a non-combining dual collective, and are supported through a reduction.
-- **CNR** are combining collectives with no dual, which may not always be supported.
+See [the examples](examples/sccl_init.py) for more on `sccl.init` usage.
 
-Currently the rounds per chunk analysis described below can not support CNR collectives.
+Refer to the next section on availability of algorithms with `sccl.init`.
 
-## Steps and Rounds
+### Note on Azure NDv2
 
-SCCL uses two related concepts, *steps and rounds*, to talk about the running time of algorithms. *Steps* is how many sequential sets of sends the algorithm consists of, where all sends inside a step execute in parallel. The number of sends between two nodes in a single step is limited by the bandwidth available in the topology. However, a step may consist of multiple *rounds*, which acts as a multiplier for all links in the topology during that step.
+Azure NDv2 does not expose the true PCIe topology of the machines to the VM and worse, does not assign PCIe devices
+consistently to the virtual paths in the VM. As SCCL is generating topology-aware algorithms, this device ordering must
+be fixed. The [sccl_ndv2_launcher.sh](sccl/autosynth/sccl_ndv2_launcher.sh) script can be used to fix this problem. The
+script solves the automorphisms from the local VM's NVLink topology to the reference topology and selects one of the 4
+automorphisms based on measured placement of the Infiniband card such that GPU 0 is close to the NIC. A tool called
+[inspector-topo](https://github.com/microsoft/inspector-topo) needs to be available for the latter step.
 
-How much data a single round corresponds to depends on what is the actual size of a chunk at runtime, and how many chunks a collective uses can change (e.g. you can control this directly in the `instance` strategy by setting `--chunks N`). Thus for each collective the total data usage of different algorithms implementing it can be measured with their *rounds per chunk*.
+## Available Algorithms
 
-SCCL provides a standalone analysis to find a lower bound for the *rounds per chunk* required by any instance. For example, to find the least rouds per chunk for an Alltoall in a DGX-1:
-```
-$ sccl analyze rounds DGX1 Gather
-Gather(n=8,root=0) algorithms need at least 7/6 rounds in DGX1 topology.
-```
-In this case the bound happens to be tight and the `pareto-optimal` strategy would use it to detect that it has found a bandwidth optimal algorithm.
+SCCL's built-in algorithm providers currently includes an efficient Alltoall algorithm for Azure NDv2 nodes. Stay tuned
+for more algorithms coming soon!
 
-## Distributed Algorithms
+https://github.com/parasailteam/sccl-presynth offers additional algorithms that have been pre-synthesized for fixed
+configurations. To enable them install the package and import it before the call to `sccl.init`.
 
-SCCL provides routines to synthesize algorithms for distributed topologies under the `sccl distribute` subcommand. These work by using algorithms for a local collective and stitcing instances of it together to create a distributed one.
+## Synthesis
 
-**Alltoall from Gather and Scatter:** `alltoall-gather-scatter` combines a Gather and a Scatter algorithm with a transpose step in the middle to form a distributed Alltoall algorithm. For example, an Alltoall algorithm for a cluster of 4 DGX-1 machines can be created with:
-```
-sccl solve least-steps DGX1 Gather -o gather.json
-sccl solve least-steps DGX1 Scatter -o scatter.json --root 1
-sccl distribute alltoall-gather-scatter gather.json scatter.json --copies 4 -o alltoall.json
-```
-This distributor works with any Gather and Scatter algorithm, as long as their roots have a direct connection in the topology. SCCL also provides multi-root versions of Gather and Scatter that can be substituted here.
+SCCL started out as a synthesizer for collective algorithms, and has since expanded to cover a broader range of
+programmability. See [this readme](SYNTHESIS.md) for using SCCL as a synthesizer.
 
 ## Contributing
 
-This project welcomes contributions and suggestions.  Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
+This project welcomes contributions and suggestions.  Most contributions require you to agree to a Contributor License
+Agreement (CLA) declaring that you have the right to, and actually do, grant us the rights to use your contribution. For
+details, visit https://cla.opensource.microsoft.com.
 
-When you submit a pull request, a CLA bot will automatically determine whether you need to provide
-a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
-provided by the bot. You will only need to do this once across all repos using our CLA.
+When you submit a pull request, a CLA bot will automatically determine whether you need to provide a CLA and decorate
+the PR appropriately (e.g., status check, comment). Simply follow the instructions provided by the bot. You will only
+need to do this once across all repos using our CLA.
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact
+[opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
 ## Trademarks
 
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft 
-trademarks or logos is subject to and must follow 
-[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
-Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
-Any use of third-party trademarks or logos are subject to those third-party's policies.
+This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks
+or logos is subject to and must follow [Microsoft's Trademark & Brand
+Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general). Use of Microsoft
+trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship. Any
+use of third-party trademarks or logos are subject to those third-party's policies.
