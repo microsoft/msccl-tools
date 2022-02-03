@@ -108,8 +108,9 @@ def test_local_reduce():
     instances = 1
     collective = Reduce(num_gpus, chunksperloop, inplace=True)
     with SCCLProgram("local-reduce", topology, collective, instances):
-        chunk(2, Buffer.input, 0).send(2, 'scratch')
-        chunk(0, Buffer.input, 0).reduce(1, Buffer.input, 0).reduce(2, 'scratch', 0).send(2, Buffer.input, 0)
+        chunk(0, Buffer.input, 0).reduce(1, Buffer.input, 0).send(2, 'scratch', 0).reduce(2, Buffer.input, 0)
+
+        XML()
         assert Check()
 
 def test_scratch_buffers():
@@ -125,6 +126,7 @@ def test_scratch_buffers():
         assert c.index == 2
         c = chunk(1, Buffer.input, 0).send(2, 'scratch')
         assert c.index == 3
+        XML()
 
 def test_allgather():
     topology = fully_connected(2)

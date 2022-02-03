@@ -10,11 +10,11 @@ from sccl.language.ir import ThreadblockPolicy
 def register_ndv4_plans():
 
     @register_sccl_program(fully_connected(8), 'allreduce', 'ndv4', chunk_factor=8, inplace=True,
-    instances=4, protocol='LL128', threadblock_policy=ThreadblockPolicy.manual, machines= lambda m: m == 1)
+        instances=4, protocol='LL128', threadblock_policy=ThreadblockPolicy.manual, machines= lambda x: x == 1)
     def ndv4_ring_allreduce(prog, nodes):
         allreduce_ring(size=8, channels=8)
 
-    @register_sccl_program(fully_connected(8), 'alltoall', 'ndv4', machines=lambda x: x >= 2)
+    @register_sccl_program(fully_connected(8), 'alltoall', 'ndv4', machines=lambda x: x == 8 or x == 16 or x == 32)
     def ndv4_alltoall(prog, nodes):
         alltoall_hierarchical(num_nodes=nodes, gpus_per_node=8)
 
