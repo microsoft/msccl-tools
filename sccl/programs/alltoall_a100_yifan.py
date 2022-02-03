@@ -41,18 +41,4 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
             c = chunk(rank, Buffer.input, index)
             c.send(c.get_dst_rank(), Buffer.output, c.get_dst_index())
 
-        
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('num_nodes', type=int, help ='number of nodes')
-    parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
-    args = parser.parse_args()
-
-    num_ranks = args.gpus_per_node * args.num_nodes
-    topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, 1, inplace=False)
-    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
-        alltoall_hierarchical(args.num_nodes, args.gpus_per_node)
-        XML() # Prints the XML
-        Check()
 

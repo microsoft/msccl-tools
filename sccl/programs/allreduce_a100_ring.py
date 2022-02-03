@@ -27,18 +27,3 @@ def allreduce_ring(size, channels):
             next_rank = (index + step + 1) % size
             channel = index%channels
             c = c.send(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('channels', type=int, help='Number of channels to use for 1 instance of the ring [1-8]')
-    parser.add_argument('instances', type=int, help='number of instances')
-    args = parser.parse_args()
-
-    num_ranks = 8
-    topology = fully_connected(num_ranks)
-    collective = AllReduce(num_ranks, num_ranks, True)
-    with SCCLProgram(f"allreduce_ring_{args.channels}channelsperring", topology, collective, args.instances,
-        protocol="LL128", threadblock_policy=ThreadblockPolicy.manual):
-        allreduce_ring(num_ranks, args.channels)
-        Check()
-        XML()
