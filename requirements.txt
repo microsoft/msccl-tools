@@ -3,6 +3,7 @@ z3-solver
 argcomplete
 lxml
 humanfriendly
+igraph
 pytest
 pytest-cov
 pytest-xdist
