@@ -20,7 +20,7 @@ def writes_to_slot(op, slot):
 def remove_op(op):
     for p in op.prev:
         p.next.remove(op)
-        p.next = op.next.union(p.next)
+        p.next = op.next + p.next
 
     for n in op.next:
         n.prev.remove(op)
