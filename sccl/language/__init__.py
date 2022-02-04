@@ -375,3 +375,4 @@ class ChunkDAG:
                 for o in op.next:
                     heapq.heappush(frontier, o)
                 visited.add(op)
+        rank_dag.convert_set_list() # Pre-emptively convert sets to lists

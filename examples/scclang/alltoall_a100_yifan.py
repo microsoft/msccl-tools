@@ -5,13 +5,13 @@ from sccl.topologies import *
 from sccl.language.collectives import AllToAll
 
 
-def alltoall_hierarchical(num_nodes, gpus_per_node):
+def alltoall_hierarchical(num_nodes, gpus_per_node, protocol):
     num_ranks = num_nodes * gpus_per_node
     topology = fully_connected(num_ranks)
     collective = AllToAll(num_ranks, 1, inplace=False)
 
         
-    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
+    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1, protocol=protocol):
         for n1 in range(num_nodes):
             for r in range(1,num_nodes):
                 n2 = (n1 + r) % num_nodes
@@ -52,7 +52,8 @@ def alltoall_hierarchical(num_nodes, gpus_per_node):
 parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
+parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: Simple')
 args = parser.parse_args()
 
 
-alltoall_hierarchical(args.num_nodes, args.gpus_per_node)
+alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.protocol)

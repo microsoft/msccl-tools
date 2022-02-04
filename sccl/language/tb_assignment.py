@@ -23,7 +23,7 @@ def manual_assign_tbs(rank_dag):
     ops = []
     for slot, op in rank_dag.operations.items():
         if op.inst == Instruction.start:
-            for o in list(op.next):
+            for o in op.next:
                 if o.inst == Instruction.send or o.inst == Instruction.copy:
                     heapq.heappush(ops, o)
 
@@ -50,7 +50,7 @@ def manual_assign_tbs(rank_dag):
                     f"Threadblock {tbid} send:{tb.send} recv:{tb.recv} channel:{tb.channel}\n" \
                     f"Operation send:{op.dst.rank if op.is_send() else -1} recv:{op.dst.rank if op.is_recv() else -1} channel:{op.channel}")
             
-            for o in list(op.next):
+            for o in op.next:
                 heapq.heappush(ops, o)
             for o in op.match:
                 heapq.heappush(ops, o)
@@ -89,14 +89,15 @@ def create_base_tbs(rank_dag):
 
     for slot, op in rank_dag.operations.items():
         if op.inst == Instruction.start:
-            for o in list(op.next):
+            for o in op.next:
                 ops.append(o)
         elif op.inst != Instruction.copy:
             ops.append(op)
 
     visited = set()
-    while len(ops) > 0:
-        op = ops[0]
+    i = 0
+    while i < len(ops):
+        op = ops[i]
         if op not in visited:
             visited.add(op)
             rank = op.rank
@@ -110,9 +111,8 @@ def create_base_tbs(rank_dag):
                 rank_dag.tbs[rank][tbid[rank]] = Threadblock(send=s, recv=r, channel=channel)
                 tb_assignments[rank][(s,r,channel)] = tbid[rank]
                 tbid[rank] += 1
-            ops = ops[1:] + list(op.next)
-        else:
-            ops = ops[1:]
+            ops += op.next
+        i += 1
 
     rank_dag.tb_assignments = tb_assignments
     rank_dag.num_channels = num_channels
@@ -135,7 +135,7 @@ def auto_assign_tbs(rank_dag):
     ops = []
     for slot, op in rank_dag.operations.items():
         if op.inst == Instruction.start:
-            for o in list(op.next):
+            for o in op.next:
                 if o.inst == Instruction.send or o.inst == Instruction.copy:
                     heapq.heappush(ops, o)
     heapq.heapify(ops)
@@ -179,7 +179,7 @@ def auto_assign_tbs(rank_dag):
             for match in op.match:
                 match.channel = tb.channel
 
-            for o in list(op.next):
+            for o in op.next:
                 heapq.heappush(ops, o)
             for o in op.match:
                 heapq.heappush(ops, o)

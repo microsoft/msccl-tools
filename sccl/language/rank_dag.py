@@ -206,6 +206,26 @@ class RankDAG:
                     op.prev.add(prev_op)
         return op
 
+    def convert_set_list(self):
+        ops = []
+        for slot, op in self.operations.items():
+            if op.inst == Instruction.start:
+                op.next = list(op.next)
+                for o in op.next:
+                    ops.append(o)
+            elif op.inst != Instruction.copy:
+                ops.append(op)
+
+            visited = set()
+            while len(ops) > 0:
+                op = ops[0]
+                if op not in visited:
+                    visited.add(op)
+                    op.next = list(op.next)
+                    ops = ops[1:] + op.next
+                else:
+                    ops = ops[1:]
+
     def optimize(self):
         self._optimize_rrcs_rrs()
         self._optimize_rcs()
@@ -222,13 +242,13 @@ class RankDAG:
             while len(frontier) > 0:
                 op = frontier[0]
                 if len(op.next) == 1:
-                    next_op = list(op.next)[0] 
+                    next_op = op.next[0] 
                     if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
                         op.inst = Instruction.recv_copy_send
                         op.dst = next_op.dst
                         op.match = op.match + next_op.match
                         remove_op(next_op)
-                frontier = frontier[1:] + list(op.next)
+                frontier = frontier[1:] + op.next
         
     def _optimize_rrcs_rrs(self):
         # RRC/S -> RRS
@@ -237,9 +257,9 @@ class RankDAG:
             while len(frontier) > 0:
                 op = frontier[0]
                 if len(op.next) == 1:
-                    next_op = list(op.next)[0]
+                    next_op = op.next[0]
                     if len(next_op.next) == 1:
-                        nnext_op = list(next_op.next)[0]
+                        nnext_op = next_op.next[0]
                         if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and nnext_op.inst == Instruction.recv and same_tb(op, next_op) and same_count(op, next_op):
                             op.inst = Instruction.recv_reduce_send
                             op.dst = next_op.dst
@@ -251,7 +271,7 @@ class RankDAG:
                         op.dst = next_op.dst
                         op.match = op.match + next_op.match
                         remove_op(next_op)
-                frontier = frontier[1:] + list(op.next)
+                frontier = frontier[1:] + op.next
 
     def lower_pt1(self, instances):
         self.infer_dependencies()
@@ -277,7 +297,7 @@ class RankDAG:
                         if tb not in depends or dep_op.step > depends[tb].step:
                             depends[tb] = dep_op
                 op.depends = list(depends.values())
-                frontier = frontier[1:] + list(op.next)
+                frontier = frontier[1:] + op.next
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
