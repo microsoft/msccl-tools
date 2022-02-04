@@ -20,7 +20,7 @@ def writes_to_slot(op, slot):
 def remove_op(op):
     for p in op.prev:
         p.next.remove(op)
-        p.next = op.next + p.next
+        p.next += op.next
 
     for n in op.next:
         n.prev.remove(op)
@@ -217,14 +217,14 @@ class RankDAG:
                 ops.append(op)
 
             visited = set()
-            while len(ops) > 0:
-                op = ops[0]
+            i = 0
+            while i < len(ops):
+                op = ops[i]
                 if op not in visited:
                     visited.add(op)
                     op.next = list(op.next)
-                    ops = ops[1:] + op.next
-                else:
-                    ops = ops[1:]
+                    ops += op.next
+                i += 1
 
     def optimize(self):
         self._optimize_rrcs_rrs()
