@@ -217,15 +217,15 @@ class RankDAG:
                 ops.append(op)
 
             visited = set()
-            i = 0
-            while i < len(ops):
-                op = ops[i]
+            while len(ops) > 0:
+                op = ops[0]
                 if op not in visited:
                     visited.add(op)
                     op.next = list(op.next)
-                    ops += op.next
-                i += 1
-
+                    ops = ops[1:] + op.next
+                else:
+                    ops = ops[1:]
+                    
     def optimize(self):
         self._optimize_rrcs_rrs()
         self._optimize_rcs()
