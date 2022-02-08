@@ -12,13 +12,20 @@ def test_sccl_init(capsys):
     out, err = capsys.readouterr()
     assert 'No plan found' in out
     assert not 'SCCL_CONFIG' in os.environ
+
     sccl.init('ndv2', 2, ('alltoall', '1MB'))
     out, err = capsys.readouterr()
     assert 'synthesize_ndv2_relay_alltoall' in out
     assert 'SCCL_CONFIG' in os.environ
+
     sccl.init('ndv4', 9, (sccl.Collective.alltoall, '1MB'))
     out, err = capsys.readouterr()
     assert 'synthesize_ndv4_hierarchical_alltoall' in out
+
+    sccl.init('ndv4', 16, (sccl.Collective.alltoall, '1MB'))
+    out, err = capsys.readouterr()
+    assert 'ndv4_alltoall' in out
+    assert 'NCCL_IB_AR_THRESHOLD' in os.environ
 
 
 def test_register_plan():

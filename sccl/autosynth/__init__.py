@@ -53,7 +53,9 @@ def init(machine_type, num_machines, *collectives):
                 sizes = humanfriendly.parse_size(sizes)
             sizes = (sizes, sizes+1)
         candidates = synthesis_plans[(name, machine_type)]
-        selected_plans[name] = _select_plans(name, candidates, num_machines, sizes)
+        plans = _select_plans(name, candidates, num_machines, sizes)
+        if len(plans) > 0:
+            selected_plans[name] = plans
 
     # Execute the plans to find or synthesize the algorithms and format them in the XML format expected by SCCL-RT.
     algos_elem = ET.Element('sccl_algos')
@@ -76,10 +78,16 @@ def init(machine_type, num_machines, *collectives):
         fd, path = tempfile.mkstemp()
         with os.fdopen(fd, 'w') as f:
             f.write(ET.tostring(algos_elem, encoding='unicode'))
-        os.environ.update({
+
+        # Set environment variables
+        env = {
             'SCCL_CONFIG': path,
-            'NCCL_NET_SHARED_BUFFERS': '0'
-        })
+            'NCCL_NET_SHARED_BUFFERS': '0',
+        }
+        if machine_type == 'ndv4' and num_machines >= 16 and 'alltoall' in selected_plans:
+            print(f'SCCL: Setting NCCL_IB_AR_THRESHOLD=0 (reason: alltoall and at least 16 ndv4 machines)')
+            env['NCCL_IB_AR_THRESHOLD'] = '0'
+        os.environ.update(env)
     else:
         print(f'SCCL: No algorithms were selected.')
 
