@@ -86,7 +86,7 @@ def init(machine_type, num_machines, *collectives):
         }
         if 'NCCL_ALGOS' in os.environ and os.environ['NCCL_ALGOS'] != '':
             existing_algos = os.environ['NCCL_ALGOS']
-            if 'SCCL' not in existing_algos:
+            if 'SCCL' not in existing_algos.split(','):
                 os.environ['NCCL_ALGOS'] = 'SCCL,' + existing_algos
         else:
             env['NCCL_ALGOS'] = 'SCCL,RING,TREE'
