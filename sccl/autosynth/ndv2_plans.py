@@ -10,7 +10,7 @@ from sccl.ncclize import ncclize
 
 
 def register_ndv2_plans():
-    @register_synthesis_plan('alltoall', 'ndv2', machines=lambda x: x >= 2)
+    @register_synthesis_plan('alltoall', 'ndv2', sizes=('1MB', None), machines=lambda x: x >= 2)
     def synthesize_ndv2_relay_alltoall(machines):
         gather_coll = gather(8, 0)
         scatter_coll = scatter(8, 1)
