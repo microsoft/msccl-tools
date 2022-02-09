@@ -214,7 +214,7 @@ def test_illegal_tb_assignment():
             chunk(0, Buffer.input, 1).send(2, Buffer.output, 0, sendtb=0, recvtb=1)
             XML()
 
-def test_registered_alltoall():
+def test_registered_alltoall_yifan():
     from sccl.programs.alltoall_a100_yifan import alltoall_hierarchical 
 
     num_nodes = 4
@@ -225,6 +225,19 @@ def test_registered_alltoall():
     with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
         alltoall_hierarchical(num_nodes, gpus_per_node)
         assert Check()
+
+def test_registered_alltoall_8kp1():
+    from sccl.programs.alltoall_a100_8kp1 import alltoall_three_step 
+
+    num_nodes = 9
+    gpus_per_node = 8
+    num_ranks = num_nodes * gpus_per_node
+    topology = fully_connected(num_ranks)
+    collective = AllToAll(num_ranks, 1, inplace=False)
+    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
+        alltoall_three_step(num_nodes, gpus_per_node)
+        assert Check()
+        XML()
 
 def test_registered_allreduce():
     from sccl.programs.allreduce_a100_ring import allreduce_ring 
