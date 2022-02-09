@@ -12,20 +12,27 @@ def test_sccl_init(capsys):
     out, err = capsys.readouterr()
     assert 'No plan found' in out
     assert not 'SCCL_CONFIG' in os.environ
+    assert 'NCCL_ALGOS' not in os.environ
 
     sccl.init('ndv2', 2, ('alltoall', '1MB'))
     out, err = capsys.readouterr()
     assert 'synthesize_ndv2_relay_alltoall' in out
     assert 'SCCL_CONFIG' in os.environ
+    assert 'NCCL_ALGOS' in os.environ and os.environ['NCCL_ALGOS'] == 'SCCL,RING,TREE'
 
-    sccl.init('ndv4', 9, (sccl.Collective.alltoall, '1MB'))
+    os.environ['NCCL_ALGOS'] = 'RING,FAKE_SCCL'
+    sccl.init('ndv4', 8, (sccl.Collective.alltoall, '2MB'))
     out, err = capsys.readouterr()
-    assert 'synthesize_ndv4_hierarchical_alltoall' in out
+    assert 'ndv4_alltoall' in out
+    assert 'NCCL_IB_AR_THRESHOLD' not in os.environ
+    assert 'NCCL_ALGOS' in os.environ and os.environ['NCCL_ALGOS'] == 'SCCL,RING,FAKE_SCCL'
 
-    sccl.init('ndv4', 16, (sccl.Collective.alltoall, '1MB'))
+    os.environ['NCCL_ALGOS'] = 'HELLO,SCCL,WORLD'
+    sccl.init('ndv4', 16, (sccl.Collective.alltoall, '35MB'))
     out, err = capsys.readouterr()
     assert 'ndv4_alltoall' in out
     assert 'NCCL_IB_AR_THRESHOLD' in os.environ
+    assert 'NCCL_ALGOS' in os.environ and os.environ['NCCL_ALGOS'] == 'HELLO,SCCL,WORLD'
 
 
 def test_register_plan():
