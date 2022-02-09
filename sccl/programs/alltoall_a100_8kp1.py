@@ -5,7 +5,7 @@ from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllToAll
 
-def alltoall_hierarchical(num_nodes, gpus_per_node, instances=1, ib_connections=1):
+def alltoall_three_step(num_nodes, gpus_per_node, instances=1, ib_connections=1):
     num_ranks = num_nodes * gpus_per_node
 
     # (node, local gpu) to rank

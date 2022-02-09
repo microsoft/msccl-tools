@@ -227,7 +227,7 @@ def test_registered_alltoall_yifan():
         assert Check()
 
 def test_registered_alltoall_8kp1():
-    from sccl.programs.alltoall_a100_8kp1 import alltoall_hierarchical 
+    from sccl.programs.alltoall_a100_8kp1 import alltoall_three_step 
 
     num_nodes = 9
     gpus_per_node = 8
@@ -235,7 +235,7 @@ def test_registered_alltoall_8kp1():
     topology = fully_connected(num_ranks)
     collective = AllToAll(num_ranks, 1, inplace=False)
     with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
-        alltoall_hierarchical(num_nodes, gpus_per_node)
+        alltoall_three_step(num_nodes, gpus_per_node)
         assert Check()
         XML()
 
