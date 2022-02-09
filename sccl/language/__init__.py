@@ -154,7 +154,7 @@ class Ref(ChunkRef):
         size = self.size // num
         for i in range(num):
             index = self.index + i * size
-            chunks[i] = self.prog.get_ref(self.buffer, self.rank, index, size)
+            chunks[i] = self.prog.get_ref(self.rank, self.buffer, index, size)
         return chunks
 
     def group(self, other):
