@@ -62,8 +62,8 @@ RUN conda install -c pytorch magma-cuda111 -y
 
 ENV CMAKE_PREFIX_PATH=/opt/conda
 
-# Change NCCL to SCCL Runtime version 0.3.1
-RUN cd ${STAGE_DIR}/ && \
+# Change NCCL to SCCL Runtime
+RUN cd ${STAGE_DIR} && \
     git clone https://github.com/pytorch/pytorch.git && \
     cd pytorch && \
     git checkout tags/v1.9.0 -b v1.9.0_sccl && \
@@ -79,8 +79,8 @@ RUN cd ${STAGE_DIR}/ && \
     cd ${STAGE_DIR} && \
     rm -rf ${STAGE_DIR}/pytorch
 
-# Install SCCL Synthesizer version 2.1.2
-RUN cd ${STAGE_DIR}// && \
+# Install SCCL
+RUN cd ${STAGE_DIR}/ && \
     git clone https://github.com/microsoft/sccl.git && \
     cd sccl/ && python setup.py install && \
     cd ${STAGE_DIR} && \
