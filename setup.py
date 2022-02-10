@@ -21,7 +21,6 @@ setup(
         'argcomplete',
         'lxml',
         'humanfriendly',
-        'igraph'
     ],
     python_requires='>=3.6',
 )

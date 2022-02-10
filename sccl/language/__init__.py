@@ -10,7 +10,6 @@ from sccl.language.tb_assignment import *
 from sccl.language.chunk import *
 from sccl.language.buffer import *
 from sccl.language.rank_dag import *
-from sccl.language.visualize import *
 import sccl.collectives as collectives
 
 
@@ -110,15 +109,15 @@ class SCCLProgram:
         check_threadblock_ordering(self.rank_dag)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
 
-    def print_chunk_dag(self):
-        visualize_chunk_dag(self.chunk_dag.chunk_paths)
+    # def print_chunk_dag(self):
+    #     visualize_chunk_dag(self.chunk_dag.chunk_paths)
 
-    def print_rank_dags(self, rank):
-        if rank == -1:
-            for r in range(len(self.ranks)):
-                visualize_rank_dag(self.rank_dags[r].operations)
-        else:
-            visualize_rank_dag(self.rank_dags[rank].operations)
+    # def print_rank_dags(self, rank):
+    #     if rank == -1:
+    #         for r in range(len(self.ranks)):
+    #             visualize_rank_dag(self.rank_dags[r].operations)
+    #     else:
+    #         visualize_rank_dag(self.rank_dags[rank].operations)
 
 def Print():
     _curr().print_chunk_dag()
