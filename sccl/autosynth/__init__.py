@@ -82,7 +82,6 @@ def init(machine_type, num_machines, *collectives):
         # Set environment variables
         env = {
             'SCCL_CONFIG': path,
-            'NCCL_NET_SHARED_BUFFERS': '0',
         }
         if 'NCCL_ALGO' in os.environ and os.environ['NCCL_ALGO'] != '':
             existing_algos = os.environ['NCCL_ALGO']
