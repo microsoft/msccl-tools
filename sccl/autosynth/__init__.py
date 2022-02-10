@@ -84,12 +84,12 @@ def init(machine_type, num_machines, *collectives):
             'SCCL_CONFIG': path,
             'NCCL_NET_SHARED_BUFFERS': '0',
         }
-        if 'NCCL_ALGOS' in os.environ and os.environ['NCCL_ALGOS'] != '':
-            existing_algos = os.environ['NCCL_ALGOS']
+        if 'NCCL_ALGO' in os.environ and os.environ['NCCL_ALGO'] != '':
+            existing_algos = os.environ['NCCL_ALGO']
             if 'SCCL' not in existing_algos.split(','):
-                os.environ['NCCL_ALGOS'] = 'SCCL,' + existing_algos
+                os.environ['NCCL_ALGO'] = 'SCCL,' + existing_algos
         else:
-            env['NCCL_ALGOS'] = 'SCCL,RING,TREE'
+            env['NCCL_ALGO'] = 'SCCL,RING,TREE'
         if machine_type == 'ndv4' and num_machines >= 16 and 'alltoall' in selected_plans:
             print(f'SCCL: Setting NCCL_IB_AR_THRESHOLD=0 (reason: alltoall and at least 16 ndv4 machines)')
             env['NCCL_IB_AR_THRESHOLD'] = '0'
