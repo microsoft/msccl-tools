@@ -137,16 +137,11 @@ def auto_assign_tbs(rank_dag):
         if op.inst == Instruction.start:
             for o in op.next:
                 if o.inst == Instruction.send or o.inst == Instruction.copy:
-                    heapq.heappush(ops, o)
-    heapq.heapify(ops)
-
-    for o in ops:
-        if o.inst == Instruction.recv:
-            print(o)
+                    heapq.heappush(ops, ((o.chunk_step, o.priority, o.dst.index), o))
 
     visited = set()
     while len(ops) > 0:
-        op = heapq.heappop(ops)
+        _, op = heapq.heappop(ops)
         if op not in visited:
             visited.add(op)
             rank = op.rank
@@ -179,7 +174,8 @@ def auto_assign_tbs(rank_dag):
             for match in op.match:
                 match.channel = tb.channel
 
-            for o in op.next:
-                heapq.heappush(ops, o)
             for o in op.match:
-                heapq.heappush(ops, o)
+                heapq.heappush(ops, ((o.chunk_step, o.priority, o.dst.index), o))
+            for o in op.next:
+                heapq.heappush(ops, ((o.chunk_step, o.priority, o.dst.index), o))
+            

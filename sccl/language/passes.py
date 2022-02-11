@@ -42,5 +42,14 @@ def check_threadblock_ordering(rank_dag):
 
                     other_tbid = match.tb
                     if other_tbid in prev_steps:
-                        assert match.step >  prev_steps[other_tbid], f"Rank {self.rank} sends op1 then op2 but {match.rank} receives op2 then op1"
-                    prev_steps[other_tbid] = match.step
+                        if match.step <= prev_steps[other_tbid].step:
+                            print("Offending Steps", match.step, prev_steps[other_tbid].step)
+                            print("Sending tb")
+                            for op in tb.ops:
+                                print(f'{op.step}: {op} priority:{(op.chunk_step, op.priority)}')
+                            print("Receiving tb")
+                            for op in rank_dag.tbs[match.rank][other_tbid].ops:
+                                print(f'{op.step}: {op} priority:{(op.chunk_step, op.priority)}')
+                            assert match.step >  prev_steps[other_tbid].step, f"Rank {op.rank} sends op1 then op2 but {match.rank} receives op2 then op1"
+                        
+                    prev_steps[other_tbid] = match
