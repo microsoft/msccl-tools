@@ -89,7 +89,7 @@ def init(machine_type, num_machines, *collectives):
                 os.environ['NCCL_ALGO'] = 'SCCL,' + existing_algos
         else:
             env['NCCL_ALGO'] = 'SCCL,RING,TREE'
-        if machine_type == 'ndv4' and num_machines >= 16 and 'alltoall' in selected_plans:
+        if machine_type == 'ndv4' and num_machines >= 8 and 'alltoall' in selected_plans:
             print(f'SCCL: Setting NCCL_IB_AR_THRESHOLD=0 (reason: alltoall and at least 16 ndv4 machines)')
             env['NCCL_IB_AR_THRESHOLD'] = '0'
         if machine_type == 'ndv4':
