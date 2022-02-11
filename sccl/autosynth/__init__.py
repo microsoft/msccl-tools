@@ -92,6 +92,9 @@ def init(machine_type, num_machines, *collectives):
         if machine_type == 'ndv4' and num_machines >= 16 and 'alltoall' in selected_plans:
             print(f'SCCL: Setting NCCL_IB_AR_THRESHOLD=0 (reason: alltoall and at least 16 ndv4 machines)')
             env['NCCL_IB_AR_THRESHOLD'] = '0'
+        if machine_type == 'ndv4':
+            print(f'SCCL: Setting NCCL_IB_PCI_RELAXED_ORDERING=1 (reason: it is necessary for ndv4 to have a relaxed ordering for PCIe)')
+            env['NCCL_IB_PCI_RELAXED_ORDERING'] = '1'
         os.environ.update(env)
     else:
         print(f'SCCL: No algorithms were selected.')
