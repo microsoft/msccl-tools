@@ -93,8 +93,10 @@ def init(machine_type, num_machines, *collectives):
             print(f'SCCL: Setting NCCL_IB_AR_THRESHOLD=0 (reason: alltoall and at least 16 ndv4 machines)')
             env['NCCL_IB_AR_THRESHOLD'] = '0'
         if machine_type == 'ndv4':
-            print(f'SCCL: Setting NCCL_IB_PCI_RELAXED_ORDERING=1 (reason: it is necessary for ndv4 to have a relaxed ordering for PCIe)')
+            print(f'SCCL: Setting relaxed orderin, topo file and visible devices order')
             env['NCCL_IB_PCI_RELAXED_ORDERING'] = '1'
+            env['NCCL_TOPO_FILE'] = '/opt/msft/topo.xml'
+            env['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
         os.environ.update(env)
     else:
         print(f'SCCL: No algorithms were selected.')
