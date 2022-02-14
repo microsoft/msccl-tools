@@ -22,7 +22,8 @@ def _curr():
 
 class SCCLProgram:
     def __init__(self, name, topo, collective, instances, protocol='Simple', \
-            threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True):
+            threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True,
+            check_xml=True):
         self.name = name
         self.topo = topo
         self.collective = collective       
@@ -31,6 +32,7 @@ class SCCLProgram:
         self.protocol = protocol
         self.threadblock_policy = threadblock_policy
         self.interleaved_replication = interleaved_replication
+        self.check_xml = check_xml
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
         self.run_opt = True # Runs optimization passes
@@ -105,8 +107,11 @@ class SCCLProgram:
             auto_assign_tbs(self.rank_dag)
         self.rank_dag.lower_pt1(self.instances)
         gpu_prgms = self.rank_dag.lower_pt2(self.instances, self.interleaved_replication)
-        check_dependency_cycles(self.rank_dag.tbs)
-        check_threadblock_ordering(self.rank_dag)
+        if self.check_xml:
+            # Check generated SCCL-EF for correctness - no circular dependencies, sends and receives are ordered
+            # For very large programs, turn off check_xml when shipping 
+            check_dependency_cycles(self.rank_dag.tbs)
+            check_threadblock_ordering(self.rank_dag)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
 
     # def print_chunk_dag(self):
@@ -119,8 +124,8 @@ class SCCLProgram:
     #     else:
     #         visualize_rank_dag(self.rank_dags[rank].operations)
 
-def Print():
-    _curr().print_chunk_dag()
+# def Print():
+#     _curr().print_chunk_dag()
 
 def chunk(rank, buffer, index, size=1):
     return _curr().get_ref(rank, buffer, index, size)
