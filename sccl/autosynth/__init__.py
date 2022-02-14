@@ -82,7 +82,6 @@ def init(machine_type, num_machines, *collectives):
         # Set environment variables
         env = {
             'SCCL_CONFIG': path,
-            'NCCL_NET_SHARED_BUFFERS': '0',
         }
         if 'NCCL_ALGO' in os.environ and os.environ['NCCL_ALGO'] != '':
             existing_algos = os.environ['NCCL_ALGO']
@@ -90,9 +89,14 @@ def init(machine_type, num_machines, *collectives):
                 os.environ['NCCL_ALGO'] = 'SCCL,' + existing_algos
         else:
             env['NCCL_ALGO'] = 'SCCL,RING,TREE'
-        if machine_type == 'ndv4' and num_machines >= 16 and 'alltoall' in selected_plans:
+        if machine_type == 'ndv4' and num_machines >= 8 and 'alltoall' in selected_plans:
             print(f'SCCL: Setting NCCL_IB_AR_THRESHOLD=0 (reason: alltoall and at least 16 ndv4 machines)')
             env['NCCL_IB_AR_THRESHOLD'] = '0'
+        if machine_type == 'ndv4':
+            print(f'SCCL: Setting relaxed orderin, topo file and visible devices order')
+            env['NCCL_IB_PCI_RELAXED_ORDERING'] = '1'
+            env['NCCL_TOPO_FILE'] = '/opt/msft/topo.xml'
+            env['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
         os.environ.update(env)
     else:
         print(f'SCCL: No algorithms were selected.')
