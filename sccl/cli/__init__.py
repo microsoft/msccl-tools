@@ -5,3 +5,4 @@ from .solve import *
 from .distribute import *
 from .analyze import *
 from .ncclize import *
+from .plans import *

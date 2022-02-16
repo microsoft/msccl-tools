@@ -24,6 +24,7 @@ def main():
     handlers.append(make_distributors(cmd_parsers))
     handlers.append(make_analyses(cmd_parsers))
     handlers.append(make_handle_ncclize(cmd_parsers))
+    handlers.append(make_plans(cmd_parsers))
 
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
