@@ -21,6 +21,7 @@ setup(
         'argcomplete',
         'lxml',
         'humanfriendly',
+        'tabulate',
     ],
     python_requires='>=3.6',
 )

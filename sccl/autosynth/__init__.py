@@ -12,6 +12,7 @@ import os
 import math
 import tempfile
 import humanfriendly
+from tabulate import tabulate
 from enum import Enum
 
 from sccl.autosynth.ndv2_plans import register_ndv2_plans
@@ -221,3 +222,48 @@ def _select_isomorphism(isomorphisms, verbose=True): # pragma: no cover
                     f'expected an isomorphism to match our expectation but none of them did!')
         finally:
             fcntl.lockf(f, fcntl.LOCK_UN)
+
+
+_max_described_machines = 2048
+def _describe_machines(machines):
+    ranges = []
+    lower = None
+    for i in range(_max_described_machines):
+        if machines(i):
+            if lower is None:
+                lower = i
+        else:
+            if lower is not None:
+                if lower == i-1:
+                    ranges.append(str(i-1))
+                else:
+                    ranges.append(f'{lower}-{i-1}')
+                lower = None
+    if lower is not None:
+        ranges.append(f'>={lower}')
+    if len(ranges) > 0:
+        return ','.join(ranges)
+    else:
+        return '???'
+
+
+def _list_plan_parameters():
+    headers = ['Machine', 'Collective', '# machines', 'From', 'To', 'Protocol', 'Priority', 'Plan name']
+    rows = []
+    for key, plans in synthesis_plans.items():
+        collective, machine_type = key
+        for name, function, machines, (low, high), protocol, priority in plans:
+            # First tuple is the key to sort by, second is the actual columns
+            rows.append(((machine_type,collective,low,high,protocol,priority,name),
+                (machine_type, collective, _describe_machines(machines), _format_size(low), _format_size(high), protocol, priority, name)))
+    rows = [columns for _, columns in sorted(rows, key=lambda x: x[0])]
+    return headers, rows
+
+
+def tabulate_plans():
+    headers, rows = _list_plan_parameters()
+    return tabulate(rows, headers=headers, tablefmt='github')
+
+
+def print_plans():
+    print(tabulate_plans())
