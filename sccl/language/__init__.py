@@ -23,7 +23,7 @@ def _curr():
 class SCCLProgram:
     def __init__(self, name, topo, collective, instances, protocol='Simple', \
             threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True,
-            check_xml=True):
+            instr_fusion=True, check_xml=True):
         self.name = name
         self.topo = topo
         self.collective = collective       
@@ -32,6 +32,7 @@ class SCCLProgram:
         self.protocol = protocol
         self.threadblock_policy = threadblock_policy
         self.interleaved_replication = interleaved_replication
+        self.instr_fusion = instr_fusion
         self.check_xml = check_xml
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
@@ -97,13 +98,13 @@ class SCCLProgram:
     # Lower program to XML
     def lower(self):
         self.chunk_dag._complete_metadata()
+        self.chunk_dag.channel_assignment()
         self.chunk_dag.lower_rank_dag(self.rank_dag)
-       
-        self.rank_dag.optimize()
+        if self.instr_fusion:
+            self.rank_dag.optimize()
         if self.threadblock_policy == ThreadblockPolicy.manual:
             manual_assign_tbs(self.rank_dag)
         else:
-            create_base_tbs(self.rank_dag)
             auto_assign_tbs(self.rank_dag)
         self.rank_dag.lower_pt1(self.instances)
         gpu_prgms = self.rank_dag.lower_pt2(self.instances, self.interleaved_replication)
@@ -264,9 +265,14 @@ def same_slot(ref1, ref2):
 # Returns if there is overlap between the refs
 def overlap_refs(ref1, ref2):
     same_location = ref1.rank == ref2.rank and ref1.buffer == ref2.buffer
-    contained1 = ref1.index >= ref2.index and (ref1.index + ref1.size) <= (ref2.index + ref2.size)
-    contained2 = ref2.index >= ref1.index and (ref2.index + ref2.size) <= (ref1.index + ref1.size)
-    return same_location and (contained1 or contained2)
+    if same_location:
+        ref1_range = (ref1.index, ref1.index + ref1.size)
+        ref2_range = (ref2.index, ref2.index + ref2.size)
+        if ref1_range < ref2_range:
+            return ref1_range[0] < ref2_range[1]
+        else:
+            return ref2_range[0] < ref1_range[1]
+    return False
 
 class ChunkDAG:
 
@@ -340,6 +346,25 @@ class ChunkDAG:
             if op.inst == ChunkInstruction.start:
                 dfs(op)
             
+
+    # Assigns each send and a reduce a channel for communication based of policies
+    def channel_assignment(self, channel_policy='zero'):
+        frontier = []
+        visited = set()
+        for chunk, op in self.chunk_paths.items():
+            if len(op.prev) == 0: 
+                heapq.heappush(frontier, op)
+
+        # If an op isn't annotated with a channel set it to 0
+        if channel_policy == 'zero':
+            while len(frontier) > 0:
+                op = heapq.heappop(frontier)
+                if op not in visited:
+                    op.ch = 0 if op.ch == -1 else op.ch
+                    for o in op.next:
+                        heapq.heappush(frontier, o)
+                    visited.add(op)
+
     def lower_rank_dag(self, rank_dag):
         frontier = []
         visited = set()
@@ -365,7 +390,7 @@ class ChunkDAG:
                         rop = rank_dag.add_recv(receiver, op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
                         sop.match = [rop]
                     else:
-                        rank_dag.add_copy(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb)
+                        rank_dag.add_copy(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb, ch)
                 elif op.inst == ChunkInstruction.reduce:
                     sender = op.src.rank
                     receiver = op.dst.rank
@@ -374,7 +399,7 @@ class ChunkDAG:
                         rop = rank_dag.add_recv_reduce_copy(receiver, op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
                         sop.match = [rop]
                     else:
-                        rank_dag.add_reduce(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb)
+                        rank_dag.add_reduce(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb, ch)
 
                 for o in op.next:
                     heapq.heappush(frontier, o)

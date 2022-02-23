@@ -128,6 +128,25 @@ def test_scratch_buffers():
         assert c.index == 3
         XML()
 
+def test_program_order():
+    num_gpus = 2
+    topology = fully_connected(num_gpus)
+
+    chunksperloop = num_gpus
+    instances = 1
+    collective = AllReduce(num_gpus, chunksperloop, inplace=False)
+    prgm = SCCLProgram("test", topology, collective, instances)
+    with prgm:
+        chunk(1, Buffer.input, 0).send(0, 'output', 1)
+        # This send should depend on the send above finishing
+        chunk(0, Buffer.input, 0).send(1, Buffer.input, 0)
+    slot = (1, Buffer.input, 0)
+    prgm.lower()
+    op = prgm.rank_dag.operations[slot]
+    assert op.inst == Instruction.start
+    assert op.next[0].inst == Instruction.send
+    assert op.next[0].next[0].inst == Instruction.recv
+
 def test_allgather():
     topology = fully_connected(2)
     collective = AllGather(2, 1, True)

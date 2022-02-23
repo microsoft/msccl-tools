@@ -27,7 +27,6 @@ def manual_assign_tbs(rank_dag):
                 if o.inst == Instruction.send or o.inst == Instruction.copy:
                     heapq.heappush(ops, o)
 
-    rank_dag.num_channels = [1] * rank_dag.num_ranks
     visited = set()
     while len(ops) > 0:
         op = heapq.heappop(ops)
@@ -56,81 +55,27 @@ def manual_assign_tbs(rank_dag):
                 heapq.heappush(ops, o)
 
 
-def _get_tb_options(mapping, send, recv, channel, num_tbs, num_channels):
-    if send == -1 and recv == -1: # Can go anywhere
-        return list(i for i in range(0, num_tbs))
-    if channel == -1: # Can go on any channel that matches to send, recv
-        options = []
-        for ch in range(num_channels):
-            if (send, recv, ch) in mapping:
-                options.append(mapping[(send, recv, ch)])
-        return options
-    elif (send, recv, channel) in mapping:
-        return [mapping[(send, recv, channel)]]
-    # Double up if necessary
-    else:
-        options = []
-        for requirements, tbid in mapping.items():
-            tb_s, tb_r, tb_c = requirements
-            sender_ok = send == -1 or tb_s == -1 or tb_s == send
-            receiver_ok = recv == -1 or tb_r == -1 or tb_r == recv
-            channel_ok = channel == -1 or channel == tb_c
-            if sender_ok and receiver_ok and channel_ok:
-                options.append(tbid)
-        return options
-
-def create_base_tbs(rank_dag):
-    ops = []
-    tbid = [0] * rank_dag.num_ranks
-    tb_assignments = [] # rank -> (sender, receiver, channel) -> tbid
-    for _ in range(rank_dag.num_ranks):
-        tb_assignments.append({})
-    num_channels = [1] * rank_dag.num_ranks
-
-    for slot, op in rank_dag.operations.items():
-        if op.inst == Instruction.start:
-            for o in op.next:
-                ops.append(o)
-        elif op.inst != Instruction.copy:
-            ops.append(op)
-
-    visited = set()
-    i = 0
-    while i < len(ops):
-        op = ops[i]
-        if op not in visited:
-            visited.add(op)
-            rank = op.rank
-            s = op.dst.rank if op.is_send() else -1
-            r = op.src.rank if op.is_recv() else -1
-            channel = 0 if op.channel == -1 else op.channel
-            if op.channel >= num_channels[rank]:
-                num_channels[rank] = op.channel + 1
-
-            if (s != -1 or r != -1) and (s,r,channel) not in tb_assignments[rank]:
-                rank_dag.tbs[rank][tbid[rank]] = Threadblock(send=s, recv=r, channel=channel)
-                tb_assignments[rank][(s,r,channel)] = tbid[rank]
-                tbid[rank] += 1
-            ops += op.next
-        i += 1
-
-    rank_dag.tb_assignments = tb_assignments
-    rank_dag.num_channels = num_channels
-
+def _get_tb_options(mapping, send, recv, channel, num_tbs):
+    options = []
+    for tbid, tb in mapping.items():
+        tb_s = tb.send
+        tb_r = tb.recv
+        tb_c = tb.channel
+        sender_ok = send == -1 or tb_s == send
+        receiver_ok = recv == -1 or tb_r == recv
+        channel_ok = channel == -1 or channel == tb_c
+        # For correctness - if one of the peer's channels is already allocated we must use it.
+        if channel_ok and ((tb_s == send and send != -1) or (tb_r == recv and recv != -1)):
+            return [tbid]
+        if sender_ok and receiver_ok and channel_ok:
+             options.append(tbid)
+    return options
 
 def auto_assign_tbs(rank_dag):
-    # Allocate the base set of TBs
-    tb_assignments = rank_dag.tb_assignments
-    num_channels = rank_dag.num_channels
-    current_num_tb = []
-    for rank_tbs in rank_dag.tbs:
-        current_num_tb.append(len(rank_tbs))
+    rank_tbids = [0] * rank_dag.num_ranks
     current_tb_step = []
     for rank_tbs in rank_dag.tbs:
-        tb_step = {}
-        for tbid in rank_tbs.keys():
-            tb_step[tbid] = 0
-        current_tb_step.append(tb_step)
+        current_tb_step.append({})
 
     ops = []
     for slot, op in rank_dag.operations.items():
@@ -145,36 +90,43 @@ def auto_assign_tbs(rank_dag):
         if op not in visited:
             visited.add(op)
             rank = op.rank
-            s = op.dst.rank if op.is_send() else -1
-            r = op.src.rank if op.is_recv() else -1
+            s = op.send_peer()
+            r = op.recv_peer()
+            channel = op.channel
             # Get all possible TBs this can be mapped to
-            tb_options = _get_tb_options(tb_assignments[rank], s, r, op.channel, current_num_tb[rank], num_channels[rank])
-            # If there are multiple options choose the TB at the lowest step
-            tbid = tb_options[0]
-            if len(tb_options) > 1:
+            tb_options = _get_tb_options(rank_dag.tbs[rank], s, r, channel, rank_tbids[rank])
+            if len(tb_options) == 0: # If there are no options, create a new threadblock
+                tbid = rank_tbids[rank]
+                # if op.channel == -1:
+                #     print(op.channel, op)
+                rank_dag.tbs[rank][tbid] = Threadblock(send=s, recv=r, channel=channel)
+                # rank_tb_assignments[rank][(s,r,channel)] = tbid
+                rank_tbids[rank] += 1
+            else: 
+                tbid = tb_options[0]
                 for tbid_opt in tb_options:
                     if current_tb_step[rank][tbid_opt] < current_tb_step[rank][tbid] and _verify_tb_op_compatible(rank_dag.tbs[rank][tbid], op):
                         tbid = tbid_opt
+                # if op.chunk_step < current_tb_step[rank][tbid]:
+                #     tbid = rank_tbids[rank]
+                #     rank_dag.tbs[rank][tbid] = Threadblock(send=s, recv=r, channel=channel)
+                #     rank_tbids[rank] += 1
 
             tb = rank_dag.tbs[rank][tbid]
-            assert _verify_tb_op_compatible(tb, op), f"Failing: Channel {op.channel}, send {s} recv {r} {op}\n" \
-                    f"Threadblock send:{tb.send} recv:{tb.recv}  channel{tb.channel}"
+            assert _verify_tb_op_compatible(tb, op), f"Failing: Operations uses channel {op.channel}, send:{s} recv:{r} {op}\n" \
+                    f"Threadblock uses send:{tb.send} recv:{tb.recv} channel:{tb.channel}"
+
+            rank_dag.num_channels[rank] = max(rank_dag.num_channels[rank], channel+1)
 
             tb.ops.append(op)
             tb.send = op.dst.rank if op.is_send() else tb.send
             tb.recv = op.src.rank if op.is_recv() else tb.recv
             
             op.step = len(tb.ops)-1
-            op.channel = tb.channel
             op.tb = tbid
             current_tb_step[rank][tbid] = op.chunk_step
 
-            # For correctness make certain the matching sends and receives
-            # happen on the same channel
-            for match in op.match:
-                match.channel = tb.channel
-
-            for o in op.match:
+            for o in op.match: 
                 heapq.heappush(ops, ((o.chunk_step, o.priority, o.dst.index), o))
             for o in op.next:
                 heapq.heappush(ops, ((o.chunk_step, o.priority, o.dst.index), o))

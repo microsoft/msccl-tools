@@ -45,6 +45,7 @@ class RankDAG:
         for _ in range(num_ranks):
             self.tbs.append({}) 
         self.tb_mapping = {}
+        self.num_channels = [1] * num_ranks
 
 
     def add_start(self, rank, buffer, index, ref):
@@ -89,8 +90,8 @@ class RankDAG:
             frontier = frontier[1:] + list(op.next)   
         return last_ops
 
-    def add_copy(self, rank, send_ref, recv_ref, step, priority, tb):
-        op = Op(Instruction.copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
+    def add_copy(self, rank, send_ref, recv_ref, step, priority, tb, ch):
+        op = Op(Instruction.copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
         srcbuffer = send_ref.buffer
@@ -111,7 +112,7 @@ class RankDAG:
             slot = (rank, dstbuffer, i)
             if slot in self.operations:
                 prev_op = self.find_last_ops(slot)
-                prev_ops.append(prev_op) # All operations that need to happen before
+                prev_ops.update(prev_op) # All operations that need to happen before
             else:
                 self.operations[slot] = op
 
@@ -120,8 +121,8 @@ class RankDAG:
                 prev_op.next.add(op)
                 op.prev.add(prev_op)
 
-    def add_reduce(self, rank, send_ref, recv_ref, step, priority, tb):
-        op = Op(Instruction.reduce, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
+    def add_reduce(self, rank, send_ref, recv_ref, step, priority, tb, ch):
+        op = Op(Instruction.reduce, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
         srcbuffer = send_ref.buffer
@@ -154,7 +155,7 @@ class RankDAG:
         buffer = send_ref.buffer
         index = send_ref.index
         size = send_ref.size
-        prev_ops = []
+        prev_ops = [] # TODO: Why are some of these lists and other are sets?
         for i in range(index, index+size):
             slot = (rank, buffer, i)
             prev_op = self.find_last_recv(slot)
@@ -246,7 +247,9 @@ class RankDAG:
                     if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
                         op.inst = Instruction.recv_copy_send
                         op.dst = next_op.dst
-                        op.match = op.match + next_op.match
+                        op.match = next_op.match
+                        for op in op.match:
+                            op.chunk_step -= 1
                         remove_op(next_op)
                 frontier = frontier[1:] + op.next
         
@@ -370,7 +373,7 @@ class RankDAG:
         for i in range(instances):
             # Generate all the threadblocks and ops
             for rank, rank_tbs in enumerate(self.tbs):
-                rank_channels = self.num_channels [rank]
+                rank_channels = self.num_channels[rank]
                 for tbid, tb in rank_tbs.items():
                     instance_channel = rank_channels * i + tb.channel
                     itb = Threadblock(instance_channel, tb.send, tb.recv)
