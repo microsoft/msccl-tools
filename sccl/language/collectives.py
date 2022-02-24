@@ -143,9 +143,9 @@ class AllReduce(Collective):
         buf = Buffer.input if self.inplace else Buffer.output
 
         for c in range(chunks_per_node):
-            chunk = ReduceChunk([])
+            chunk = ReduceChunk(-1, [])
             for r in range(self.num_ranks):
-                chunk = chunk.reduce(Chunk(r, c))
+                chunk = chunk.reduce(-1, Chunk(r, c))
             expected_chunks.append(chunk)
 
         correct = True
@@ -195,9 +195,9 @@ class ReduceScatter(Collective):
         expected_chunks = []
         buf = Buffer.input if self.inplace else Buffer.output
         for c in range(self.num_ranks * self.chunk_factor):
-            chunk = ReduceChunk([])
+            chunk = ReduceChunk(-1, [])
             for r in range(self.num_ranks):
-                chunk = chunk.reduce(Chunk(r, c))
+                chunk = chunk.reduce(-1, Chunk(r, c))
             expected_chunks.append(chunk)
 
         correct = True

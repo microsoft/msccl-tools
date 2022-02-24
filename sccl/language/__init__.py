@@ -74,7 +74,7 @@ class SCCLProgram:
         for i in range(size):
             reduce_chunk = db[dst_index + i]
             sent_chunk = sb[src_index + i]
-            db[dst_index + i] = reduce_chunk.reduce(sent_chunk)
+            db[dst_index + i] = reduce_chunk.reduce(dst, sent_chunk)
 
     def get_ref(self, rank, buffer, index, size):
         buffer, index = self.collective.get_buffer_index(rank, buffer, index)

@@ -242,8 +242,7 @@ class RankDAG:
             frontier = [ops]
             while len(frontier) > 0:
                 op = frontier[0]
-                if len(op.next) == 1:
-                    next_op = op.next[0] 
+                for next_op in op.next:
                     if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
                         op.inst = Instruction.recv_copy_send
                         op.dst = next_op.dst
@@ -251,6 +250,7 @@ class RankDAG:
                         for op in op.match:
                             op.chunk_step -= 1
                         remove_op(next_op)
+                        break
                 frontier = frontier[1:] + op.next
         
     def _optimize_rrcs_rrs(self):

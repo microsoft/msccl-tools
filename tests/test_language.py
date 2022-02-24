@@ -4,6 +4,7 @@
 import sccl
 from sccl.topologies import line, fully_connected
 from sccl.language import *
+from sccl.language.routines import *
 from sccl.language.collectives import *
 import os
 import pytest
@@ -56,9 +57,9 @@ class Reduce(Collective):
 
     # Final state rank2 has a fully reduced chunk from gpus 0, 1, and 2
     def check(self, prog):
-        expected_chunk = ReduceChunk([])
+        expected_chunk = ReduceChunk(-1, [])
         for r in range(self.num_ranks):
-            expected_chunk = expected_chunk.reduce(Chunk(r, 0))
+            expected_chunk = expected_chunk.reduce(-1, Chunk(r, 0))
 
         correct = True
         chunk = prog.buffers[2][Buffer.input][0]
@@ -270,3 +271,54 @@ def test_registered_allreduce():
         allreduce_ring(num_ranks, num_ranks)
         assert Check()
         XML()
+
+def test_routines_allgather_ring_inplace():
+    size = 4
+    topology = fully_connected(size)
+    collective = AllGather(size, 1, True)
+    with SCCLProgram("allgather_ring", topology, collective, 1):
+        allgather_ring_inplace(size)
+        assert Check()
+
+def test_routines_allgather_ring_nodes():
+    size = 8
+    topology = fully_connected(size)
+    collective = AllGather(size, 1, True)
+    with SCCLProgram("allgather_multi", topology, collective, 1):
+        # Two parallel rings [0-4] and [4-8]
+        allgather_ring_inplace(4, 0, 0)
+        allgather_ring_inplace(4, 4, 4)
+        # Exchange between peers (0,4) (1,5) etc.
+        for r in range(0,8):
+            peer = (r+4)%size
+            exchange_index = 0 if r < 4 else 4
+            chunk(r, Buffer.output, exchange_index, 4).send(peer, Buffer.output, exchange_index)
+        assert Check()
+
+def test_routines_allreduce_ring_inplace():
+    size = 4
+    topology = fully_connected(size)
+    collective = AllReduce(size, size, True)
+    with SCCLProgram("allreduce_ring", topology, collective, 1):
+        allreduce_ring_inplace(size)
+        assert Check()
+
+def test_routines_allreduce_nodes():
+    size = 8
+    topology = fully_connected(size)
+    collective = AllReduce(size, size, True)
+    with SCCLProgram("allreduce_multi", topology, collective, 1):
+        # Two parallel rings [0-4] and [4-8]
+        allreduce_ring_inplace(4, 0, 0)
+        allreduce_ring_inplace(4, 0, 4, ch=1)
+
+        allreduce_ring_inplace(4, 4, 4)
+        allreduce_ring_inplace(4, 4, 0, ch=1)
+        # Reduction between peers (0,4) (1,5) etc.
+        for r in range(0,8):
+            peer = (r+4)%size
+            exchange_index = 0 if r < 4 else 4
+            c = chunk(r, Buffer.output, exchange_index, 4).reduce(peer, Buffer.output, exchange_index)
+            c =c.send(r, Buffer.output, exchange_index)
+        XML()
+        assert Check()
