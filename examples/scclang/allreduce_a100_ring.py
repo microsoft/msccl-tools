@@ -10,12 +10,11 @@ from sccl.language.collectives import AllReduce
 # Vary channels from [1-8] to divide parts of the ring over multiple channels/tbs.
 # channels=1 is standard ring, all chunks are assigned to the same tb/channel
 # channels=8 devotes 1 tb/channel to handling 1 chunk of the data
-def allreduce_ring(instances, channels):
-    size = 8
+def allreduce_ring(size, instances, channels, protocol):
     topology = fully_connected(size)
     collective = AllReduce(size, size, True)
     with SCCLProgram(f"allreduce_ring_{channels}channelsperring", topology, collective, instances,
-         protocol="LL128", threadblock_policy=ThreadblockPolicy.manual):
+         protocol=protocol, threadblock_policy=ThreadblockPolicy.manual):
         # Reduce ring
         for step in range(0, size-1):
             for index in range(0, size):
@@ -38,8 +37,10 @@ def allreduce_ring(instances, channels):
 
 
 parser = argparse.ArgumentParser()
+parser.add_argument('num_gpus', type=int, help ='number of gpus')
 parser.add_argument('channels', type=int, help='Number of channels to use for 1 instance of the ring [1-8]')
 parser.add_argument('instances', type=int, help='number of instances')
+parser.add_argument('--protocol', type=str, default='LL128', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: LL128')
 args = parser.parse_args()
 
-allreduce_ring(args.instances, args.channels)
+allreduce_ring(args.num_gpus, args.instances, args.channels, args.protocol)
