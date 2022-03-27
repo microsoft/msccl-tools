@@ -58,8 +58,8 @@ def allreduce_binomial_tree(size, instances, trees, protocol):
 
 parser = argparse.ArgumentParser()
 parser.add_argument('num_gpus', type=int, help ='number of gpus')
+parser.add_argument('trees', type=int, choices=[1, 2], help ='number of trees')
 parser.add_argument('instances', type=int, help ='number of instances')
-parser.add_argument('--trees', type=int, default=1, choices=[1, 2], help ='number of trees')
 
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: Simple')
 args = parser.parse_args()

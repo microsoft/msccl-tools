@@ -25,12 +25,12 @@ def manual_assign_tbs(rank_dag):
         if op.inst == Instruction.start:
             for o in op.next:
                 if o.inst == Instruction.send or o.inst == Instruction.copy:
-                    heapq.heappush(ops, o)
+                    heapq.heappush(ops, ((o.chunk_step, o.priority, o.dst.index), o))
 
     rank_dag.num_channels = [1] * rank_dag.num_ranks
     visited = set()
     while len(ops) > 0:
-        op = heapq.heappop(ops)
+        _, op = heapq.heappop(ops)
         if op not in visited:
             visited.add(op)
             rank = op.rank
@@ -50,10 +50,10 @@ def manual_assign_tbs(rank_dag):
                     f"Threadblock {tbid} send:{tb.send} recv:{tb.recv} channel:{tb.channel}\n" \
                     f"Operation send:{op.dst.rank if op.is_send() else -1} recv:{op.dst.rank if op.is_recv() else -1} channel:{op.channel}")
             
-            for o in op.next:
-                heapq.heappush(ops, o)
             for o in op.match:
-                heapq.heappush(ops, o)
+                heapq.heappush(ops, ((o.chunk_step, o.priority, o.dst.index), o))
+            for o in op.next:
+                heapq.heappush(ops, ((o.chunk_step, o.priority, o.dst.index), o))
 
 
 def _get_tb_options(mapping, send, recv, channel, num_tbs, num_channels):

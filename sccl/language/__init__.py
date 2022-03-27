@@ -11,7 +11,7 @@ from sccl.language.chunk import *
 from sccl.language.buffer import *
 from sccl.language.rank_dag import *
 import sccl.collectives as collectives
-
+from sccl.language.visualize import *
 
 _current_program = None
 def _curr():
@@ -114,18 +114,18 @@ class SCCLProgram:
             check_threadblock_ordering(self.rank_dag)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
 
-    # def print_chunk_dag(self):
-    #     visualize_chunk_dag(self.chunk_dag.chunk_paths)
+    def print_chunk_dag(self):
+        visualize_chunk_dag(self.chunk_dag.chunk_paths)
 
-    # def print_rank_dags(self, rank):
-    #     if rank == -1:
-    #         for r in range(len(self.ranks)):
-    #             visualize_rank_dag(self.rank_dags[r].operations)
-    #     else:
-    #         visualize_rank_dag(self.rank_dags[rank].operations)
+    def print_rank_dags(self, rank):
+        if rank == -1:
+            for r in range(len(self.ranks)):
+                visualize_rank_dag(self.rank_dags[r].operations)
+        else:
+            visualize_rank_dag(self.rank_dags[rank].operations)
 
-# def Print():
-#     _curr().print_chunk_dag()
+def Print():
+    _curr().print_chunk_dag()
 
 def chunk(rank, buffer, index, size=1):
     return _curr().get_ref(rank, buffer, index, size)
