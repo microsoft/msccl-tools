@@ -2,7 +2,6 @@
 # Licensed under the MIT License.
 
 import argparse
-
 from sccl.language import *
 from sccl.topologies.distributed import *
 from sccl.topologies.nvidia import *
