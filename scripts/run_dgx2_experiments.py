@@ -7,7 +7,7 @@ SMS = 80
 CHANNLES = 32
 
 GPUS = 8
-folder = 'a100'
+machine = 'a100'
 
 def mpirun(collective, gpus, xml, txt, lower='128B', upper='128MB'):
     cmd = f'mpirun -np {gpus} -x NCCL_DEBUG=INFO -x NCCL_ALGO=RING,TREE,SCCL -x LD_LIBRARY_PATH={home}/msccl/build/lib/ ' \
