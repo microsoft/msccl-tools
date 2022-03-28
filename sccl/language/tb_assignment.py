@@ -30,7 +30,7 @@ def manual_assign_tbs(rank_dag):
     rank_dag.num_channels = [1] * rank_dag.num_ranks
     visited = set()
     while len(ops) > 0:
-        _, op = heapq.heappop(ops)
+        p, op = heapq.heappop(ops)
         if op not in visited:
             visited.add(op)
             rank = op.rank
@@ -54,7 +54,6 @@ def manual_assign_tbs(rank_dag):
                 heapq.heappush(ops, ((o.chunk_step, o.priority, o.dst.index), o))
             for o in op.next:
                 heapq.heappush(ops, ((o.chunk_step, o.priority, o.dst.index), o))
-
 
 def _get_tb_options(mapping, send, recv, channel, num_tbs, num_channels):
     if send == -1 and recv == -1: # Can go anywhere

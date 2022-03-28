@@ -118,7 +118,7 @@ class SCCLProgram:
         visualize_chunk_dag(self.chunk_dag.chunk_paths)
 
     def print_rank_dags(self, rank):
-        if rank == -1:
+        if rank == 0:
             for r in range(len(self.ranks)):
                 visualize_rank_dag(self.rank_dags[r].operations)
         else:
@@ -346,10 +346,10 @@ class ChunkDAG:
 
         for chunk, op in self.chunk_paths.items():
             if len(op.prev) == 0: 
-                heapq.heappush(frontier, op)
+                heapq.heappush(frontier, ((op.steps_from_start, op.steps_to_end), op))
 
         while len(frontier) > 0:
-            op = heapq.heappop(frontier)
+            _, op = heapq.heappop(frontier)
             if op not in visited:
                 sendtb = op.sendtb
                 recvtb = op.recvtb
@@ -377,6 +377,6 @@ class ChunkDAG:
                         rank_dag.add_reduce(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb)
 
                 for o in op.next:
-                    heapq.heappush(frontier, o)
+                    heapq.heappush(frontier, ((o.steps_from_start, o.steps_to_end), o))
                 visited.add(op)
         rank_dag.convert_set_list() # Pre-emptively convert sets to lists
