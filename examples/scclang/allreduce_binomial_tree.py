@@ -2,7 +2,6 @@
 # Licensed under the MIT License.
 
 import argparse
-import math
 from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllReduce
@@ -15,27 +14,27 @@ def allreduce_binomial_tree(size, instances, trees, protocol):
     with SCCLProgram("allreduce_binomial_tree", topology, collective, instances, protocol=protocol):
         distance = 1
         # Reduce tree - reducing onto Rank 0
-        while distance <= math.log(size, 2):
+        while distance <= size // 2:
             # Reduce onto the left neighbor that is distance away
             for rank in range(0, size, distance*2):
                 peer = rank + distance
                 chunk(peer, Buffer.input, 0).reduce(rank, Buffer.input, 0)
             distance *= 2
         # Broadcast tree - root is Rank 0
-        distance = int(distance / 2)
+        distance = distance // 2
         while distance >= 1:
             # Copy to the right neighbor that is distance away
             for rank in range(0, size, distance*2):
                 peer = rank + distance
                 chunk(rank, Buffer.input, 0).send(peer, Buffer.input, 0)
-            distance = int(distance / 2)
+            distance = distance // 2
 
         # Mirrored version of the tree
         # Reduce tree - reducing onto Rank N-1
         if trees == 2:
             distance = 1
             start = 0
-            while distance <= math.log(size, 2):
+            while distance < size // 2:
                 # Reduce onto the right neighbor that is distance away
                 for rank in range(start, size, distance*2):
                     peer = rank + distance
@@ -43,7 +42,7 @@ def allreduce_binomial_tree(size, instances, trees, protocol):
                 start += distance
                 distance *= 2
             # Broadcast tree - root is Rank N-1
-            distance = int(distance / 2)
+            distance = distance // 2
             start = size - 1
             while distance >= 1:
                 # Copy to the left neighbor that is distance away
@@ -51,7 +50,7 @@ def allreduce_binomial_tree(size, instances, trees, protocol):
                     peer = rank - distance
                     chunk(rank, Buffer.input, 1).send(peer, Buffer.input, 1)
                 start -= distance
-                distance = int(distance / 2)
+                distance = distance // 2
 
         XML()
         Check()
