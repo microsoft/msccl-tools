@@ -86,11 +86,11 @@ def allreduce_binomial_tree():
 
 def allgather_nccl():
     print("Run NCCL")
-    mpirun_no_channel('all_gather', GPUS, '{home}/{machine}/allgather/nccl.txt')
+    mpirun_no_channel('all_gather', GPUS, f'{home}/{machine}/allgather/nccl.txt')
 
 def allreduce_nccl():
     print("Run NCCL")
-    mpirun_no_channel('all_reduce', GPUS, '{home}/{machine}/allreduce/nccl.txt')
+    mpirun_no_channel('all_reduce', GPUS, f'{home}/{machine}/allreduce/nccl.txt')
 
 def parse(filename):
     parts = filename.split('.')
@@ -147,9 +147,9 @@ if __name__ == '__main__':
     check_create(f'{machine}')
     check_create(f'{machine}/allreduce')
     check_create(f'{machine}/allgather')
-    check_create(f'xml')
-    check_create(f'xml/allreduce')
-    check_create(f'xml/allgather')
+    check_create(f'xmls')
+    check_create(f'xmls/allreduce')
+    check_create(f'xmls/allgather')
 
     allgather_ring()
     allgather_recursive_doubling()
