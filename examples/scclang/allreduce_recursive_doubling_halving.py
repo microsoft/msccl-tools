@@ -36,7 +36,6 @@ def allreduce(size, instances, protocol):
         allgather_recursive_vector_doubling_distance_halving(size)
         XML()
         Check()
-        Print()
 
 parser = argparse.ArgumentParser()
 parser.add_argument('num_gpus', type=int, help ='number of gpus')
