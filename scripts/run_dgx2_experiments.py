@@ -24,7 +24,7 @@ def mpirun_no_channel(collective, gpus, txt, lower='128B', upper='128MB'):
     os.system(cmd)
 
 def allgather_ring():
-    for protocol in ['LL128', 'Simple']
+    for protocol in ['LL128', 'Simple']:
         for chan in [1, 8, 16]:
             for instances in [1, 2, 4, 6, 12, 18, 24]:
                 if chan * instances < 32:
@@ -49,7 +49,7 @@ def allgather_recursive_doubling():
 
 
 def allreduce_ring():
-    for protocol in ['LL128', 'Simple']
+    for protocol in ['LL128', 'Simple']:
         for chan in [1, 8, 16]:
             for instances in [1, 2, 4, 6, 12, 18, 24]:
                 if chan * instances <= 32:

@@ -22,6 +22,7 @@ setup(
         'lxml',
         'humanfriendly',
         'tabulate',
+        'igraph'
     ],
     python_requires='>=3.6',
 )
