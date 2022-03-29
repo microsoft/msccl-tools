@@ -6,8 +6,8 @@ home = os.getcwd()
 SMS = 80
 CHANNLES = 32
 
-GPUS = 8
-machine = 'a100'
+GPUS = 16
+machine = 'dgx2'
 
 def mpirun(collective, gpus, xml, txt, lower='128B', upper='128MB'):
     cmd = f'mpirun -np {gpus} -x NCCL_DEBUG=INFO -x NCCL_ALGO=RING,TREE,SCCL -x LD_LIBRARY_PATH={home}/msccl/build/lib/ ' \
@@ -24,21 +24,21 @@ def mpirun_no_channel(collective, gpus, txt, lower='128B', upper='128MB'):
     os.system(cmd)
 
 def allgather_ring():
-    protocol='LL128'
-    for chan in [1, 8, 16]:
-        for instances in [1, 2, 4, 8, 16, 32]:
-            if chan * instances < 32:
-                xml = f"{home}/xmls/allgather/ring_{chan}_{instances}_{protocol}.xml"
-                txt = f"{home}/{machine}/allgather/ring_{chan}_{instances}_{protocol}.txt"
-                print(f'Generating {xml} {txt}')
-                cmd = f'python3 sccl/examples/scclang/allgather_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
-                print(f'Running {cmd}')
-                os.system(cmd)
-                mpirun('all_gather', GPUS, xml, txt)
+    for protocol in ['LL128', 'Simple']
+        for chan in [1, 8, 16]:
+            for instances in [1, 2, 4, 6, 12, 18, 24]:
+                if chan * instances < 32:
+                    xml = f"{home}/xmls/allgather/ring_{chan}_{instances}_{protocol}.xml"
+                    txt = f"{home}/{machine}/allgather/ring_{chan}_{instances}_{protocol}.txt"
+                    print(f'Generating {xml} {txt}')
+                    cmd = f'python3 sccl/examples/scclang/allgather_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
+                    print(f'Running {cmd}')
+                    os.system(cmd)
+                    mpirun('all_gather', GPUS, xml, txt)
 
 def allgather_recursive_doubling():
     protocol = 'LL'
-    for instances in [1, 2, 4, 8]:
+    for instances in [1, 2, 6, 12]:
         xml = f"{home}/xmls/allgather/rd_{instances}.xml"
         txt = f"{home}/{machine}/allgather/rd_{instances}.txt"
         print(f'Generating {xml} {txt}')
@@ -49,21 +49,21 @@ def allgather_recursive_doubling():
 
 
 def allreduce_ring():
-    protocol='LL128'
-    for chan in [1, 16]:
-        for instances in [1, 2, 16, 32]:
-            if chan * instances <= 32:
-                xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
-                txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
-                print(f'Generating {xml} {txt}')
-                cmd = f'python3 sccl/examples/scclang/allreduce_a100_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
-                print(f'Running {cmd}')
-                os.system(cmd)
-                mpirun('all_reduce', GPUS, xml, txt)
+    for protocol in ['LL128', 'Simple']
+        for chan in [1, 8, 16]:
+            for instances in [1, 2, 4, 6, 12, 18, 24]:
+                if chan * instances <= 32:
+                    xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
+                    txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
+                    print(f'Generating {xml} {txt}')
+                    cmd = f'python3 sccl/examples/scclang/allreduce_a100_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
+                    print(f'Running {cmd}')
+                    os.system(cmd)
+                    mpirun('all_reduce', GPUS, xml, txt)
 
 def allreduce_recursive_doubling_halving():
     protocol='LL'
-    for instances in [1]:
+    for instances in [1, 2, 6, 12]:
         xml = f"{home}/xmls/allreduce/recursive_doubling_halving_{instances}_{protocol}.xml"
         txt = f"{home}/{machine}/allreduce/recursive_doubling_halving_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
@@ -75,7 +75,7 @@ def allreduce_recursive_doubling_halving():
 def allreduce_binomial_tree():
     protocol='LL'
     for trees in [1]:
-        for instances in [1]:
+        for instances in [1, 2, 6, 12, 18]:
             xml = f"{home}/xmls/allreduce/binomial_tree_{trees}_{instances}_{protocol}.xml"
             txt = f"{home}/{machine}/allreduce/binomial_tree_{trees}_{instances}_{protocol}.txt"
             print(f'Generating {xml} {txt}')

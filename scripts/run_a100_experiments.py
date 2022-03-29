@@ -24,17 +24,17 @@ def mpirun_no_channel(collective, gpus, txt, lower='384B', upper='3GB'):
     os.system(cmd)
 
 def allgather_ring():
-    protocol='LL128'
-    for chan in [1, 4, 8]:
-        for instances in [1, 6, 12, 18, 24]:
-            if chan * instances < 32:
-                xml = f"{home}/xmls/allgather/ring_{chan}_{instances}_{protocol}.xml"
-                txt = f"{home}/{machine}/allgather/ring_{chan}_{instances}_{protocol}.txt"
-                print(f'Generating {xml} {txt}')
-                cmd = f'python3 sccl/examples/scclang/allgather_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
-                print(f'Running {cmd}')
-                os.system(cmd)
-                mpirun('all_gather', GPUS, xml, txt)
+    for protocol in ['LL128', 'Simple']
+        for chan in [1, 4, 8]:
+            for instances in [1, 6, 12, 18, 24]:
+                if chan * instances < 32:
+                    xml = f"{home}/xmls/allgather/ring_{chan}_{instances}_{protocol}.xml"
+                    txt = f"{home}/{machine}/allgather/ring_{chan}_{instances}_{protocol}.txt"
+                    print(f'Generating {xml} {txt}')
+                    cmd = f'python3 sccl/examples/scclang/allgather_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
+                    print(f'Running {cmd}')
+                    os.system(cmd)
+                    mpirun('all_gather', GPUS, xml, txt)
 
 def allgather_recursive_doubling():
     protocol = 'LL'
@@ -49,21 +49,21 @@ def allgather_recursive_doubling():
 
 
 def allreduce_ring():
-    protocol='Simple'
-    for chan in [1, 4, 8]:
-        for instances in [1, 6, 12, 18, 24]:
-            if chan * instances <= 32:
-                xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
-                txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
-                print(f'Generating {xml} {txt}')
-                cmd = f'python3 sccl/examples/scclang/allreduce_a100_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
-                print(f'Running {cmd}')
-                os.system(cmd)
-                mpirun('all_reduce', GPUS, xml, txt)
+    for protocol in ['LL128', 'Simple']
+        for chan in [1, 4, 8]:
+            for instances in [1, 6, 12, 18, 24]:
+                if chan * instances <= 32:
+                    xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
+                    txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
+                    print(f'Generating {xml} {txt}')
+                    cmd = f'python3 sccl/examples/scclang/allreduce_a100_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
+                    print(f'Running {cmd}')
+                    os.system(cmd)
+                    mpirun('all_reduce', GPUS, xml, txt)
 
 def allreduce_recursive_doubling_halving():
     protocol='LL'
-    for instances in [1]:
+    for instances in [1, 2, 4, 6]:
         xml = f"{home}/xmls/allreduce/recursive_doubling_halving_{instances}_{protocol}.xml"
         txt = f"{home}/{machine}/allreduce/recursive_doubling_halving_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
@@ -75,7 +75,7 @@ def allreduce_recursive_doubling_halving():
 def allreduce_binomial_tree():
     protocol='LL'
     for trees in [1]:
-        for instances in [1]:
+        for instances in [1, 2, 4, 6]:
             xml = f"{home}/xmls/allreduce/binomial_tree_{trees}_{instances}_{protocol}.xml"
             txt = f"{home}/{machine}/allreduce/binomial_tree_{trees}_{instances}_{protocol}.txt"
             print(f'Generating {xml} {txt}')
@@ -151,13 +151,13 @@ if __name__ == '__main__':
     check_create(f'xmls/allreduce')
     check_create(f'xmls/allgather')
 
-    # allgather_ring()
-    # allgather_recursive_doubling()
+    allgather_ring()
+    allgather_recursive_doubling()
     allreduce_ring()
-    # allreduce_recursive_doubling_halving()
-    # allreduce_binomial_tree()
+    allreduce_recursive_doubling_halving()
+    allreduce_binomial_tree()
 
-    # allgather_nccl()
+    allgather_nccl()
     allreduce_nccl()
 
     # for directory in [f'{home}/dgx2/allreduce', f'{home}/dgx2/allgather']:
