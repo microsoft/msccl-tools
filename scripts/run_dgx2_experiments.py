@@ -49,9 +49,21 @@ def allgather_recursive_doubling():
 
 
 def allreduce_ring():
-    for protocol in ['LL128', 'Simple']:
-        for chan in [1, 8, 16]:
-            for instances in [1, 2, 4, 6, 12, 18, 24]:
+    for protocol in ['LL', 'LL128', 'Simple']:
+        for chan in [1]:
+            for instances in [1, 6, 12]:
+                if chan * instances <= 32:
+                    xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
+                    txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
+                    print(f'Generating {xml} {txt}')
+                    cmd = f'python3 sccl/examples/scclang/allreduce_a100_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
+                    print(f'Running {cmd}')
+                    os.system(cmd)
+                    mpirun('all_reduce', GPUS, xml, txt)
+    
+    for protocol in ['LL', 'LL128', 'Simple']:
+        for chan in [8, 16]:
+            for instances in [1, 2, 3, 4]:
                 if chan * instances <= 32:
                     xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
                     txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
@@ -62,8 +74,8 @@ def allreduce_ring():
                     mpirun('all_reduce', GPUS, xml, txt)
 
 def allreduce_recursive_doubling_halving():
-    protocol='LL'
-    for instances in [1, 2, 6, 12]:
+    protocol='Simple'
+    for instances in [1, 2, 12]:
         xml = f"{home}/xmls/allreduce/recursive_doubling_halving_{instances}_{protocol}.xml"
         txt = f"{home}/{machine}/allreduce/recursive_doubling_halving_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
@@ -151,11 +163,11 @@ if __name__ == '__main__':
     check_create(f'xmls/allreduce')
     check_create(f'xmls/allgather')
 
-    allgather_ring()
+    # allgather_ring()
     allgather_recursive_doubling()
     allreduce_ring()
-    allreduce_recursive_doubling_halving()
-    allreduce_binomial_tree()
+    # allreduce_recursive_doubling_halving()
+    # allreduce_binomial_tree()
 
     allgather_nccl()
     allreduce_nccl()
