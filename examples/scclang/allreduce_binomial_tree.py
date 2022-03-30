@@ -33,23 +33,19 @@ def allreduce_binomial_tree(size, instances, trees, protocol):
         # Reduce tree - reducing onto Rank N-1
         if trees == 2:
             distance = 1
-            start = 0
-            while distance < size // 2:
+            while distance <= size // 2:
                 # Reduce onto the right neighbor that is distance away
-                for rank in range(start, size, distance*2):
-                    peer = rank + distance
-                    chunk(rank, Buffer.input, 1).reduce(peer, Buffer.input, 1)
-                start += distance
+                for rank in range(size-1, 0, -distance*2):
+                    peer = rank - distance
+                    chunk(peer, Buffer.input, 1).reduce(rank, Buffer.input, 1)
                 distance *= 2
             # Broadcast tree - root is Rank N-1
             distance = distance // 2
-            start = size - 1
             while distance >= 1:
                 # Copy to the left neighbor that is distance away
-                for rank in range(start, size, distance*2):
+                for rank in range(size-1, 0, -distance*2):
                     peer = rank - distance
                     chunk(rank, Buffer.input, 1).send(peer, Buffer.input, 1)
-                start -= distance
                 distance = distance // 2
 
         XML()
