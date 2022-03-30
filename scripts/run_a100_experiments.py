@@ -95,7 +95,7 @@ def allreduce_ring():
                     cmd = f'python3 sccl/examples/scclang/allreduce_a100_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
                     print(f'Running {cmd}')
                     os.system(cmd)
-                    mpirun('all_reduce', GPUS, xml, txt)
+                    mpirun('all_reduce', GPUS, xml, txt, lower='256B', upper='4GB')
 
     for protocol in ['LL', 'LL128', 'Simple']:
         for chan in [8]:
