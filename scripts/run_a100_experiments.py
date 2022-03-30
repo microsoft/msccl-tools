@@ -11,7 +11,7 @@ machine = 'a100'
 
 def mpirun(collective, gpus, xml, txt, lower='384B', upper='3GB'):
     cmd = f'mpirun -np {gpus} -x NCCL_DEBUG=INFO -x NCCL_ALGO=RING,TREE,SCCL -x LD_LIBRARY_PATH={home}/msccl/build/lib/ ' \
-        f'-x NCCL_MIN_CHANNELS=32 -x SCCL_XML_FILES={xml} -x NCCL_PROTO=SIMPLE,LL128,LL {home}/nccl-tests/build/{collective}_perf ' \
+        f'-x SCCL_XML_FILES={xml} -x NCCL_PROTO=SIMPLE,LL128,LL {home}/nccl-tests/build/{collective}_perf ' \
         f'-g 1 -n 100 -w 50 -f 2 -c 1 -z 0 -b {lower} -e {upper} > {txt}'
     print(f'Running {cmd}')
     os.system(cmd)
