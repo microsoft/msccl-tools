@@ -72,18 +72,42 @@ def allgather_recursive_doubling():
         mpirun('all_gather', GPUS, xml, txt)
 
 
-def allreduce_ring(protocols, chans, insts, lower='384B', upper='3GB'):
+def allreduce_ring():
     for protocol in ['LL', 'LL128', 'Simple']:
         for chan in [1]:
             for instances in [1, 12, 24]:
-                if chan * instances <= 32:
+                if chan * instances < 32:
                     xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
                     txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
                     print(f'Generating {xml} {txt}')
                     cmd = f'python3 sccl/examples/scclang/allreduce_a100_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
                     print(f'Running {cmd}')
                     os.system(cmd)
-                    mpirun('all_reduce', GPUS, xml, txt, lower=lower, upper=upper)
+                    mpirun('all_reduce', GPUS, xml, txt)
+
+    for protocol in ['LL', 'LL128', 'Simple']:
+        for chan in [8]:
+            for instances in [4]:
+                if chan * instances < 32:
+                    xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
+                    txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
+                    print(f'Generating {xml} {txt}')
+                    cmd = f'python3 sccl/examples/scclang/allreduce_a100_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
+                    print(f'Running {cmd}')
+                    os.system(cmd)
+                    mpirun('all_reduce', GPUS, xml, txt)
+
+    for protocol in ['LL', 'LL128', 'Simple']:
+        for chan in [8]:
+            for instances in [2, 3]:
+                if chan * instances < 32:
+                    xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
+                    txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
+                    print(f'Generating {xml} {txt}')
+                    cmd = f'python3 sccl/examples/scclang/allreduce_a100_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
+                    print(f'Running {cmd}')
+                    os.system(cmd)
+                    mpirun('all_reduce', GPUS, xml, txt)
 
 def allreduce_recursive_doubling_halving():
     protocol='LL'
