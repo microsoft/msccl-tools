@@ -186,9 +186,9 @@ def parse(filename):
         writer.writerows(results)
 
 def allpairs():
-    in = [1, 2]:
-        xml = f"{home}/sccl/ap{in}_nop.xml"
-        txt = f"{home}/{machine}/allreduce/ap{in}_nop.xml.txt"
+    for ins in [1, 2]:
+        xml = f"{home}/sccl/ap{ins}_nop.xml"
+        txt = f"{home}/{machine}/allreduce/ap{ins}_nop.xml.txt"
         mpirun('all_reduce', GPUS, xml, txt, lower='384B', upper='32MB')
 
 
