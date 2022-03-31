@@ -88,7 +88,7 @@ def allreduce_ring():
     for protocol in ['LL', 'LL128', 'Simple']:
         for chan in [8]:
             for instances in [4]:
-                if chan * instances < 32:
+                if chan * instances <= 32:
                     xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
                     txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
                     print(f'Generating {xml} {txt}')
@@ -195,6 +195,26 @@ def allpairs():
 def check_create(dirname):
     if not os.path.exists(dirname):
         os.mkdir(dirname)
+
+def extra_experiments():
+    for protocol in ['LL128', 'Simple']:
+        for chan in [8]:
+            for instances in [4]:
+                if chan * instances <= 32:
+                    xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
+                    txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
+                    print(f'Generating {xml} {txt}')
+                    cmd = f'python3 sccl/examples/scclang/allreduce_a100_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
+                    print(f'Running {cmd}')
+                    os.system(cmd)
+                    mpirun('all_reduce', GPUS, xml, txt, lower='256B', upper='4GB')
+
+    for ins in [1, 2]:
+        xml = f"{home}/sccl/ap{ins}_nop.xml"
+        txt = f"{home}/{machine}/allreduce/ap{ins}_nop.xml.txt"
+        mpirun('all_reduce', GPUS, xml, txt, lower='256B', upper='32MB')
+
+    mpirun_no_channel('all_reduce', GPUS, f'{home}/{machine}/allreduce/nccl.txt', lower='256B', upper='32MB')
     
 
 if __name__ == '__main__':
@@ -205,8 +225,8 @@ if __name__ == '__main__':
     check_create(f'xmls/allreduce')
     check_create(f'xmls/allgather')
 
-    allpairs()
-    # extra_experiments()
+    # allpairs()
+    extra_experiments()
 
     # allgather_ring()
     # allgather_recursive_doubling()
