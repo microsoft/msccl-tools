@@ -185,12 +185,11 @@ def parse(filename):
         writer = csv.writer(f)
         writer.writerows(results)
 
-def extra_experiments():
-    # mpirun_no_channel('all_reduce', GPUS, f'{home}/{machine}/allreduce/nccl_ring.txt')
-    # allreduce_ring(['LL'], [1], [24])
-    # allreduce_ring(['LL128', 'Simple'], [8], [3])
-    # allreduce_ring(['LL128', 'Simple'], [8], [4], upper='256B', lower='4GB')
-    allreduce(['LL128'], [12])
+def allpairs():
+    in = [1, 2]:
+        xml = f"{home}/sccl/ap{in}_nop.xml"
+        txt = f"{home}/{machine}/allreduce/ap{in}_nop.xml.txt"
+        mpirun('all_reduce', GPUS, xml, txt, lower='384B', upper='32MB')
 
 
 def check_create(dirname):
@@ -206,11 +205,12 @@ if __name__ == '__main__':
     check_create(f'xmls/allreduce')
     check_create(f'xmls/allgather')
 
+    allpairs()
     # extra_experiments()
 
     # allgather_ring()
     # allgather_recursive_doubling()
-    allreduce_ring()
+    # allreduce_ring()
     # allreduce_recursive_doubling_halving()
     # allreduce_binomial_tree()
 
