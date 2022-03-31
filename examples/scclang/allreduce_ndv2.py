@@ -6,13 +6,15 @@ import argparse
 from sccl.language import *
 from sccl.topologies.distributed import *
 from sccl.topologies.nvidia import *
+from sccl.topologies import *
 from sccl.language.collectives import AllReduce
 
 def allreduce(instances):
-    topology = dgx1()
-    num_local_gpus = 8
-    size = topology.num_nodes() #  Number of gpus
-    logical_chunk = 8
+    size = 16
+    num_local_gpus = size
+    topology = fully_connected(size)
+    # size = topology.num_nodes() #  Number of gpus
+    logical_chunk = size
     collective = AllReduce(size, logical_chunk, True)
     with SCCLProgram("allreduce_ndv2", topology, collective, instances, interleaved_replication=False):
         # local reduce_scatter
