@@ -209,6 +209,18 @@ def extra_experiments():
                     os.system(cmd)
                     mpirun('all_reduce', GPUS, xml, txt, lower='256B', upper='4GB')
 
+    for protocol in ['LL128', 'Simple']:
+        for chan in [1]:
+            for instances in [32]:
+                if chan * instances <= 32:
+                    xml = f"{home}/xmls/allreduce/ring_{chan}_{instances}_{protocol}.xml"
+                    txt = f"{home}/{machine}/allreduce/ring_{chan}_{instances}_{protocol}.txt"
+                    print(f'Generating {xml} {txt}')
+                    cmd = f'python3 sccl/examples/scclang/allreduce_a100_ring.py {GPUS} {chan} {instances} --protocol={protocol} > {xml}'
+                    print(f'Running {cmd}')
+                    os.system(cmd)
+                    mpirun('all_reduce', GPUS, xml, txt, lower='256B', upper='4GB')
+
     for ins in [1, 2]:
         xml = f"{home}/sccl/ap{ins}_nop.xml"
         txt = f"{home}/{machine}/allreduce/ap{ins}_nop.xml.txt"
