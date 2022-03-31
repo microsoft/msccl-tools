@@ -11,7 +11,7 @@ machine = 'a100'
 
 def mpirun(collective, gpus, xml, txt, lower='384B', upper='3GB'):
     cmd = f'mpirun -np {gpus} -x NCCL_DEBUG=INFO -x NCCL_ALGO=RING,TREE,SCCL -x LD_LIBRARY_PATH={home}/msccl/build/lib/ ' \
-        f'-x NCCL_MIN_CHANNELS=32 -x SCCL_XML_FILES={xml} -x NCCL_PROTO=SIMPLE,LL128,LL {home}/nccl-tests/build/{collective}_perf ' \
+        f'-x SCCL_XML_FILES={xml} -x NCCL_PROTO=SIMPLE,LL128,LL {home}/nccl-tests/build/{collective}_perf ' \
         f'-g 1 -n 100 -w 50 -f 2 -c 1 -z 0 -b {lower} -e {upper} > {txt}'
     print(f'Running {cmd}')
     os.system(cmd)
@@ -185,12 +185,11 @@ def parse(filename):
         writer = csv.writer(f)
         writer.writerows(results)
 
-def extra_experiments():
-    # mpirun_no_channel('all_reduce', GPUS, f'{home}/{machine}/allreduce/nccl_ring.txt')
-    # allreduce_ring(['LL'], [1], [24])
-    # allreduce_ring(['LL128', 'Simple'], [8], [3])
-    # allreduce_ring(['LL128', 'Simple'], [8], [4], upper='256B', lower='4GB')
-    allreduce(['LL128'], [12])
+def allpairs():
+    for ins in [1, 2]:
+        xml = f"{home}/sccl/ap{ins}_nop.xml"
+        txt = f"{home}/{machine}/allreduce/ap{ins}_nop.xml.txt"
+        mpirun('all_reduce', GPUS, xml, txt, lower='384B', upper='32MB')
 
 
 def check_create(dirname):
@@ -206,11 +205,12 @@ if __name__ == '__main__':
     check_create(f'xmls/allreduce')
     check_create(f'xmls/allgather')
 
+    allpairs()
     # extra_experiments()
 
     # allgather_ring()
     # allgather_recursive_doubling()
-    allreduce_ring()
+    # allreduce_ring()
     # allreduce_recursive_doubling_halving()
     # allreduce_binomial_tree()
 
