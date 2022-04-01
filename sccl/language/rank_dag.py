@@ -47,10 +47,50 @@ class RankDAG:
         self.last_writer = {} # slot -> last writing op
         self.last_readers = defaultdict(list) # slot -> list of last reading ops
 
+    def _write(self, rank, buffer, index, size, op, read=False):
+        prev_ops = set()
+        for i in range(index, index+size):
+            slot = (rank, buffer, i)
+            if read:
+                assert slot in self.last_writer, f"Destination slot has never been written before a reduce {op}"
+
+            # First write to this slot
+            if slot not in self.operations:
+                self.operations[slot] = op
+
+            # If there are active readers - these are the previous operations
+            # Else the previous operation is the last write (if there is one)
+            readers = self.last_readers[slot]
+            if len(readers) > 0:
+                prev_ops.update(readers)
+            elif slot in self.last_writer:
+                prev_ops.add(self.last_writer[slot])
+  
+            # Set the last_writer to this op, and clear all readers
+            self.last_writer[slot] = op
+            self.last_readers[slot] = []
+
+        # Update the next pointer of the previous ops
+        for prev_op in prev_ops:
+            prev_op.next.add(op)
+            op.prev.add(prev_op)
+
+    def _read(self, rank, buffer, index, size, op):
+        prev_ops = set()
+        for i in range(index, index+size):
+            slot = (rank, buffer, i)
+            assert slot in self.last_writer, f"Slot has never been written before a read-type {op}"
+            writer = self.last_writer[slot]
+            prev_ops.add(writer)
+            self.last_readers[slot].append(op)
+            
+        # Update the next pointer of the previous ops
+        for prev_op in prev_ops:
+            prev_op.next.add(op)
+            op.prev.add(prev_op)
 
     def add_start(self, rank, buffer, index, ref):
         slot = (rank, buffer, index)
-
         op = Op(Instruction.start, rank, ref, ref, next=set(), prev=set())
         self.operations[slot] = op
         self.last_writer[slot] = op
@@ -62,24 +102,11 @@ class RankDAG:
         srcbuffer = send_ref.buffer
         srcindex = send_ref.index
         size = recv_ref.size
-
-        prev_ops = set()
-        # Sending part of copy
-        for i in range(srcindex, srcindex+size):
-            slot = (rank, srcbuffer, i)
-            last_writer = self.last_writer[slot]
-            prev_ops.add(last_writer)
-        # Receiving part of copy
-        for i in range(dstindex, dstindex+size):
-            slot = (rank, dstbuffer, i)
-            last_readers = self.last_readers[slot]
-            prev_ops.update(last_readers)
-            if slot not in self.operations:
-                self.operations[slot] = op
-
-        for prev_op in prev_ops:
-            prev_op.next.add(op)
-            op.prev.add(prev_op)
+        # Sending part of copy [Read]
+        self._read(rank, srcbuffer, srcindex, size, op)
+        # Receiving part of copy [Write]
+        self._write(rank, dstbuffer, dstindex, size, op)
+        return op
 
     def add_reduce(self, rank, send_ref, recv_ref, step, priority, tb):
         op = Op(Instruction.reduce, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
@@ -89,42 +116,18 @@ class RankDAG:
         srcindex = send_ref.index
         size = recv_ref.size
         prev_ops = []
-
-        prev_ops = set()
         # Sending part of reduce
-        for i in range(srcindex, srcindex+size):
-            slot = (rank, srcbuffer, i)
-            last_writer = self.last_writer[slot]
-            prev_ops.add(last_writer)
+        self._read(rank, srcbuffer, srcindex, size, op)
         # Reduce part of copy
-        for i in range(dstindex, dstindex+size):
-            slot = (rank, dstbuffer, i)
-            last_readers = self.last_readers[slot]
-            prev_ops.update(last_readers)
-            if slot not in self.operations:
-                self.operations[slot] = op
-       
-        for prev_op in prev_ops:
-            prev_op.next.add(op)
-            op.prev.add(prev_op)
+        self._write(rank, dstbuffer, dstindex, size, op, read=True)
+        return op
 
     def add_send(self, rank, send_ref, recv_ref, step, priority, tb, ch):
         op = Op(Instruction.send, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = send_ref.buffer
         index = send_ref.index
         size = send_ref.size
-        # Find all readers that need to finish before us
-        # Update last writer for each slot, clear the last readers
-        prev_ops = set()
-        for i in range(index, index+size):
-            slot = (rank, buffer, i)
-            slot_prev_op = self.last_writer[slot]
-            prev_ops.add(slot_prev_op)
-            self.last_readers[slot].append(op)
-
-        for prev_op in prev_ops:
-            prev_op.next.add(op)
-        op.prev.update(prev_ops) 
+        self._read(rank, buffer, index, size, op)
         return op
 
     def add_recv(self, rank, send_ref, recv_ref, step, priority, tb, ch):
@@ -132,21 +135,7 @@ class RankDAG:
         buffer = recv_ref.buffer
         index = recv_ref.index
         size = recv_ref.size
-
-        prev_ops = set()
-        for i in range(index, index+size):
-            slot = (rank, buffer, i)
-            prev_op = self.last_readers[slot]
-            prev_ops.update(prev_op)
-            if slot not in self.operations:
-                self.operations[slot] = op
-            self.last_writer[slot] = op
-            self.last_readers[slot] = []
-
-        for prev_op in prev_ops:
-            prev_op.next.add(op)
-        if len(prev_ops) > 0:
-            op.prev.update(prev_ops) 
+        self._write(rank, buffer, index, size, op)
         return op
 
     def add_recv_reduce_copy(self, rank, send_ref, recv_ref, step, priority, tb, ch):
@@ -154,22 +143,7 @@ class RankDAG:
         buffer = recv_ref.buffer
         index = recv_ref.index
         size = recv_ref.size
-
-        prev_ops = set()
-        for i in range(index, index+size):
-            slot = (rank, buffer, i)
-            last_readers = self.last_readers[slot]
-            prev_ops.update(last_readers)
-            last_writer = self.last_writer[slot]
-            prev_ops.add(last_writer)
-            if slot not in self.operations:
-                self.operations[slot] = op
-            self.last_writer[slot] = op
-            self.last_readers[slot] = []
-
-        for prev_op in prev_ops:
-            prev_op.next.add(op)
-        op.prev.update(prev_ops)
+        self._write(rank, buffer, index, size, op, read=True)
         return op
 
     def convert_set_list(self):
