@@ -8,15 +8,6 @@ import heapq
 from sccl.language.ir import *
 from sccl.language.passes import *
 
-# Returns whether an operation writes to a particular slot
-def writes_to_slot(op, slot):
-    # If the instruction is a copy or reduce, check to see if the destination matches the slot
-    if op.inst == Instruction.copy or op.inst == Instruction.reduce:
-        cpy_src = op.src
-        _, buffer, index = slot
-        return buffer != cpy_src.buffer or (index < cpy_src.index and index > (cpy_src.index + cpy_src.size))
-    return op.inst != Instruction.send
-
 def remove_op(op):
     for p in op.prev:
         p.next.remove(op)
@@ -35,18 +26,22 @@ def same_count(op1, op2):
 def same_buf_dst(op1, op2):
     return op1.dst.buffer == op2.dst.buffer and op1.dst.index == op2.dst.index
 
-class RankDAG:
+class InstructionDAG:
     def __init__(self, num_ranks, buffers):
         self.num_ranks = num_ranks
         self.buffers = buffers
+        # State for the actual instruction DAG
         self.operations = {} # slot -> operations
+        self.last_writer = {} # slot -> last writing op
+        self.last_readers = defaultdict(list) # slot -> list of last reading ops
+        # State for the MSCCL-IR
         self.tbs = [] 
         for _ in range(num_ranks):
             self.tbs.append({}) 
         self.tb_mapping = {}
-        self.last_writer = {} # slot -> last writing op
-        self.last_readers = defaultdict(list) # slot -> list of last reading ops
+        
 
+    # InstructionDAG helper - identifies the dependencies for a write-type operation (recv, copy, rrc, reduce)
     def _write(self, rank, buffer, index, size, op, read=False):
         prev_ops = set()
         for i in range(index, index+size):
@@ -75,11 +70,13 @@ class RankDAG:
             prev_op.next.add(op)
             op.prev.add(prev_op)
 
+    # InstructionDAG helper - identifies the dependencies for read-type operations (send, copy, reduce)
     def _read(self, rank, buffer, index, size, op):
         prev_ops = set()
         for i in range(index, index+size):
             slot = (rank, buffer, i)
             assert slot in self.last_writer, f"Slot has never been written before a read-type {op}"
+            # The previous operation for a reader is the last write to the slot
             writer = self.last_writer[slot]
             prev_ops.add(writer)
             self.last_readers[slot].append(op)
@@ -89,12 +86,14 @@ class RankDAG:
             prev_op.next.add(op)
             op.prev.add(prev_op)
 
+    # InstructionDAG - builds the roots of the DAG
     def add_start(self, rank, buffer, index, ref):
         slot = (rank, buffer, index)
         op = Op(Instruction.start, rank, ref, ref, next=set(), prev=set())
         self.operations[slot] = op
         self.last_writer[slot] = op
 
+    # InstructionDAG - adds a copy node
     def add_copy(self, rank, send_ref, recv_ref, step, priority, tb):
         op = Op(Instruction.copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
         dstbuffer = recv_ref.buffer
@@ -108,6 +107,7 @@ class RankDAG:
         self._write(rank, dstbuffer, dstindex, size, op)
         return op
 
+    # InstructionDAG - adds a redduce node
     def add_reduce(self, rank, send_ref, recv_ref, step, priority, tb):
         op = Op(Instruction.reduce, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
         dstbuffer = recv_ref.buffer
@@ -122,6 +122,7 @@ class RankDAG:
         self._write(rank, dstbuffer, dstindex, size, op, read=True)
         return op
 
+    # InstructionDAG - adds a send node
     def add_send(self, rank, send_ref, recv_ref, step, priority, tb, ch):
         op = Op(Instruction.send, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = send_ref.buffer
@@ -130,6 +131,7 @@ class RankDAG:
         self._read(rank, buffer, index, size, op)
         return op
 
+    # InstructionDAG - adds a recv node
     def add_recv(self, rank, send_ref, recv_ref, step, priority, tb, ch):
         op = Op(Instruction.recv, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
@@ -138,6 +140,7 @@ class RankDAG:
         self._write(rank, buffer, index, size, op)
         return op
 
+    # InstructionDAG - adds a rrc node
     def add_recv_reduce_copy(self, rank, send_ref, recv_ref, step, priority, tb, ch):
         op = Op(Instruction.recv_reduce_copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
@@ -189,7 +192,11 @@ class RankDAG:
                         op.match = op.match + next_op.match
                         remove_op(next_op)
                 frontier = frontier[1:] + op.next
-        
+    # recv-reduce-send - A rrc followed by a send that gets overwritten
+    # TODO: Only checks if the overwriting op is a recv. Could be a rrc,re,copy 
+    # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di) recv(_, _, _, dst, dbuf, di) 
+    # recv-reduce-copy-send - A rrc followed by a send that does not get overwritten
+    # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di)
     def _optimize_rrcs_rrs(self):
         # RRC/S -> RRS
         for slot, ops in self.operations.items():
