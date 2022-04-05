@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 from enum import Enum
 import heapq
+import functools
 
 from sccl.language.ir import *
 from sccl.language.passes import *
@@ -39,7 +40,8 @@ class InstructionDAG:
         for _ in range(num_ranks):
             self.tbs.append({}) 
         self.tb_mapping = {}
-        
+        self.num_channels = [1] * num_ranks
+
 
     # InstructionDAG helper - identifies the dependencies for a write-type operation (recv, copy, rrc, reduce)
     def _write(self, rank, buffer, index, size, op, read=False):
@@ -89,13 +91,13 @@ class InstructionDAG:
     # InstructionDAG - builds the roots of the DAG
     def add_start(self, rank, buffer, index, ref):
         slot = (rank, buffer, index)
-        op = Op(Instruction.start, rank, ref, ref, next=set(), prev=set())
+        op = Op(Instruction.start, rank, ref, ref, next=set(), prev=set(), chunk_step=-1)
         self.operations[slot] = op
         self.last_writer[slot] = op
 
     # InstructionDAG - adds a copy node
-    def add_copy(self, rank, send_ref, recv_ref, step, priority, tb):
-        op = Op(Instruction.copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
+    def add_copy(self, rank, send_ref, recv_ref, tb, ch):
+        op = Op(Instruction.copy, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
         srcbuffer = send_ref.buffer
@@ -108,8 +110,8 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a redduce node
-    def add_reduce(self, rank, send_ref, recv_ref, step, priority, tb):
-        op = Op(Instruction.reduce, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb)
+    def add_reduce(self, rank, send_ref, recv_ref, tb, ch):
+        op = Op(Instruction.reduce, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
         srcbuffer = send_ref.buffer
@@ -123,8 +125,8 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a send node
-    def add_send(self, rank, send_ref, recv_ref, step, priority, tb, ch):
-        op = Op(Instruction.send, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_send(self, rank, send_ref, recv_ref, tb, ch):
+        op = Op(Instruction.send, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = send_ref.buffer
         index = send_ref.index
         size = send_ref.size
@@ -132,21 +134,23 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a recv node
-    def add_recv(self, rank, send_ref, recv_ref, step, priority, tb, ch):
-        op = Op(Instruction.recv, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_recv(self, rank, send_ref, recv_ref, tb, ch, send_op):
+        op = Op(Instruction.recv, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
         size = recv_ref.size
         self._write(rank, buffer, index, size, op)
+        op.send_match = send_op
         return op
 
     # InstructionDAG - adds a rrc node
-    def add_recv_reduce_copy(self, rank, send_ref, recv_ref, step, priority, tb, ch):
-        op = Op(Instruction.recv_reduce_copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_recv_reduce_copy(self, rank, send_ref, recv_ref, tb, ch, send_op):
+        op = Op(Instruction.recv_reduce_copy, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
         size = recv_ref.size
         self._write(rank, buffer, index, size, op, read=True)
+        op.send_match = send_op
         return op
 
     def convert_set_list(self):
@@ -172,6 +176,26 @@ class InstructionDAG:
     def optimize(self):
         self._optimize_rrcs_rrs()
         self._optimize_rcs()
+
+    # Completes metadata for chunk_steps (number of steps from a start op) and priority (number of steps to the last op)
+    def _complete_metadata(self):
+        def dfs(op, cs):
+            op.chunk_step = max(op.chunk_step, cs+1)
+
+            if len(op.next) == 0 and op.recv_match is None:
+                op.priority = 0
+            else:
+                for o in op.next:
+                    dfs(o, op.chunk_step)
+                op.priority = functools.reduce(lambda cur, x: max(cur, x.priority+1), op.next, 0)
+                if op.is_send():
+                    dfs(op.recv_match, op.chunk_step)
+                    op.priority = max(op.priority, op.recv_match.priority+1)
+
+        for chunk, op in self.operations.items():
+            if op.inst == Instruction.start:
+                dfs(op,-2) # Start instructions should start at -1
+            
         
     # Given the set of operations that operate over a particular slot (rank, buffer, idx) fixed
     # Try and replace operations with pipelined ops like receive copy send (rcs)
@@ -184,16 +208,17 @@ class InstructionDAG:
             frontier = [ops]
             while len(frontier) > 0:
                 op = frontier[0]
-                if len(op.next) == 1:
-                    next_op = op.next[0] 
+                for next_op in op.next:
                     if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
+                        # recv -> rrs, remove send
                         op.inst = Instruction.recv_copy_send
                         op.dst = next_op.dst
-                        op.match = op.match + next_op.match
+                        next_op.recv_match.send_match = op
+                        op.recv_match = next_op.recv_match
                         remove_op(next_op)
+                        break
                 frontier = frontier[1:] + op.next
     # recv-reduce-send - A rrc followed by a send that gets overwritten
-    # TODO: Only checks if the overwriting op is a recv. Could be a rrc,re,copy 
     # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di) recv(_, _, _, dst, dbuf, di) 
     # recv-reduce-copy-send - A rrc followed by a send that does not get overwritten
     # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di)
@@ -207,16 +232,18 @@ class InstructionDAG:
                     next_op = op.next[0]
                     if len(next_op.next) == 1:
                         nnext_op = next_op.next[0]
-                        if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and nnext_op.inst == Instruction.recv and same_tb(op, next_op) and same_count(op, next_op):
+                        if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and nnext_op.inst is Instruction.recv and same_tb(op, next_op) and same_count(op, next_op):
                             op.inst = Instruction.recv_reduce_send
                             op.dst = next_op.dst
-                            op.match = op.match + next_op.match
+                            next_op.recv_match.send_match = op
+                            op.recv_match = next_op.recv_match
                             remove_op(next_op)
                     
                     if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op):
                         op.inst = Instruction.recv_reduce_copy_send
                         op.dst = next_op.dst
-                        op.match = op.match + next_op.match
+                        next_op.recv_match.send_match = op
+                        op.recv_match = next_op.recv_match
                         remove_op(next_op)
                 frontier = frontier[1:] + op.next
 
@@ -317,7 +344,7 @@ class InstructionDAG:
         for i in range(instances):
             # Generate all the threadblocks and ops
             for rank, rank_tbs in enumerate(self.tbs):
-                rank_channels = self.num_channels [rank]
+                rank_channels = self.num_channels[rank]
                 for tbid, tb in rank_tbs.items():
                     instance_channel = rank_channels * i + tb.channel
                     itb = Threadblock(instance_channel, tb.send, tb.recv)

@@ -35,3 +35,6 @@ class BufferSlice:
             self.chunks.append(value)
         else:
             self.chunks[index] = value
+
+    def __len__(self):
+        return len(self.chunks)
