@@ -105,13 +105,12 @@ def topo_sort_instrs(rank_dag):
     visited = set()
     ops = []
     ordered = []
-    print("Topo sort")
     for slot, op in rank_dag.operations.items():
         if op.inst == Instruction.start:
             visited.add(op)
             for o in op.next:
                 if o.inst == Instruction.send or o.inst == Instruction.copy:
-                    heapq.heappush(ops, ((o.chunk_step, o.dst.index), o))
+                    heapq.heappush(ops, ((o.chunk_step, -o.priority, o.dst.index), o))
 
     while len(ops) > 0:
         _, op = heapq.heappop(ops)
@@ -120,23 +119,16 @@ def topo_sort_instrs(rank_dag):
 
             # Delay scheduling the send until the receive is ready
             if rmatch is not None and not all([o in visited for o in rmatch.prev]):
-                # print(f"Delay scheduling {op} because \n  {rmatch} is not ready")
-                # print(f"  waiting on {rmatch.prev}")
-                # TODO: This is kind of a hack...
-                heapq.heappush(ops, ((rmatch.chunk_step-1, 100, op.dst.index), op))
+                heapq.heappush(ops, ((rmatch.chunk_step-1, -rmatch.priority+1, op.dst.index), op))
             else:
-                # print("Scheduled ", op)
                 ordered.append(op)
                 visited.add(op)
                 
                 # Add a matching receive if one exists
                 if rmatch is not None : 
-                    heapq.heappush(ops, ((rmatch.chunk_step, rmatch.dst.index), rmatch))
+                    heapq.heappush(ops, ((rmatch.chunk_step, -op.priority+1, rmatch.dst.index), rmatch))
                 # Add other operation that has its dependencies satisfied
                 for o in op.next:
                     if all([x in visited for x in o.prev]):
-                        heapq.heappush(ops, ((o.chunk_step, o.dst.index), o))
-        
-    # for op in ordered:
-    #     print(f"{op.rank} CH{op.channel} ({op.chunk_step}, {-op.priority}, {op.dst.index})), {op}")
+                        heapq.heappush(ops, ((o.chunk_step, -o.priority, o.dst.index), o))
     return ordered

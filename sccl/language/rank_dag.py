@@ -187,7 +187,10 @@ class InstructionDAG:
             else:
                 for o in op.next:
                     dfs(o, op.chunk_step)
-                op.priority = functools.reduce(lambda cur, x: max(cur, x.priority+1), op.next, 0)
+                # Priority = +1 of the highest priority child
+                if len(op.next) > 0:
+                    highest_next_priority = max([x.priority+1 for x in op.next])
+                    op.priority = max(highest_next_priority, op.priority)
                 if op.is_send():
                     dfs(op.recv_match, op.chunk_step)
                     op.priority = max(op.priority, op.recv_match.priority+1)
