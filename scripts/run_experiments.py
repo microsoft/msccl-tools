@@ -212,18 +212,18 @@ if __name__ == '__main__':
 
 
     allgather_ring()
-    # allgather_recursive_doubling()
+    allgather_recursive_doubling()
 
-    # allreduce_ring()
-    # allreduce_recursive_doubling_halving()
-    # allreduce_binomial_tree()
-    # allreduce_allpairs()
+    allreduce_ring()
+    allreduce_recursive_doubling_halving()
+    allreduce_binomial_tree()
+    allreduce_allpairs()
 
-    # allgather_nccl()
-    # allreduce_nccl()
+    allgather_nccl()
+    allreduce_nccl()
 
     # Parse output into a csv
-    for directory in [f'{home}/dgx2/allreduce', f'{home}/dgx2/allgather']:
+    for directory in [f'{home}/{machine}/allreduce', f'{home}/{machine}/allgather']:
         for filename in os.listdir(directory):
             f = os.path.join(directory, filename)
             # checking if it is a file
