@@ -344,12 +344,13 @@ class InstructionDAG:
             iref = ChunkRef(ref.rank, ref.buffer, iindex, ref.size)
             return iref
 
+        max_channels = max(self.num_channels)
         for i in range(instances):
             # Generate all the threadblocks and ops
             for rank, rank_tbs in enumerate(self.tbs):
-                rank_channels = self.num_channels[rank]
+                # rank_channels = self.num_channels[rank]
                 for tbid, tb in rank_tbs.items():
-                    instance_channel = rank_channels * i + tb.channel
+                    instance_channel = max_channels * i + tb.channel
                     itb = Threadblock(instance_channel, tb.send, tb.recv)
                     itbid = tbid * instances + i
                     itb.ops = [None] * len(tb.ops)

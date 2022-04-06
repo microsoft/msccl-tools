@@ -303,12 +303,17 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                 op_idx[new_ops[-1]] = len(new_ops) - 1
             tb.ops = new_ops
 
+    nchannels = 0
+    for gpu in program.gpus:
+        max_tb_channels = 0
+        if len(gpu.threadblocks) > 0:
+            max_tb_channels = max(tb.channel+1 for tb in gpu.threadblocks)
+        nchannels = max(nchannels, max_tb_channels)
     # Generate the XML structure
     algo_elem = ET.Element('algo')
     algo_elem.set('name', program.name)
     algo_elem.set('proto', program.protocol)
-    algo_elem.set('nchannels', str(
-        1 + max(max(tb.channel for tb in gpu.threadblocks) for gpu in program.gpus)))
+    algo_elem.set('nchannels', str(nchannels))
     if old_format:
         algo_elem.set('nchunksperloop', str(
             max(max(buffer_sizes[(gpu.rank, Buffer.input)], buffer_sizes[(gpu.rank, Buffer.output)]) for gpu in program.gpus)))
