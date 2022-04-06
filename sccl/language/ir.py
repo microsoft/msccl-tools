@@ -154,6 +154,15 @@ class Op:
             self.inst == Instruction.recv_copy_send or \
             self.inst == Instruction.recv_reduce_send
 
+    def is_fused(self):
+        return self.inst == Instruction.recv_reduce_copy_send or \
+            self.inst == Instruction.recv_copy_send or \
+            self.inst == Instruction.recv_reduce_send
+
+    def is_local(self):
+        return self.inst == Instruction.copy or \
+            self.inst == Instruction.reduce
+
     def peer(self):
         if self.inst == Instruction.send:
             return self.dst.rank

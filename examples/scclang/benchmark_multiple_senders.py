@@ -19,7 +19,6 @@ def test(num_gpus, instances):
                 chunk(i, Buffer.input, 0).send(i+size//2, Buffer.output, 0)
         XML()
 
-
 parser = argparse.ArgumentParser()
 parser.add_argument('num_gpus', type=int, help ='number of gpus within a node')
 parser.add_argument('instances', type=int, help ='number of instances')

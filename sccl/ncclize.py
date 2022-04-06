@@ -474,7 +474,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     elif co_name == 'reduce_scatter':
         collective = lang_collectives.ReduceScatter(num_ranks, chunks, inplace)
     # TODO: SCCLang instances are they equivalent?
-    program = SCCLProgram(algorithm.name, algorithm.topology, collective, 1, instr_fusion=False)
+    program = SCCLProgram(algorithm.name, algorithm.topology, collective, 1, instr_fusion=instr_fusion)
     with program:
         for rank, gpu in gpus.items():
             for copy_op in gpu.precopies:

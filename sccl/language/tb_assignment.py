@@ -58,6 +58,7 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs):
 
 def auto_assign_tbs(rank_dag):
     instrs = topo_sort_instrs(rank_dag)
+    channel_assignment(instrs, rank_dag)
     rank_tbids = [0] * rank_dag.num_ranks
     current_tb_step = []
     for rank_tbs in rank_dag.tbs:
@@ -101,6 +102,8 @@ def auto_assign_tbs(rank_dag):
         op.tb = tbid
         current_tb_step[rank][tbid] = op.chunk_step
 
+# Topologically orders instructions so that (1): Sends occur before their receives
+# (2): Dependent instructions occur before 
 def topo_sort_instrs(rank_dag):
     visited = set()
     ops = []
@@ -131,4 +134,61 @@ def topo_sort_instrs(rank_dag):
                 for o in op.next:
                     if all([x in visited for x in o.prev]):
                         heapq.heappush(ops, ((o.chunk_step, -o.priority, o.dst.index), o))
+
     return ordered
+
+def channel_assignment(instrs, rank_dag):
+    def f():
+        return set()
+    # Naive - schedule everything onto channel 0
+    # First handle flows - if an instruction at Rx is fused Rw->Rx->Ry and takes c
+    # Then flow Rw->Rx->Rz must be ib a different channel c' where c!=c'
+    rank2sendch = [defaultdict(f) for _ in range(rank_dag.num_ranks)]
+    rank2recvch = [defaultdict(f) for _ in range(rank_dag.num_ranks)]
+
+    # DFS through the InstructionDAG identifying flows
+    # TODO: This could probably be merged with the metadata collection...
+    def valid_send_ch(sender, receiver, ch):
+        return ch not in rank2sendch[sender][receiver]
+    def valid_recv_ch(sender, receiver, ch):
+        return ch not in rank2recvch[receiver][sender]
+
+    flows = []
+    flow_channels = []
+
+    def dfs(op, channel, f):
+        if op.is_local():
+            op.channel = 0
+        elif op.is_send():
+            match = op.recv_match
+            sender = op.rank
+            receiver = match.rank
+            # Find the first usable channel
+            ch = channel
+            while not(valid_send_ch(sender, receiver, ch) and valid_recv_ch(sender, receiver, ch)):
+                ch += 1
+            # If not a fused op use the first possible channel (send, recv/rrc)
+            if not match.is_fused():
+                # Check if this flow exists
+                f.append(op.rank)
+                f.append(match.rank)
+                if f in flows:
+                    ch = flow_channels[flows.index(f)]
+                else:
+                    flows.append(f)
+                    flow_channels.append(ch)
+                op.channel = ch
+                match.channel = ch
+                rank2sendch[sender][receiver].add(ch)
+                rank2recvch[receiver][sender].add(ch)
+            else:
+                f.append(op.rank)
+                dfs(match, ch, f)
+                ch = match.channel
+                op.channel = ch
+                rank2sendch[sender][receiver].add(ch)
+
+    # Assign channels to flows
+    for op in instrs:
+        if op.inst == Instruction.send and op.recv_match.is_fused():
+            dfs(op, 0, [])
