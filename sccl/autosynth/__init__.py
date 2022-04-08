@@ -197,7 +197,7 @@ def _select_isomorphism(isomorphisms, verbose=True): # pragma: no cover
                 print(
                     'SCCL: Running inspector-topo to find the IB placement. This will take a couple of minutes...')
                 topo_detect = subprocess.run(
-                    ['/usr/local/bin/inspector-topo'], capture_output=True, env={"CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7"})
+                    ['/usr/local/bin/inspector-topo'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={"CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7"})
                 print('SCCL: Finished running inspector-topo. Finding the permutaion.')
                 if topo_detect.returncode != 0:
                     raise RuntimeError(
