@@ -17,16 +17,14 @@ def test(num_gpus, num_connections, instances, repeats):
     # print("Size", size)
     # print("Connections", num_connections)
     topology = fully_connected(size)
-    collective = AllReduce(size, size*repeats, False)
+    collective = AllReduce(size, size, False)
     with SCCLProgram("NVSwitchStressTest", topology, collective, instances):
         for it in range(repeats):
             for i in range(num_gpus):
                 for c in range(num_connections):
                     j = (i + c + 1) % size
-                    src_idx = j*repeats + it
-                    dst_idx = i*repeats + it
                     # print(f"GPU{i}->GPU{j} chunk {j}")
-                    chunk(i, Buffer.input, src_idx).send(j, Buffer.output, dst_idx)
+                    chunk(i, Buffer.input, j).send(j, Buffer.output, i)
         XML()
 
 
