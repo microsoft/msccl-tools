@@ -25,7 +25,7 @@ def test(num_gpus, num_nodes, num_connections, instances, repeats):
                     for c in range(num_connections):
                         j = (n+1)*num_gpus + (i + c) % num_gpus
                         # print(f"GPU{i}->GPU{j} chunk {j}")
-                        chunk(i, Buffer.input, 0).send(j, Buffer.output, 0)
+                        chunk(i, Buffer.input, 0).send(j, Buffer.output, 0, ch=n)
         XML()
 
 
