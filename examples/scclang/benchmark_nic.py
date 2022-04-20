@@ -13,19 +13,22 @@ from sccl.language.collectives import AllReduce
 # etc.
 # Note: If C >= num_gpus we are using multiple NICs to generate traffic
 def test(num_gpus, num_nodes, num_connections, instances, repeats):
-    size = num_gpus*(num_nodes+1)
+    size = num_gpus*num_nodes
     # print("Size", size)
     # print("Connections", num_connections)
     topology = fully_connected(size)
     collective = AllReduce(size, 1, False)
     with SCCLProgram("NICStressTest", topology, collective, instances):
         for it in range(repeats):
-            for n in range(num_nodes):
-                for i in range(num_gpus):
-                    for c in range(num_connections):
-                        j = (n+1)*num_gpus + (i + c) % num_gpus
-                        # print(f"GPU{i}->GPU{j} chunk {j}")
-                        chunk(i, Buffer.input, 0).send(j, Buffer.output, 0, ch=n)
+            for n1 in range(num_nodes):
+                for n2 in range(num_nodes):
+                    for i in range(num_gpus):
+                        for c in range(num_connections):
+                            if n1 != n2:
+                                sender = n1*num_gpus + i
+                                receiver = (n2)*num_gpus + (i + c) % num_gpus
+                                # print(f"GPU{sender}->GPU{receiver}")
+                                chunk(sender, Buffer.input, 0).send(receiver, Buffer.output, 0, ch=n1+n2-1)
         XML()
 
 
