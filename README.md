@@ -33,7 +33,9 @@ See [the examples](examples/sccl_init.py) for more on `sccl.init` usage.
 
 ## Available Algorithms
 
-To list the algorithms currently in SCCL's built-in registry, run `sccl plans list` on the command line. This will print out the following table (on 4/22/2022):
+SCCL's built-in algorithms are registered for combinations of hardware configuration and size of input data where we
+have benchmarked them to provide speedup over NCCL. To list the algorithms currently in SCCL's built-in registry, run
+`sccl plans list` on the command line. This will print out the following table (on 4/22/2022):
 
 | Machine   | Collective   | # machines   | From   | To       | Protocol   |   Priority | Plan name                           |
 |-----------|--------------|--------------|--------|----------|------------|------------|-------------------------------------|
@@ -57,7 +59,7 @@ pre-synthesized for fixed configurations. To enable them install the package and
 
 MSCCLang is a high-level language for specifying collective communication algorithms in an intuitive chunk-oriented form. The language is available as a Python-integrated DSL.
 
-The language is still under development and lacks comprehensive documentation. For now, please refer to our [the pre-print of our upcoming paper](https://arxiv.org/pdf/2201.11840.pdf) and the examples in [examples/scclang](examples/scclang/).
+The language is still under development and lacks comprehensive documentation. For now, please refer to [the pre-print of our upcoming paper](https://arxiv.org/pdf/2201.11840.pdf) and the examples in [examples/scclang](examples/scclang/).
 
 ## Synthesis
 
