@@ -34,8 +34,12 @@ class AllToAll(Collective):
             for index in range(chunks_per_node):
                 chunk = Chunk(r, index, index//self.chunk_factor, index % self.chunk_factor + r*self.chunk_factor)
                 input_buffer[index] = chunk
-            buffers = {Buffer.input : input_buffer, 
-                    Buffer.output : output_buffer}
+            if self.inplace:
+                buffers = {Buffer.input : input_buffer, 
+                    Buffer.output : input_buffer}
+            else:
+                buffers = {Buffer.input : input_buffer, 
+                        Buffer.output : output_buffer}
             rank_buffers.append(buffers)
         return rank_buffers
 

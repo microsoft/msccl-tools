@@ -113,6 +113,26 @@ def test_local_reduce():
         XML()
         assert Check()
 
+# def test_exchange():
+#     num_gpus = 2
+#     topology = line(num_gpus)
+
+#     collective = AllToAll(num_gpus, 1, inplace=True)
+#     with SCCLProgram("exchange", topology, collective , 1):
+#         chunk(0, Buffer.input, 1).exchange(1, Buffer.input, 0)
+#         XML()
+#         assert Check()
+
+# def test_rexchange():
+#     num_gpus = 2
+#     topology = line(num_gpus)
+
+#     collective = AllReduce(num_gpus, 1, inplace=True)
+#     with SCCLProgram("rexchange", topology, collective , 1):
+#         chunk(0, Buffer.input, 0).rexchange(1, Buffer.input, 0)
+#         XML()
+#         assert Check()
+
 def test_scratch_buffers():
     num_gpus = 3
     topology = fully_connected(num_gpus)

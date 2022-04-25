@@ -137,15 +137,13 @@ def topo_sort_instrs(rank_dag):
     return ordered
 
 def channel_assignment(instrs, rank_dag):
-    def f():
-        return set([x for x in range(32)])
-    # Naive - schedule everything onto channel 0
-    # First handle flows - if an instruction at Rx is fused Rw->Rx->Ry and takes c
+    def all_channels():
+        return set([x for x in range(32)])    # First handle flows - if an instruction at Rx is fused Rw->Rx->Ry and takes c
     # Then flow Rw->Rx->Rz must be ib a different channel c' where c!=c'
     # rank2sendch[rank][x] returns a set of all the available channels for rank -> x (sending from rank)
     # rank2recvch[rank][x] returns a set of all available channels for x -> rank (receiving on rank)
-    rank2sendch = [defaultdict(f) for _ in range(rank_dag.num_ranks)]
-    rank2recvch = [defaultdict(f) for _ in range(rank_dag.num_ranks)]
+    rank2sendch = [defaultdict(all_channels) for _ in range(rank_dag.num_ranks)]
+    rank2recvch = [defaultdict(all_channels) for _ in range(rank_dag.num_ranks)]
 
     # DFS through the InstructionDAG identifying flows
     def valid_send_ch(sender, receiver, ch):
@@ -165,7 +163,7 @@ def channel_assignment(instrs, rank_dag):
         # No match
         return -1
 
-    def add_flow(sender, receiver, ch):
+    def reserve_channel(sender, receiver, ch):
         if ch in rank2sendch[sender][receiver]:
             rank2sendch[sender][receiver].remove(ch)
         if ch in rank2recvch[receiver][sender]:
@@ -199,21 +197,21 @@ def channel_assignment(instrs, rank_dag):
                     ch = op.channel
                 else:
                     ch = is_matching_flow(flow)
-                    if ch == -1: # No flow matched
+                    if ch == -1: # No flow matched - use the smallest available channel
                         ch = min(channels)
                         flows.append(flow)
                         flow_channels.append(ch)
 
                 op.channel = ch
                 match.channel = ch
-                add_flow(sender, receiver, ch)
+                reserve_channel(sender, receiver, ch)
             else:
                 dfs(match, channels, f)
                 ch = match.channel
                 op.channel = ch
-                add_flow(sender, receiver, ch)
+                reserve_channel(sender, receiver, ch)
 
     # Assign channels to flows
     for op in instrs:
         if op.inst == Instruction.send and op.recv_match.is_fused():
-            dfs(op, set([x for x in range(32)]), [])
+            dfs(op, all_channels(), [])

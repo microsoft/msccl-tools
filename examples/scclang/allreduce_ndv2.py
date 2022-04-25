@@ -10,7 +10,7 @@ from sccl.topologies import *
 from sccl.language.collectives import AllReduce
 
 def allreduce(instances):
-    size = 16
+    size = 8
     num_local_gpus = size
     topology = fully_connected(size)
     # size = topology.num_nodes() #  Number of gpus

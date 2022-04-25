@@ -78,6 +78,27 @@ class SCCLProgram:
             sent_chunk = sb[src_index + i]
             db[dst_index + i] = reduce_chunk.reduce(dst, sent_chunk)
 
+    def add_exchange(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
+        src_buffer, src_index = self.collective.get_buffer_index(src, src_buffer, src_index)
+        dst_buffer, dst_index = self.collective.get_buffer_index(dst, dst_buffer, dst_index)
+        sb = self.buffers[src][src_buffer]
+        db = self.buffers[dst][dst_buffer]
+        for i in range(size):
+            temp = db[dst_index + i]
+            db[dst_index + i] = sb[src_index + i]
+            sb[src_index + i] = temp
+
+    def add_rexchange(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
+        src_buffer, src_index = self.collective.get_buffer_index(src, src_buffer, src_index)
+        dst_buffer, dst_index = self.collective.get_buffer_index(dst, dst_buffer, dst_index)
+        sb = self.buffers[src][src_buffer]
+        db = self.buffers[dst][dst_buffer]
+        for i in range(size):
+            reduce_chunk = db[dst_index + i]
+            sent_chunk = sb[src_index + i]
+            db[dst_index + i] = reduce_chunk.reduce(dst, sent_chunk)
+            sb[dst_index + i] = sent_chunk.reduce(src, reduce_chunk)
+
     def get_ref(self, rank, buffer, index, size):
         buffer, index = self.collective.get_buffer_index(rank, buffer, index)
         return Ref(rank, buffer, index, size, self)
@@ -244,6 +265,62 @@ class Ref(ChunkRef):
             self.prog.instr_dag.add_reduce(sender, self, dst_chunkref, sendtb, ch)
 
         return dst_chunkref
+
+    # Efficient exchange without copying to a temporary value
+    def exchange(self, dst, buffer, index, sendtb=-1, recvtb=-1, ch=0):
+        assert self.rank != dst, "Exchange can only happen be two different ranks"
+        self.prog.check_buffer_exists(dst, buffer)
+
+        # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
+        buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
+
+        assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
+        chunkref2 = self.prog.get_ref(dst, buffer, index, self.size)
+
+        chunks1 = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
+        chunks2 = self.prog.get_chunks(dst, buffer, index, self.size)
+
+        self.prog.add_exchange(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
+
+        r1 = self.rank
+        r2 = dst
+        sop1 = self.prog.instr_dag.add_send(r1, self, chunkref2, sendtb, ch)
+        sop2 = self.prog.instr_dag.add_send(r2, chunkref2, self, sendtb, ch)
+
+        rop1 = self.prog.instr_dag.add_recv(r2, self, chunkref2, recvtb, ch, sop1)
+        sop1.recv_match = rop1
+        rop2 = self.prog.instr_dag.add_recv(r1, chunkref2, self, recvtb, ch, sop2)
+        sop2.recv_match = rop2
+
+        return None
+
+    def rexchange(self, dst, buffer, index, sendtb=-1, recvtb=-1, ch=0):
+        assert self.rank != dst, "RExchange can only happen be two different ranks"
+        self.prog.check_buffer_exists(dst, buffer)
+
+        # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
+        buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
+
+        assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
+        chunkref2 = self.prog.get_ref(dst, buffer, index, self.size)
+
+        chunks1 = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
+        chunks2 = self.prog.get_chunks(dst, buffer, index, self.size)
+
+        self.prog.add_rexchange(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
+
+        r1 = self.rank
+        r2 = dst
+        sop1 = self.prog.instr_dag.add_send(r1, self, chunkref2, sendtb, ch)
+        sop2 = self.prog.instr_dag.add_send(r2, chunkref2, self, sendtb, ch)
+
+        rop1 = self.prog.instr_dag.add_recv_reduce_copy(r2, self, chunkref2, recvtb, ch, sop1)
+        sop1.recv_match = rop1
+        rop2 = self.prog.instr_dag.add_recv_reduce_copy(r1, chunkref2, self, recvtb, ch, sop2)
+        sop2.recv_match = rop2
+
+        return None
+
 
     def get_origin_index(self, index=0):
         return self._get_chunk(index + self.index).origin_index
