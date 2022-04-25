@@ -14,6 +14,18 @@ section](#mscclang) for how to get started.
 enough for common use cases is an on-going research project See [the synthesis readme](SYNTHESIS.md) for an
 introduction.
 
+## When is SCCL likely to help
+
+**Built-in algorithms:** If you wish to just use SCCL's built-in algorithms, take stock of the collectives used in your model and check if those are available for your Azure VM type (see the [Available Algorithms section](#available-algorithms)). Further, you should make sure that the data sizes your model operates with are covered by the sizes the algorithms are registered for. As a rule-of-thumb, model- and pipeline parallelism result in small to medium data sizes, while data parallelism results in large data sizes for communication.
+
+If your use-case seems to be at least partially covered by the available algorithms, there is a good chance SCCL will provide a good speedup.
+
+**New algorithms:** If you are willing to dive into developing new algorithms with for example MSCCLang, here are some scenarios where you may find great improvements:
+- *Your model uses small or medium sized data, but NCCL only optimizes for large data sizes.* NCCL's ring based algorithms can be great for large data, but they require many steps to complete and thus pay fixed latency costs many times. Algorithms with "shallower" communication paths may be better.
+- *Your hardware configuration is atypical.* For example, if your NIC placement is closer to some GPUs than others you may find a way to route data in a more optimal way.
+- *You require non-mainstream collectives.* Alltoall is a well-known collective that historically has not been required
+  for ML workloads, but is finding some emerging use cases.
+
 ## Usage
 
 The SCCL Python package ships with a registry of synthesis strategies and hand optimized algorithms. These can be loaded
@@ -54,6 +66,38 @@ Each line lists an algorithm registration and the conditions under which it is t
 The repository [parasailteam/sccl-presynth](https://github.com/parasailteam/sccl-presynth) repository offers additional algorithms that have been
 pre-synthesized for fixed configurations. To enable them install the package and import it before the call to
 `sccl.init`.
+
+## Troubleshooting
+
+If you've integrated SCCL into your model, but aren't seeing a speedup, there are several reasons SCCL's algorithms may not be getting used.
+
+**Algorithms not selected:** `sccl.init` prints diagnostic information indicating which algorithms are selected. 
+```
+SCCL: Plan for <collective> with sizes from <low> to <high> is load <plan> with <protocol>.
+```
+When no algorithm exists for some requested collective and size range, you will see a printout like the following:
+```
+SCCL: No plan found for <collective> with sizes from <low> to <high>. Falling back to NCCL baseline.
+```
+Please check that 1. an algorithm is available for your request (see the [Available Algorithms
+section](#available-algorithms)) and 2. the arguments to `sccl.init` overlap with the ones the algorithm is registered
+with.
+
+**Algorithms not loaded:** After `sccl.init` has selected algorithms, it informs the [MSCCL
+runtime](https://github.com/microsoft/msccl) which ones to load by setting the appropriate environment variables. To verify that this happens please set `NCCL_DEBUG=INFO` in the environment. For each algorithm you should see:
+```
+NCCL INFO Parsed SCCL Algorithm <path> successfully.
+```
+And finally when the algorithms were correctly loaded:
+```
+NCCL INFO Connected <count> SCCL algorithms
+```
+
+**Algorithms not triggered at runtime:** Even when SCCL algorithms are loaded into MSCCL, they are only used at runtime
+when the incoming data size matches the size range the algorithms were selected for. Please check that the data sizes in
+your model's communication calls are covered by the algorithms you see being selected by `sccl.init`.
+
+`sccl.init` also sets the `NCCL_ALGO` environment variable to include `SCCL`. Please check that this is not being overwritten in your model.
 
 ## MSCCLang
 
