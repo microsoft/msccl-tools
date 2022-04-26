@@ -175,8 +175,6 @@ def channel_assignment(instrs, rank_dag):
         flow = set()
         for i in range(1, len(f)):
             flow.add((f[i-1], f[i]))
-        print("New flow", f)
-        print(flow)
         return flow
         
     def dfs(op, channels, f):
