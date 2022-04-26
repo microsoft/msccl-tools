@@ -73,8 +73,7 @@ def auto_assign_tbs(rank_dag):
         tb_options = _get_tb_options(rank_dag.tbs[rank], s, r, channel, rank_tbids[rank])
         if len(tb_options) == 0: # If there are no options, create a new threadblock
             tbid = rank_tbids[rank]
-            # if op.channel == -1:
-            #     print(op.channel, op)
+
             rank_dag.tbs[rank][tbid] = Threadblock(send=s, recv=r, channel=channel)
             # rank_tb_assignments[rank][(s,r,channel)] = tbid
             rank_tbids[rank] += 1
@@ -121,7 +120,7 @@ def topo_sort_instrs(rank_dag):
             rmatch = op.recv_match
 
             # Delay scheduling the send until the receive is ready
-            if rmatch is not None and not all([o in visited for o in rmatch.prev]):
+            if False: # rmatch is not None and not all([o in visited for o in rmatch.prev]):
                 heapq.heappush(ops, ((rmatch.chunk_step-1, -rmatch.priority+1, op.dst.index), op))
             else:
                 ordered.append(op)
@@ -176,6 +175,8 @@ def channel_assignment(instrs, rank_dag):
         flow = set()
         for i in range(1, len(f)):
             flow.add((f[i-1], f[i]))
+        print("New flow", f)
+        print(flow)
         return flow
         
     def dfs(op, channels, f):

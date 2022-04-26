@@ -23,7 +23,7 @@ def _curr():
 class SCCLProgram:
     def __init__(self, name, topo, collective, instances, protocol='Simple', \
             threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True,
-            instr_fusion=True, check_xml=True):
+            instr_fusion=True, check_xml=True, DAG_preprocess_func=None):
         self.name = name
         self.topo = topo
         self.collective = collective       
@@ -34,6 +34,7 @@ class SCCLProgram:
         self.interleaved_replication = interleaved_replication
         self.instr_fusion = instr_fusion
         self.check_xml = check_xml
+        self.DAG_preprocess_func = DAG_preprocess_func
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
         self.run_opt = True # Runs optimization passes
@@ -130,7 +131,10 @@ class SCCLProgram:
         if self.instr_fusion:
             self.instr_dag.optimize()
         self.instr_dag._complete_metadata()
-        if self.threadblock_policy == ThreadblockPolicy.manual:
+        if self.DAG_preprocess_func != None:
+            self.DAG_preprocess_func(self.instr_dag)
+            manual_assign_tbs(self.instr_dag)
+        elif self.threadblock_policy == ThreadblockPolicy.manual:
             manual_assign_tbs(self.instr_dag)
         else:
             auto_assign_tbs(self.instr_dag)

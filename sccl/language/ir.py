@@ -41,10 +41,6 @@ class Threadblock:
     recv: int = -1
     ops: list = field(default_factory=list)
 
-    # From ncclize TODO: Do we need these?
-    rbid: int = None
-    # steps: list = field(default_factory=list)
-
     def __eq__(self, other):
         return self is other
 
