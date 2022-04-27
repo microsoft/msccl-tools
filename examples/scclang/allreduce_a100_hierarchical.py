@@ -7,7 +7,7 @@ from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllReduce
 
-def allreduce(num_local_gpus, num_nodes, instances):
+def allreduce(num_local_gpus, num_nodes, instances, protocol, rs):
     num_gpus = num_local_gpus * num_nodes
     topology = fully_connected(num_gpus)
     collective = AllReduce(num_gpus, num_local_gpus, True)
@@ -15,7 +15,7 @@ def allreduce(num_local_gpus, num_nodes, instances):
     def rank(n, g):
         return n * num_local_gpus + (g % num_local_gpus)
 
-    with SCCLProgram("allreduce_2node_a100", topology, collective, instances):
+    with SCCLProgram("allreduce_2node_a100", topology, collective, instances, protocol=protocol):
 
         # Ring Reduce Scatter within each node
         for n in range(num_nodes):
@@ -51,4 +51,4 @@ args = parser.parse_args()
 
 assert args.num_nodes == 2, "Only works for 2 nodes right now"
 
-allreduce(8, args.num_nodes, args.instances)
+allreduce(8, args.num_nodes, args.instances, args.protocol, args.rs)
