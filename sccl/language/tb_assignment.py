@@ -152,6 +152,7 @@ def channel_assignment(instrs, rank_dag):
 
     # Returns a channel this flow can be scheduled on, else -1 
     def is_matching_flow(flow):
+        print("h")
         # Exact match
         if flow in flows:
             return flow_channels[flows.index(flow)]
@@ -167,7 +168,6 @@ def channel_assignment(instrs, rank_dag):
             rank2sendch[sender][receiver].remove(ch)
         if ch in rank2recvch[receiver][sender]:
             rank2recvch[receiver][sender].remove(ch)
-
     flows = []
     flow_channels = []
 
@@ -175,8 +175,6 @@ def channel_assignment(instrs, rank_dag):
         flow = set()
         for i in range(1, len(f)):
             flow.add((f[i-1], f[i]))
-        print("New flow", f)
-        print(flow)
         return flow
         
     def dfs(op, channels, f):

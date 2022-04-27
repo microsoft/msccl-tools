@@ -11,7 +11,7 @@ from sccl.language.chunk import *
 from sccl.language.buffer import *
 from sccl.language.rank_dag import *
 import sccl.collectives as collectives
-from sccl.language.visualize import *
+# from sccl.language.visualize import *
 
 _current_program = None
 def _curr():

@@ -18,34 +18,35 @@ def allreduce(num_local_gpus, num_nodes, instances):
     with SCCLProgram("allreduce_2node_a100", topology, collective, instances):
 
         # Ring Reduce Scatter within each node
-        # for n in range(num_nodes):
-        #     for ch in range(0, num_local_gpus):
-        #         for step in range(0, num_local_gpus-1):
-        #             c = chunk(rank(n, ch+step+1), Buffer.input, ch).reduce(rank(n, ch+step+2), Buffer.input, ch)
+        for n in range(num_nodes):
+            for ch in range(0, num_local_gpus):
+                for step in range(0, num_local_gpus-1):
+                    c = chunk(rank(n, ch+step+1), Buffer.input, ch).reduce(rank(n, ch+step+2), Buffer.input, ch, ch=0)
 
         # Allpairs Reduce Scatter within each node
-        for n in range(num_nodes):
-            for g in range(0, num_local_gpus):
-                for ch in range(0, num_local_gpus):
-                    if ch != g:
-                        chunk(rank(n,g), Buffer.input, ch).reduce(rank(n,ch), Buffer.input, ch)
+        # for n in range(num_nodes):
+        #     for g in range(0, num_local_gpus):
+        #         for ch in range(0, num_local_gpus):
+        #             if ch != g:
+        #                 chunk(rank(n,g), Buffer.input, ch).reduce(rank(n,ch), Buffer.input, ch)
         
         # Exchange across IBs
         for ch in range(0, num_local_gpus):
-            chunk(rank(0, ch), Buffer.input, ch).rexchange(rank(1, ch), Buffer.input, ch)
+            chunk(rank(0, ch), Buffer.input, ch).rexchange(rank(1, ch), Buffer.input, ch, ch=ch%2 + 2)
 
         # Ring All gather within each node
         for n in range(num_nodes):
             for ch in range(0, num_local_gpus):
                 for step in range(0, num_local_gpus-1):
-                    chunk(rank(n, ch+step), Buffer.input, ch).send(rank(n, ch+step+1), Buffer.input, ch)
+                    chunk(rank(n, ch+step), Buffer.input, ch).send(rank(n, ch+step+1), Buffer.input, ch, ch=1)
         XML()
         Check()
 
 parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help='number of nodes')
 parser.add_argument('instances', type=int, help='number of instances')
-parser.add_argument('--rs', type='str', default='ring', choices=['ring', 'allpairs'], help='Reduce scatter algorithm')
+parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
+parser.add_argument('--rs', type=str, default='ring', choices=['ring', 'allpairs'], help='Reduce scatter algorithm')
 args = parser.parse_args()
 
 assert args.num_nodes == 2, "Only works for 2 nodes right now"

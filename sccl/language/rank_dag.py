@@ -19,7 +19,7 @@ def remove_op(op):
         n.prev =  op.prev.union(n.prev)
 
 def same_tb(op1, op2):
-    return op1.tb == op2.tb
+    return op1.tb == op2.tb and op1.channel == op2.channel
 
 def same_count(op1, op2):
     return op1.cnt() == op2.cnt()
