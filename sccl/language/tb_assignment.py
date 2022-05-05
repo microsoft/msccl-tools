@@ -61,6 +61,7 @@ def auto_assign_tbs(rank_dag):
     channel_assignment(instrs, rank_dag)
     rank_tbids = [0] * rank_dag.num_ranks
     current_tb_step = []
+    # pending_recvs = defaultdict(list) # (send, recv, ch) -> [recv-ops]
     for rank_tbs in rank_dag.tbs:
         current_tb_step.append({})
 
@@ -68,30 +69,36 @@ def auto_assign_tbs(rank_dag):
         rank = op.rank
         s = op.send_peer()
         r = op.recv_peer()
+
         channel = 0 if op.channel == -1 else op.channel
+        # if op.is_recv() and (r, rank, channel) in pending_recvs:
+        #     pr = pending_recvs[(r, rank, channel)]
+        #     if pr[0] is op:
+        #         del pr[0]
+        #     else:
+        #         # Cannot map this receive to this channel/threadblock
+        #         assert True, f"Violating matching sends and receives {op} {pr[0]}"
+
         # Get all possible TBs this can be mapped to
         tb_options = _get_tb_options(rank_dag.tbs[rank], s, r, channel, rank_tbids[rank])
         if len(tb_options) == 0: # If there are no options, create a new threadblock
             tbid = rank_tbids[rank]
-
             rank_dag.tbs[rank][tbid] = Threadblock(send=s, recv=r, channel=channel)
-            # rank_tb_assignments[rank][(s,r,channel)] = tbid
             rank_tbids[rank] += 1
         else: 
             tbid = tb_options[0]
             for tbid_opt in tb_options:
                 if current_tb_step[rank][tbid_opt] < current_tb_step[rank][tbid] and _verify_tb_op_compatible(rank_dag.tbs[rank][tbid], op):
                     tbid = tbid_opt
-            # if op.chunk_step < current_tb_step[rank][tbid]:
-            #     tbid = rank_tbids[rank]
-            #     rank_dag.tbs[rank][tbid] = Threadblock(send=s, recv=r, channel=channel)
-            #     rank_tbids[rank] += 1
-
+        
         tb = rank_dag.tbs[rank][tbid]
         assert _verify_tb_op_compatible(tb, op), f"Failing: Operations uses channel {op.channel}, send:{s} recv:{r} {op}\n" \
                 f"Threadblock uses send:{tb.send} recv:{tb.recv} channel:{tb.channel}"
 
         rank_dag.num_channels[rank] = max(rank_dag.num_channels[rank], channel+1)
+
+        # if op.is_send():
+        #     pending_recvs[(rank, s, channel)].append(op.recv_match)
 
         tb.ops.append(op)
         tb.send = op.dst.rank if op.is_send() else tb.send
@@ -112,27 +119,23 @@ def topo_sort_instrs(rank_dag):
             visited.add(op)
             for o in op.next:
                 if o.inst == Instruction.send or o.inst == Instruction.copy:
-                    heapq.heappush(ops, ((o.chunk_step, -o.priority, o.dst.index), o))
+                    heapq.heappush(ops, ((-o.priority, o.dst.index), o))
 
     while len(ops) > 0:
         _, op = heapq.heappop(ops)
         if op not in visited:
             rmatch = op.recv_match
 
-            # Delay scheduling the send until the receive is ready
-            if False: # rmatch is not None and not all([o in visited for o in rmatch.prev]):
-                heapq.heappush(ops, ((rmatch.chunk_step-1, -rmatch.priority+1, op.dst.index), op))
-            else:
-                ordered.append(op)
-                visited.add(op)
-                
-                # Add a matching receive if one exists
-                if rmatch is not None : 
-                    heapq.heappush(ops, ((rmatch.chunk_step, -op.priority+1, rmatch.dst.index), rmatch))
-                # Add other operation that has its dependencies satisfied
-                for o in op.next:
-                    if all([x in visited for x in o.prev]):
-                        heapq.heappush(ops, ((o.chunk_step, -o.priority, o.dst.index), o))
+            ordered.append(op)
+            visited.add(op)
+            
+            # Add a matching receive if one exists and it's dependencies are satisfied
+            if rmatch is not None and all([x in visited for x in rmatch.prev]): 
+                heapq.heappush(ops, ((-op.priority+1, rmatch.dst.index), rmatch))
+            # Add other operation that has its dependencies satisfied
+            for o in op.next:
+                if all([x in visited for x in o.prev]):
+                    heapq.heappush(ops, ((-o.priority, o.dst.index), o))
     return ordered
 
 def channel_assignment(instrs, rank_dag):
@@ -152,7 +155,6 @@ def channel_assignment(instrs, rank_dag):
 
     # Returns a channel this flow can be scheduled on, else -1 
     def is_matching_flow(flow):
-        print("h")
         # Exact match
         if flow in flows:
             return flow_channels[flows.index(flow)]

@@ -242,7 +242,7 @@ class Ref(ChunkRef):
 
         return dst_chunkref
 
-    def reduce(self, dst, buffer, index=-1, sendtb=-1, recvtb=-1, ch=0):
+    def reduce(self, dst, buffer, index=-1, sendtb=-1, recvtb=-1, ch=-1):
         self.prog.check_buffer_exists(dst, buffer)
 
         # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
@@ -271,7 +271,7 @@ class Ref(ChunkRef):
         return dst_chunkref
 
     # Efficient exchange without copying to a temporary value
-    def exchange(self, dst, buffer, index, sendtb=-1, recvtb=-1, ch=0):
+    def exchange(self, dst, buffer, index, sendtb=-1, recvtb=-1, ch=-1):
         assert self.rank != dst, "Exchange can only happen be two different ranks"
         self.prog.check_buffer_exists(dst, buffer)
 
@@ -298,7 +298,7 @@ class Ref(ChunkRef):
 
         return None
 
-    def rexchange(self, dst, buffer, index, sendtb=-1, recvtb=-1, ch=0):
+    def rexchange(self, dst, buffer, index, sendtb=-1, recvtb=-1, ch=-1):
         assert self.rank != dst, "RExchange can only happen be two different ranks"
         self.prog.check_buffer_exists(dst, buffer)
 

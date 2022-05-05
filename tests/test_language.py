@@ -207,7 +207,7 @@ def test_instruction_fusion():
     collective = AllReduce(3, 3, True)
     prgm = SCCLProgram("allreduce", topology, collective, 1, threadblock_policy=ThreadblockPolicy.manual)
     with prgm:
-        c = chunk(0, Buffer.input, 0, 3).reduce(1, Buffer.input, 0,sendtb=0, recvtb=0).reduce(2, Buffer.input, 0, sendtb=0, recvtb=0)
+        c = chunk(0, Buffer.input, 0, 3).reduce(1, Buffer.input, 0, sendtb=0, recvtb=0).reduce(2, Buffer.input, 0, sendtb=0, recvtb=0)
         c.send(0, Buffer.input, 0, sendtb=0, recvtb=0).send(1, Buffer.input, 0, sendtb=0, recvtb=0)
         assert Check()
     lowered_prgm = prgm.lower()

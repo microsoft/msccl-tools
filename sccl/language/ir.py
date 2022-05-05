@@ -40,6 +40,7 @@ class Threadblock:
     send: int = -1
     recv: int = -1
     ops: list = field(default_factory=list)
+    rbid: int = -1 # threadblock id of the receiver
 
     def __eq__(self, other):
         return self is other
