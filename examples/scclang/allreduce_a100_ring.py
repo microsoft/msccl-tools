@@ -14,7 +14,7 @@ def allreduce_ring(size, instances, channels, protocol):
     topology = fully_connected(size)
     collective = AllReduce(size, size, True)
     with SCCLProgram(f"allreduce_ring_{channels}channelsperring", topology, collective, instances,
-         protocol=protocol, threadblock_policy=ThreadblockPolicy.manual, interleaved_replication=False):
+         protocol=protocol, threadblock_policy=ThreadblockPolicy.manual):
         # Reduce ring
         for step in range(0, size-1):
             for index in range(0, size):
