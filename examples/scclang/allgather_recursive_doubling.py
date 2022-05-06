@@ -10,7 +10,7 @@ from sccl.language.collectives import AllGather
 def allgather_recursive_doubling(size, instances, protocol):
     topology = fully_connected(size)
     collective = AllGather(size, instances, True)
-    with SCCLProgram("allgather_recursive_doubling", topology, collective, 1, protocol=protocol):
+    with SCCLProgram("allgather_recursive_doubling", topology, collective, 1, protocol=protocol, threadblock_policy=ThreadblockPolicy.manual):
         count = 1
         while count < size:
             # Every rank exchanges count chunks with neighbor count away
@@ -18,7 +18,7 @@ def allgather_recursive_doubling(size, instances, protocol):
                 for i in range(instances):
                     peer = rank ^ count
                     index = ((rank // count) * count) * instances + i * count
-                    chunk(rank, Buffer.output, index, size=count).send(peer, Buffer.output, index) 
+                    chunk(rank, Buffer.output, index, size=count).send(peer, Buffer.output, index, sendtb=peer, recvtb=rank) 
             count *= 2
 
         XML()

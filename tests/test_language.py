@@ -4,6 +4,7 @@
 import sccl
 from sccl.topologies import line, fully_connected
 from sccl.language import *
+from sccl.language.routines import *
 from sccl.language.collectives import *
 import os
 import pytest
@@ -56,9 +57,9 @@ class Reduce(Collective):
 
     # Final state rank2 has a fully reduced chunk from gpus 0, 1, and 2
     def check(self, prog):
-        expected_chunk = ReduceChunk([])
+        expected_chunk = ReduceChunk(-1, [])
         for r in range(self.num_ranks):
-            expected_chunk = expected_chunk.reduce(Chunk(r, 0))
+            expected_chunk = expected_chunk.reduce(-1, Chunk(r, 0))
 
         correct = True
         chunk = prog.buffers[2][Buffer.input][0]
@@ -109,7 +110,26 @@ def test_local_reduce():
     collective = Reduce(num_gpus, chunksperloop, inplace=True)
     with SCCLProgram("local-reduce", topology, collective, instances):
         chunk(0, Buffer.input, 0).reduce(1, Buffer.input, 0).send(2, 'scratch', 0).reduce(2, Buffer.input, 0)
+        XML()
+        assert Check()
 
+def test_exchange():
+    num_gpus = 2
+    topology = line(num_gpus)
+
+    collective = AllToAll(num_gpus, 1, inplace=True)
+    with SCCLProgram("exchange", topology, collective , 1):
+        chunk(0, Buffer.input, 1).exchange(1, Buffer.input, 0)
+        XML()
+        assert Check()
+
+def test_rexchange():
+    num_gpus = 2
+    topology = line(num_gpus)
+
+    collective = AllReduce(num_gpus, 1, inplace=True)
+    with SCCLProgram("rexchange", topology, collective , 1):
+        chunk(0, Buffer.input, 0).rexchange(1, Buffer.input, 0)
         XML()
         assert Check()
 
@@ -127,6 +147,25 @@ def test_scratch_buffers():
         c = chunk(1, Buffer.input, 0).send(2, 'scratch')
         assert c.index == 3
         XML()
+
+def test_program_order():
+    num_gpus = 2
+    topology = fully_connected(num_gpus)
+
+    chunksperloop = num_gpus
+    instances = 1
+    collective = AllReduce(num_gpus, chunksperloop, inplace=False)
+    prgm = SCCLProgram("test", topology, collective, instances)
+    with prgm:
+        chunk(1, Buffer.input, 0).send(0, 'sc', 1)
+        # This send should depend on the send above finishing
+        chunk(0, Buffer.input, 0).send(1, Buffer.input, 0)
+    slot = (1, Buffer.input, 0)
+    prgm.lower()
+    op = prgm.instr_dag.operations[slot]
+    assert op.inst == Instruction.start
+    assert op.next[0].inst == Instruction.send
+    assert op.next[0].next[0].inst == Instruction.recv
 
 def test_allgather():
     topology = fully_connected(2)
@@ -168,7 +207,7 @@ def test_instruction_fusion():
     collective = AllReduce(3, 3, True)
     prgm = SCCLProgram("allreduce", topology, collective, 1, threadblock_policy=ThreadblockPolicy.manual)
     with prgm:
-        c = chunk(0, Buffer.input, 0, 3).reduce(1, Buffer.input, 0,sendtb=0, recvtb=0).reduce(2, Buffer.input, 0, sendtb=0, recvtb=0)
+        c = chunk(0, Buffer.input, 0, 3).reduce(1, Buffer.input, 0, sendtb=0, recvtb=0).reduce(2, Buffer.input, 0, sendtb=0, recvtb=0)
         c.send(0, Buffer.input, 0, sendtb=0, recvtb=0).send(1, Buffer.input, 0, sendtb=0, recvtb=0)
         assert Check()
     lowered_prgm = prgm.lower()
@@ -251,3 +290,54 @@ def test_registered_allreduce():
         allreduce_ring(num_ranks, num_ranks)
         assert Check()
         XML()
+
+def test_routines_allgather_ring_inplace():
+    size = 4
+    topology = fully_connected(size)
+    collective = AllGather(size, 1, True)
+    with SCCLProgram("allgather_ring", topology, collective, 1):
+        allgather_ring_inplace(size)
+        assert Check()
+
+def test_routines_allgather_ring_nodes():
+    size = 8
+    topology = fully_connected(size)
+    collective = AllGather(size, 1, True)
+    with SCCLProgram("allgather_multi", topology, collective, 1):
+        # Two parallel rings [0-4] and [4-8]
+        allgather_ring_inplace(4, 0, 0)
+        allgather_ring_inplace(4, 4, 4)
+        # Exchange between peers (0,4) (1,5) etc.
+        for r in range(0,8):
+            peer = (r+4)%size
+            exchange_index = 0 if r < 4 else 4
+            chunk(r, Buffer.output, exchange_index, 4).send(peer, Buffer.output, exchange_index)
+        assert Check()
+
+def test_routines_allreduce_ring_inplace():
+    size = 4
+    topology = fully_connected(size)
+    collective = AllReduce(size, size, True)
+    with SCCLProgram("allreduce_ring", topology, collective, 1):
+        allreduce_ring_inplace(size)
+        assert Check()
+
+def test_routines_allreduce_nodes():
+    size = 8
+    topology = fully_connected(size)
+    collective = AllReduce(size, size, True)
+    with SCCLProgram("allreduce_multi", topology, collective, 1):
+        # Two parallel rings [0-4] and [4-8]
+        allreduce_ring_inplace(4, 0, 0)
+        allreduce_ring_inplace(4, 0, 4, ch=1)
+
+        allreduce_ring_inplace(4, 4, 4)
+        allreduce_ring_inplace(4, 4, 0, ch=1)
+        # Reduction between peers (0,4) (1,5) etc.
+        for r in range(0,8):
+            peer = (r+4)%size
+            exchange_index = 0 if r < 4 else 4
+            c = chunk(r, Buffer.output, exchange_index, 4).reduce(peer, Buffer.output, exchange_index)
+            c =c.send(r, Buffer.output, exchange_index)
+        XML()
+        assert Check()

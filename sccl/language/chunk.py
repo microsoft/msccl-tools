@@ -12,12 +12,12 @@ class Chunk:
     dst_rank: int = -1
     dst_index: int = -1
 
-    def reduce(self, chunk):
+    def reduce(self, dst, chunk):
         if type(chunk) is ReduceChunk:
-            return chunk.reduce(self)
+            return chunk.reduce(dst, self)
         elif type(chunk) is Chunk:  
             chunks = [self, chunk]
-            return ReduceChunk(chunks)
+            return ReduceChunk(dst, chunks)
         else:
             assert True, "Trying to reduce with chunk of None"
             return None
@@ -34,22 +34,24 @@ class Chunk:
 
 @dataclass
 class ReduceChunk:
+    creation_rank: int # Rank the Reduce Chunk is created. Necessary since the same ReduceChunk can be created on multiple ranks independently
     chunks: list # List of chunks reduced
 
-    def reduce(self, chunk):
+    def reduce(self, dst, chunk):
         if type(chunk) is ReduceChunk:
             chunks = self.chunks + chunk.chunks
         elif type(chunk) is Chunk:  
             chunks =self.chunks + [chunk]
         else:
             assert True, "Trying to reduce with chunk of None"
-        return ReduceChunk(chunks)
+        return ReduceChunk(self.creation_rank, chunks)
 
     def sort(self):
         self.chunks.sort()
 
     def __hash__(self):
-        return hash(tuple(self.chunks))
+        self.sort()
+        return hash((self.creation_rank,) + tuple(self.chunks))
 
     # Two reduce chunks are equal if they contain the same list of
     # chunks being reduced

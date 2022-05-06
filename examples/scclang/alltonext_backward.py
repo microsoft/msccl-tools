@@ -65,14 +65,14 @@ def pipeline(num_nodes, instances):
                         c = chunk(r, Buffer.input, ch)
                         if ch == 0:
                             # 2 steps: IB send to (node-1, g) then gather onto (node+1, num_local_gpus-1)
-                            c = c.send(rank(n-1, ch), 'gather', 0, ch=ch%2)
+                            c = c.send(rank(n-1, ch), f's{n}->{n+1}', 0, ch=ch%2)
                         elif ch == num_local_gpus-1: 
                             # 2 steps: Scatter - send to (node, num_local_gpus-1), IB send to (node+1, num_local_gpus-1)
-                            c = c.send(rank(n, ch), 'scatter', 0, ch=ch%2)
+                            c = c.send(rank(n, ch), f's{n}->{n+1}', 0, ch=ch%2)
                         else:
                             # 3 steps: Scatter - send to (node, g), IB send to (node-1, g), gather onto (node-1, num_local_gpus-1)
-                            c = c.send(rank(n, ch), 'scatter', 0, ch=ch%2)
-                            c = c.send(rank(n-1, ch), 'gather', 0, ch=ch%2)
+                            c = c.send(rank(n, ch), f's{n}->{n+1}', 0, ch=ch%2)
+                            c = c.send(rank(n-1, ch), f's{n}->{n+1}', 0, ch=ch%2)
                         c.send(r-1, Buffer.output, c.get_dst_index(), ch=ch%2)
                         
                 # Normal send - directly

@@ -35,7 +35,6 @@ def allreduce_ring(size, instances, channels, protocol):
         XML()
         Check()
 
-
 parser = argparse.ArgumentParser()
 parser.add_argument('num_gpus', type=int, help ='number of gpus')
 parser.add_argument('channels', type=int, help='Number of channels to use for 1 instance of the ring [1-8]')
