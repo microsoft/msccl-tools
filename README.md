@@ -48,7 +48,7 @@ have benchmarked them to provide speedup over NCCL. To list the algorithms curre
 Each line lists an algorithm registration and the conditions under which it is triggered. For example, the
 `ndv4_alltoall_hierarchical` algorithm will be used with NCCL's lower latency LL128 protocol when:
 - the user has called Alltoall,
-- there are 1, 2, 4 or 8 Azure NDv4 machines, and
+- there are 8, 16, 32 or 64 Azure NDv4 machines, and
 - the data size is from 1 MB to 32 MB.
 
 The repository [parasailteam/sccl-presynth](https://github.com/parasailteam/sccl-presynth) repository offers additional algorithms that have been
