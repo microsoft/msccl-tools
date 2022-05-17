@@ -20,14 +20,14 @@ def allreduce_allpairs(instances):
                 if r1 != r2:
                     index = r2 * 8
                     c = chunk(r1, Buffer.input, index, size=8)
-                    c.send(r2, 'scratch', sendtb=r2, recvtb=r1, ch=0)
+                    c.copy(r2, 'scratch', sendtb=r2, recvtb=r1, ch=0)
 
         # Each rank performs a local reduction on the nth chunk
         # Utilize 8 threadblocks for this reduction for better parallelism
         for r in range(size):
             for index in range(0, 56):
-                    c = chunk(r, 'scratch', index)
-                    c.reduce(r, Buffer.input, r*8 + (index % 8), sendtb=(index % 8), ch=0)
+                    c = chunk(r, Buffer.input, r*8 + (index % 8))
+                    c.reduce(chunk(r, 'scratch', index), sendtb=(index % 8), ch=0)
         
         # Each rank sends the fully reduced nth chunk to all other gpus
         for r1 in range(size):
@@ -35,14 +35,13 @@ def allreduce_allpairs(instances):
                 if r1 != r2:
                     index = r1 * 8
                     c = chunk(r1, Buffer.input, index, 8)
-                    c.send(r2, Buffer.input, index, sendtb=r2, recvtb=r1)
+                    c.copy(r2, Buffer.input, index, sendtb=r2, recvtb=r1)
                 
         XML()
         Check()
 
 parser = argparse.ArgumentParser()
 parser.add_argument('instances', type=int, help='number of instances')
-# parser.add_argument('threadblocks', type=int, default=0, help='number of threadblocks per instance')
 
 args = parser.parse_args()
 

@@ -21,7 +21,9 @@ def allreduce(num_local_gpus, num_nodes, instances, protocol, rs):
         for n in range(num_nodes):
             for ch in range(0, num_local_gpus):
                 for step in range(0, num_local_gpus-1):
-                    c = chunk(rank(n, ch+step+1), Buffer.input, ch).reduce(rank(n, ch+step+2), Buffer.input, ch, ch=0)
+                    c1 = chunk(rank(n, ch+step+1), Buffer.input, ch)
+                    c = chunk(rank(n, ch+step+2), Buffer.input, ch)
+                    c.reduce(c1, ch=0)
 
         # Allpairs Reduce Scatter within each node
         # for n in range(num_nodes):
@@ -38,7 +40,7 @@ def allreduce(num_local_gpus, num_nodes, instances, protocol, rs):
         for n in range(num_nodes):
             for ch in range(0, num_local_gpus):
                 for step in range(0, num_local_gpus-1):
-                    chunk(rank(n, ch+step), Buffer.input, ch).send(rank(n, ch+step+1), Buffer.input, ch, ch=1)
+                    chunk(rank(n, ch+step), Buffer.input, ch).copy(rank(n, ch+step+1), Buffer.input, ch, ch=1)
         XML()
         Check()
 

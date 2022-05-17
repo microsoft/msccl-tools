@@ -18,7 +18,7 @@ def allgather_recursive_doubling(size, instances, protocol):
                 for i in range(instances):
                     peer = rank ^ count
                     index = ((rank // count) * count) * instances + i * count
-                    chunk(rank, Buffer.output, index, size=count).send(peer, Buffer.output, index, sendtb=peer, recvtb=rank) 
+                    chunk(rank, Buffer.output, index, size=count).copy(peer, Buffer.output, index, sendtb=peer, recvtb=rank) 
             count *= 2
 
         XML()

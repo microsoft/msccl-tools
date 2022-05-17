@@ -14,7 +14,7 @@ def alltoall(num_ranks, instances, protocol):
     with SCCLProgram("alltoall_allpairs", topology, collective, instances=instances, protocol=protocol):
         for r in range(num_ranks):
             for index in range(num_ranks):
-                chunk(r, Buffer.input, index).send(index, Buffer.output, r)
+                chunk(r, Buffer.input, index).copy(index, Buffer.output, r)
         XML()
         Check()
 

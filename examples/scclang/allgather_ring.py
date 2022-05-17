@@ -21,7 +21,7 @@ def allgather_ring(size, channels, instances, protocol):
                 c = chunk(rank, Buffer.output, index)
                 next_rank = (index + step + 1) % size
                 channel = index%channels
-                c = c.send(next_rank, Buffer.output, index, sendtb=channel, recvtb=channel, ch=channel)   
+                c = c.copy(next_rank, Buffer.output, index, sendtb=channel, recvtb=channel, ch=channel)   
         XML()
         Check()
 

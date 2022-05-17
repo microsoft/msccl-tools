@@ -61,7 +61,8 @@ class SCCLProgram:
             raise RuntimeError("This program is not currently in context")
         _current_program = None
 
-    def add_send(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
+    # Tracks a send operation on the buffers
+    def apply_send(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
         src_buffer, src_index = self.collective.get_buffer_index(src, src_buffer, src_index)
         dst_buffer, dst_index = self.collective.get_buffer_index(dst, dst_buffer, dst_index)
         sb = self.buffers[src][src_buffer]
@@ -69,7 +70,8 @@ class SCCLProgram:
         for i in range(size):
             db[dst_index + i] = sb[src_index + i]
 
-    def add_reduce(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
+    # Tracks a reduce operation on the buffers
+    def apply_reduce(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
         src_buffer, src_index = self.collective.get_buffer_index(src, src_buffer, src_index)
         dst_buffer, dst_index = self.collective.get_buffer_index(dst, dst_buffer, dst_index)
         sb = self.buffers[src][src_buffer]
@@ -79,7 +81,8 @@ class SCCLProgram:
             sent_chunk = sb[src_index + i]
             db[dst_index + i] = reduce_chunk.reduce(dst, sent_chunk)
 
-    def add_exchange(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
+    # Tracks an exchange operation on the buffers
+    def apply_exchange(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
         src_buffer, src_index = self.collective.get_buffer_index(src, src_buffer, src_index)
         dst_buffer, dst_index = self.collective.get_buffer_index(dst, dst_buffer, dst_index)
         sb = self.buffers[src][src_buffer]
@@ -89,7 +92,8 @@ class SCCLProgram:
             db[dst_index + i] = sb[src_index + i]
             sb[src_index + i] = temp
 
-    def add_rexchange(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
+    # Tracks a rexchange operation on the buffers
+    def apply_rexchange(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
         src_buffer, src_index = self.collective.get_buffer_index(src, src_buffer, src_index)
         dst_buffer, dst_index = self.collective.get_buffer_index(dst, dst_buffer, dst_index)
         sb = self.buffers[src][src_buffer]
@@ -207,8 +211,8 @@ class Ref(ChunkRef):
         end = max(first._end(), second._end())
         return Ref(self.rank, self.buffer, first.index, end - first.index, self.prog)
         
-
-    def send(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=-1):
+    # Copies the chunk(s) referenced by this chunkref onto Rank dst at location (buffer, index)
+    def copy(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=-1):
         self.prog.check_buffer_exists(dst, buffer)
 
         # If index is not specified assume it is going to the same place in the next gpu
@@ -228,7 +232,7 @@ class Ref(ChunkRef):
         chunks = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
         overwritten_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
         
-        self.prog.add_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
+        self.prog.apply_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
         # self.prog.chunk_dag.add_send(chunks, overwritten_chunks, self, dst_chunkref, sendtb, recvtb, ch)
         sender = self.rank
@@ -242,33 +246,34 @@ class Ref(ChunkRef):
 
         return dst_chunkref
 
-    def reduce(self, dst, buffer, index=-1, sendtb=-1, recvtb=-1, ch=-1):
-        self.prog.check_buffer_exists(dst, buffer)
+    # Reduces the chunk(s) referenced by other_chunkref into the chunk(s) referenced by this chunkref
+    def reduce(self, other_chunkref, sendtb=-1, recvtb=-1, ch=-1):
+        # self.prog.check_buffer_exists(dst, buffer)
 
         # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
-        buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
+        # buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
 
         # Receive reduce copy
-        assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
-        dst_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
+        dst = self.rank
+        src = other_chunkref.rank
+        assert (self.prog.topo.link(src, dst) or src == dst), f'No link from {src} to {dst}'
+        # dst_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
 
-        chunks1 = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
-        chunks2 = self.prog.get_chunks(dst, buffer, index, self.size)
+        # chunks1 = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
+        # chunks2 = self.prog.get_chunks(other_chunkref.rank, other_chunkref.buffer, other_chunkref.index self.size)
 
-        self.prog.add_reduce(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
+        self.prog.apply_reduce(src, other_chunkref.buffer, other_chunkref.index, dst, self.buffer, self.index, self.size)
 
-        reduce_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
+        # reduce_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
         # self.prog.chunk_dag.add_reduce(chunks1, chunks2, reduce_chunks, self, dst_chunkref, sendtb, recvtb, ch)
-        sender = self.rank
-        receiver = dst
-        if sender != receiver:
-            sop = self.prog.instr_dag.add_send(sender, self, dst_chunkref, sendtb, ch)
-            rop = self.prog.instr_dag.add_recv_reduce_copy(receiver, self, dst_chunkref, recvtb, ch, sop)
+        if src != dst:
+            sop = self.prog.instr_dag.add_send(src, other_chunkref, self, sendtb, ch)
+            rop = self.prog.instr_dag.add_recv_reduce_copy(dst, other_chunkref, self, recvtb, ch, sop)
             sop.recv_match = rop
         else:
-            self.prog.instr_dag.add_reduce(sender, self, dst_chunkref, sendtb, ch)
+            self.prog.instr_dag.add_reduce(src, other_chunkref, self, sendtb, ch)
 
-        return dst_chunkref
+        return self
 
     # Efficient exchange without copying to a temporary value
     def exchange(self, dst, buffer, index, sendtb=-1, recvtb=-1, ch=-1):
@@ -281,10 +286,7 @@ class Ref(ChunkRef):
         assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
         chunkref2 = self.prog.get_ref(dst, buffer, index, self.size)
 
-        chunks1 = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
-        chunks2 = self.prog.get_chunks(dst, buffer, index, self.size)
-
-        self.prog.add_exchange(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
+        self.prog.apply_exchange(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
         r1 = self.rank
         r2 = dst
@@ -308,10 +310,7 @@ class Ref(ChunkRef):
         assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
         chunkref2 = self.prog.get_ref(dst, buffer, index, self.size)
 
-        chunks1 = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
-        chunks2 = self.prog.get_chunks(dst, buffer, index, self.size)
-
-        self.prog.add_rexchange(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
+        self.prog.apply_rexchange(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
         r1 = self.rank
         r2 = dst

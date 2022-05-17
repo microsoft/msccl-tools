@@ -478,23 +478,23 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     with program:
         for rank, gpu in gpus.items():
             for copy_op in gpu.precopies:
-                chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt).send(rank, copy_op.dst_buf, copy_op.dst_off)
+                chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt).copy(rank, copy_op.dst_buf, copy_op.dst_off)
 
         for step_idx, sends in enumerate(sends_by_step):
             # print(step_idx)
             for src, dst, src_buf, src_off, dst_buf, dst_off, cnt, chan in sends:
                 # print("  ", src, chan, src_buf, src_off, dst, dst_buf, dst_off, cnt)
-                chunk(src, src_buf, src_off, cnt).send(dst, dst_buf, dst_off, ch=chan)
+                chunk(src, src_buf, src_off, cnt).copy(dst, dst_buf, dst_off, ch=chan)
 
         for rank, gpu in gpus.items():
             for copy_op in gpu.postcopies:
-                chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt).send(rank, copy_op.dst_buf, copy_op.dst_off)
+                chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt).copy(rank, copy_op.dst_buf, copy_op.dst_off)
 
         # Add any copies from input to output that weren't already added
         for rank, gpu in gpus.items():
             for addr in gpu.inputs:
                 if addr in gpu.outputs:
-                    chunk(rank, Buffer.input, gpu.inputs[addr]).send(rank, Buffer.output, gpu.outputs[addr])
+                    chunk(rank, Buffer.input, gpu.inputs[addr]).copy(rank, Buffer.output, gpu.outputs[addr])
                     del gpu.outputs[addr]
                     
     return ir_to_xml(program.lower())

@@ -61,7 +61,6 @@ def auto_assign_tbs(rank_dag):
     channel_assignment(instrs, rank_dag)
     rank_tbids = [0] * rank_dag.num_ranks
     current_tb_step = []
-    # pending_recvs = defaultdict(list) # (send, recv, ch) -> [recv-ops]
     for rank_tbs in rank_dag.tbs:
         current_tb_step.append({})
 
@@ -71,13 +70,6 @@ def auto_assign_tbs(rank_dag):
         r = op.recv_peer()
 
         channel = 0 if op.channel == -1 else op.channel
-        # if op.is_recv() and (r, rank, channel) in pending_recvs:
-        #     pr = pending_recvs[(r, rank, channel)]
-        #     if pr[0] is op:
-        #         del pr[0]
-        #     else:
-        #         # Cannot map this receive to this channel/threadblock
-        #         assert True, f"Violating matching sends and receives {op} {pr[0]}"
 
         # Get all possible TBs this can be mapped to
         tb_options = _get_tb_options(rank_dag.tbs[rank], s, r, channel, rank_tbids[rank])
@@ -97,9 +89,6 @@ def auto_assign_tbs(rank_dag):
 
         rank_dag.num_channels[rank] = max(rank_dag.num_channels[rank], channel+1)
 
-        # if op.is_send():
-        #     pending_recvs[(rank, s, channel)].append(op.recv_match)
-
         tb.ops.append(op)
         tb.send = op.dst.rank if op.is_send() else tb.send
         tb.recv = op.src.rank if op.is_recv() else tb.recv
@@ -111,6 +100,9 @@ def auto_assign_tbs(rank_dag):
 # Topologically orders instructions so that (1): Sends occur before their receives
 # (2): Dependent instructions occur before 
 def topo_sort_instrs(rank_dag):
+    def priority(op):
+        return ((op.chunk_step, -op.priority, op.dst.index))
+
     visited = set()
     ops = []
     ordered = []
@@ -119,31 +111,28 @@ def topo_sort_instrs(rank_dag):
             visited.add(op)
             for o in op.next:
                 if o.inst == Instruction.send or o.inst == Instruction.copy:
-                    heapq.heappush(ops, ((-o.priority, o.dst.index), o))
+                    heapq.heappush(ops, (priority(o), o))
 
     while len(ops) > 0:
         _, op = heapq.heappop(ops)
         if op not in visited:
             rmatch = op.recv_match
-
             ordered.append(op)
             visited.add(op)
             
-            # Add a matching receive if one exists and it's dependencies are satisfied
+            # Add a matching receive if one exists and its dependencies are satisfied
             if rmatch is not None and all([x in visited for x in rmatch.prev]): 
-                heapq.heappush(ops, ((-op.priority+1, rmatch.dst.index), rmatch))
-            # Add other operation that has its dependencies satisfied
+                heapq.heappush(ops, (priority(rmatch), rmatch))
+            # Add other operation that have dependencies satisfied
             for o in op.next:
                 if all([x in visited for x in o.prev]):
-                    heapq.heappush(ops, ((-o.priority, o.dst.index), o))
+                    heapq.heappush(ops, (priority(o), o))
     return ordered
 
 def channel_assignment(instrs, rank_dag):
     def all_channels():
         return set([x for x in range(32)])    # First handle flows - if an instruction at Rx is fused Rw->Rx->Ry and takes c
     # Then flow Rw->Rx->Rz must be ib a different channel c' where c!=c'
-    # rank2sendch[rank][x] returns a set of all the available channels for rank -> x (sending from rank)
-    # rank2recvch[rank][x] returns a set of all available channels for x -> rank (receiving on rank)
     rank2sendch = [defaultdict(all_channels) for _ in range(rank_dag.num_ranks)]
     rank2recvch = [defaultdict(all_channels) for _ in range(rank_dag.num_ranks)]
 
@@ -155,6 +144,8 @@ def channel_assignment(instrs, rank_dag):
 
     # Returns a channel this flow can be scheduled on, else -1 
     def is_matching_flow(flow):
+        # print(flows)
+        # print(flow)
         # Exact match
         if flow in flows:
             return flow_channels[flows.index(flow)]
@@ -216,3 +207,30 @@ def channel_assignment(instrs, rank_dag):
     for op in instrs:
         if op.inst == Instruction.send and op.recv_match.is_fused():
             dfs(op, all_channels(), [])
+
+    # Iterate through and make certain the sends and receives between a pair of GPUs is consistent
+    # Shift a (s,r) pair to another channel if the ordering isn't consistent
+    repeat = True
+    while repeat:
+        repeat = False
+        pending_recv = defaultdict(list)  # (sender, receiver, ch) -> pending receive
+        for op in instrs:
+            rank = op.rank
+            channel = 0 if op.channel == -1 else op.channel
+            if op.is_send():
+                dst = op.dst.rank
+                pending_recv[(rank, dst, channel)].append(op.recv_match)
+            
+            if op.is_recv():
+                src = op.src.rank
+                pr = pending_recv[(src, rank, channel)]
+                if op in pr:
+                    if pr[0] is op:
+                        del pr[0]
+                    else:
+                        repeat = True
+                        op.channel += 1
+                        op.send_match.channel += 1
+                        pr.remove(op)
+
+

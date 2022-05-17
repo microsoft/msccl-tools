@@ -27,8 +27,9 @@ def allreduce(ways, instances, protocol):
                 block = 2 ** pairs
                 for x in range(count):
                     index = current_index[r] + offset + lc*8 + x
-                    c = chunk(r, Buffer.input, index)
-                    c.reduce(next, Buffer.input, index, ch=lc, sendtb=sendtb, recvtb=recvtb)
+                    c1 = chunk(r, Buffer.input, index)
+                    c = chunk(next, Buffer.input, index)
+                    c.reduce(c1 ch=lc, sendtb=sendtb, recvtb=recvtb)
 
 
         # Propagates reduced chunks in reverse order 
@@ -40,7 +41,7 @@ def allreduce(ways, instances, protocol):
                 next_index[r] -= offset
                 index = current_index[r] + lc*8
                 c = chunk(r, Buffer.input, index, count)
-                c.send(next, Buffer.input, index, ch=lc, sendtb=sendtb, recvtb=recvtb)
+                c.copy(next, Buffer.input, index, ch=lc, sendtb=sendtb, recvtb=recvtb)
 
         next_index = [0] * 8
         recursive_doubling(1, 4, next_index, 0, 0, 1)

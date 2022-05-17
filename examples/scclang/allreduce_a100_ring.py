@@ -19,10 +19,10 @@ def allreduce_ring(size, instances, channels, protocol):
         for step in range(0, size-1):
             for index in range(0, size):
                 rank = (index + step) % size
-                c = chunk(rank, Buffer.input, index)
                 next_rank = (index + step + 1) % size
                 channel = index%channels
-                c = c.reduce(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
+                c = chunk(next_rank, Buffer.input, index)
+                c.reduce(chunk(rank, Buffer.input, index), ch=channel, recvtb=channel, sendtb=channel)
         # Propagate ring
         for step in range(-1, size-2):
             for index in range(0, size):
@@ -30,7 +30,7 @@ def allreduce_ring(size, instances, channels, protocol):
                 c = chunk(rank, Buffer.input, index)
                 next_rank = (index + step + 1) % size
                 channel = index%channels
-                c = c.send(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
+                c = c.copy(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
                
         XML()
         Check()

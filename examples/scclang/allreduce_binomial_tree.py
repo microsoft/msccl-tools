@@ -18,7 +18,8 @@ def allreduce_binomial_tree(size, instances, trees, protocol):
             # Reduce onto the left neighbor that is distance away
             for rank in range(0, size, distance*2):
                 peer = rank + distance
-                chunk(peer, Buffer.input, 0).reduce(rank, Buffer.input, 0)
+                c1 = chunk(peer, Buffer.input, 0)
+                chunk(rank, Buffer.input).reduce(c1, 0)
             distance *= 2
         # Broadcast tree - root is Rank 0
         distance = distance // 2
@@ -26,7 +27,7 @@ def allreduce_binomial_tree(size, instances, trees, protocol):
             # Copy to the right neighbor that is distance away
             for rank in range(0, size, distance*2):
                 peer = rank + distance
-                chunk(rank, Buffer.input, 0).send(peer, Buffer.input, 0)
+                chunk(rank, Buffer.input, 0).copy(peer, Buffer.input, 0)
             distance = distance // 2
 
         # Mirrored version of the tree
@@ -37,7 +38,8 @@ def allreduce_binomial_tree(size, instances, trees, protocol):
                 # Reduce onto the right neighbor that is distance away
                 for rank in range(size-1, 0, -distance*2):
                     peer = rank - distance
-                    chunk(peer, Buffer.input, 1).reduce(rank, Buffer.input, 1)
+                    c1 = chunk(peer, Buffer.input, 1)
+                    chunk(rank, Buffer.input, 1).reduce(c1)
                 distance *= 2
             # Broadcast tree - root is Rank N-1
             distance = distance // 2
@@ -45,7 +47,7 @@ def allreduce_binomial_tree(size, instances, trees, protocol):
                 # Copy to the left neighbor that is distance away
                 for rank in range(size-1, 0, -distance*2):
                     peer = rank - distance
-                    chunk(rank, Buffer.input, 1).send(peer, Buffer.input, 1)
+                    chunk(rank, Buffer.input, 1).copy(peer, Buffer.input, 1)
                 distance = distance // 2
 
         XML()
