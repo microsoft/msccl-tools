@@ -144,8 +144,6 @@ def channel_assignment(instrs, rank_dag):
 
     # Returns a channel this flow can be scheduled on, else -1 
     def is_matching_flow(flow):
-        # print(flows)
-        # print(flow)
         # Exact match
         if flow in flows:
             return flow_channels[flows.index(flow)]

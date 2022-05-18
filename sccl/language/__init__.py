@@ -229,8 +229,12 @@ class Ref(ChunkRef):
         assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
         dst_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
 
-        chunks = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
-        overwritten_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
+        # Check if we are copying the chunk to the same index (easy mistake when we are using inplace)
+        if dst_chunkref == self:
+            return
+
+        # chunks = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
+        # overwritten_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
         
         self.prog.apply_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 

@@ -14,7 +14,7 @@ def allreduce_ring(size, instances):
     topology = fully_connected(size)
     collective = AllReduce(size, size, inplace=True)
 
-    with SCCLProgram("allreduce_ring_inplace", topology, collective, 1, instr_fusion=False):
+    with SCCLProgram("allreduce_ring_inplace", topology, collective, instances):
         for r in range(size):
             index = r
             # (rank, buffer, index)
