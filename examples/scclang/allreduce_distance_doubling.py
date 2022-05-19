@@ -11,14 +11,13 @@ def allreduce_distance_doubling(size, instances, protocol):
     topology = fully_connected(size)
     collective = AllReduce(size, 1, True)
     with SCCLProgram("allreduce_distance_doubling", topology, collective, instances, protocol=protocol):
-        # TODO: We cannot express this algorithm - language sees a reduce as an atomic operation not (send, rrc)
-        # where two reduces between the same slots on different ranks can happen simultenously because the
-        # sends can be issued simultenously
         distance = 1
         while distance < size:
-            for rank in range(size):
+            for rank in range(0, size):
                 peer = rank ^ distance
-                chunk(rank, Buffer.output, 0).reduce(peer, Buffer.output, 0) 
+                # chunk(peer, Buffer.output, 0).reduce(chunk(rank, Buffer.output, 0))
+                if peer < rank:
+                    chunk(peer, Buffer.output, 0).rexchange(rank, Buffer.output, 0)
             distance *= 2
 
         XML()

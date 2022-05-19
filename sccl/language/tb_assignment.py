@@ -148,9 +148,9 @@ def channel_assignment(instrs, rank_dag):
         if flow in flows:
             return flow_channels[flows.index(flow)]
         # Check if this flow is a subset of an existing flow
-        for existing_flow in flows:
-            if flow.issubset(existing_flow):
-                return flows_channels[flows.index(existing_flow)]
+        # for existing_flow in flows:
+        #     if flow.issubset(existing_flow):
+        #         return flow_channels[flows.index(existing_flow)]
         # No match
         return -1
 

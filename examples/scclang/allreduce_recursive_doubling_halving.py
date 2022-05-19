@@ -15,7 +15,7 @@ def reduce_scatter_vector_halving_distance_doubling(size):
             peer = rank ^ count
             index = ((peer // count) * count)
             c1 = chunk(rank, Buffer.input, index, size=count)
-            chunk(peer, Buffer.output, index)reduce(c1, sendtb=peer, recvtb=rank, ch=0)
+            chunk(peer, Buffer.output, index, size=count).reduce(c1, sendtb=peer, recvtb=rank, ch=0)
         count //= 2
 
 def allgather_recursive_vector_doubling_distance_halving(size):
