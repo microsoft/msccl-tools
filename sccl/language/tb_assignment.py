@@ -68,9 +68,7 @@ def auto_assign_tbs(rank_dag):
         rank = op.rank
         s = op.send_peer()
         r = op.recv_peer()
-
         channel = 0 if op.channel == -1 else op.channel
-
         # Get all possible TBs this can be mapped to
         tb_options = _get_tb_options(rank_dag.tbs[rank], s, r, channel, rank_tbids[rank])
         if len(tb_options) == 0: # If there are no options, create a new threadblock
@@ -144,14 +142,8 @@ def channel_assignment(instrs, rank_dag):
 
     # Returns a channel this flow can be scheduled on, else -1 
     def is_matching_flow(flow):
-        # Exact match
         if flow in flows:
             return flow_channels[flows.index(flow)]
-        # Check if this flow is a subset of an existing flow
-        # for existing_flow in flows:
-        #     if flow.issubset(existing_flow):
-        #         return flow_channels[flows.index(existing_flow)]
-        # No match
         return -1
 
     def reserve_channel(sender, receiver, ch):
