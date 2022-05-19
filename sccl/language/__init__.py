@@ -23,7 +23,7 @@ def _curr():
 class SCCLProgram:
     def __init__(self, name, topo, collective, instances, protocol='Simple', \
             threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True,
-            instr_fusion=True, check_xml=True, DAG_preprocess_func=None):
+            instr_fusion=True, check_xml=True, dependence_nop=False):
         self.name = name
         self.topo = topo
         self.collective = collective       
@@ -34,7 +34,7 @@ class SCCLProgram:
         self.interleaved_replication = interleaved_replication
         self.instr_fusion = instr_fusion
         self.check_xml = check_xml
-        self.DAG_preprocess_func = DAG_preprocess_func
+        self.dependence_nop = dependence_nop
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
         self.run_opt = True # Runs optimization passes
@@ -81,29 +81,6 @@ class SCCLProgram:
             sent_chunk = sb[src_index + i]
             db[dst_index + i] = reduce_chunk.reduce(dst, sent_chunk)
 
-    # Tracks an exchange operation on the buffers
-    def apply_exchange(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
-        src_buffer, src_index = self.collective.get_buffer_index(src, src_buffer, src_index)
-        dst_buffer, dst_index = self.collective.get_buffer_index(dst, dst_buffer, dst_index)
-        sb = self.buffers[src][src_buffer]
-        db = self.buffers[dst][dst_buffer]
-        for i in range(size):
-            temp = db[dst_index + i]
-            db[dst_index + i] = sb[src_index + i]
-            sb[src_index + i] = temp
-
-    # Tracks a rexchange operation on the buffers
-    def apply_rexchange(self, src, src_buffer, src_index, dst, dst_buffer, dst_index, size):
-        src_buffer, src_index = self.collective.get_buffer_index(src, src_buffer, src_index)
-        dst_buffer, dst_index = self.collective.get_buffer_index(dst, dst_buffer, dst_index)
-        sb = self.buffers[src][src_buffer]
-        db = self.buffers[dst][dst_buffer]
-        for i in range(size):
-            reduce_chunk = db[dst_index + i]
-            sent_chunk = sb[src_index + i]
-            db[dst_index + i] = reduce_chunk.reduce(dst, sent_chunk)
-            sb[dst_index + i] = sent_chunk.reduce(src, reduce_chunk)
-
     def get_ref(self, rank, buffer, index, size):
         buffer, index = self.collective.get_buffer_index(rank, buffer, index)
         return Ref(rank, buffer, index, size, self)
@@ -135,22 +112,23 @@ class SCCLProgram:
         if self.instr_fusion:
             self.instr_dag.optimize()
         self.instr_dag._complete_metadata()
-        if self.DAG_preprocess_func != None:
-            self.DAG_preprocess_func(self.instr_dag)
-            manual_assign_tbs(self.instr_dag)
-        elif self.threadblock_policy == ThreadblockPolicy.manual:
+        if self.threadblock_policy == ThreadblockPolicy.manual:
             manual_assign_tbs(self.instr_dag)
         else:
             auto_assign_tbs(self.instr_dag)
         self.instr_dag.lower_pt1(self.instances)
         gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
         if self.check_xml:
-            # Check generated SCCL-EF for correctness - no circular dependencies, sends and receives are ordered
+            # Check generated SCCL-IR for correctness - no circular dependencies, sends and receives are ordered
             # For very large programs, turn off check_xml when shipping 
             check_dependency_cycles(self.instr_dag.tbs)
             check_threadblock_ordering(self.instr_dag)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
 
+    def generate_xml(self):
+        print("here")
+        return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop)
+    
     def print_chunk_dag(self):
         visualize_chunk_dag(self.chunk_dag.chunk_paths)
 
@@ -171,7 +149,7 @@ def create_scratch(rank, name):
     return _curr().create_scratch(rank, name)
 
 def XML():
-   print(ir_to_xml(_curr().lower()))
+   print(_curr().generate_xml())
 
 def Check():
     return _curr().check()
@@ -278,56 +256,6 @@ class Ref(ChunkRef):
             self.prog.instr_dag.add_reduce(src, other_chunkref, self, sendtb, ch)
 
         return self
-
-    # Efficient exchange without copying to a temporary value
-    def exchange(self, dst, buffer, index, sendtb=-1, recvtb=-1, ch=-1):
-        assert self.rank != dst, "Exchange can only happen be two different ranks"
-        self.prog.check_buffer_exists(dst, buffer)
-
-        # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
-        buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
-
-        assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
-        chunkref2 = self.prog.get_ref(dst, buffer, index, self.size)
-
-        self.prog.apply_exchange(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
-
-        r1 = self.rank
-        r2 = dst
-        sop1 = self.prog.instr_dag.add_send(r1, self, chunkref2, sendtb, ch)
-        sop2 = self.prog.instr_dag.add_send(r2, chunkref2, self, sendtb, ch)
-
-        rop1 = self.prog.instr_dag.add_recv(r2, self, chunkref2, recvtb, ch, sop1)
-        sop1.recv_match = rop1
-        rop2 = self.prog.instr_dag.add_recv(r1, chunkref2, self, recvtb, ch, sop2)
-        sop2.recv_match = rop2
-
-        return None
-
-    def rexchange(self, dst, buffer, index, sendtb=-1, recvtb=-1, ch=-1):
-        assert self.rank != dst, "RExchange can only happen be two different ranks"
-        self.prog.check_buffer_exists(dst, buffer)
-
-        # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
-        buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
-
-        assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
-        chunkref2 = self.prog.get_ref(dst, buffer, index, self.size)
-
-        self.prog.apply_rexchange(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
-
-        r1 = self.rank
-        r2 = dst
-        sop1 = self.prog.instr_dag.add_send(r1, self, chunkref2, sendtb, ch)
-        sop2 = self.prog.instr_dag.add_send(r2, chunkref2, self, sendtb, ch)
-
-        rop1 = self.prog.instr_dag.add_recv_reduce_copy(r2, self, chunkref2, recvtb, ch, sop1)
-        sop1.recv_match = rop1
-        rop2 = self.prog.instr_dag.add_recv_reduce_copy(r1, chunkref2, self, recvtb, ch, sop2)
-        sop2.recv_match = rop2
-
-        return None
-
 
     def get_origin_index(self, index=0):
         return self._get_chunk(index + self.index).origin_index

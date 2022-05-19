@@ -12,7 +12,7 @@ def allreduce_allpairs(gpus, instances, protocol):
     topology = fully_connected(size)
     collective = AllReduce(size, chunksperloop, True)
     with SCCLProgram("allreduce_pairs", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=False, threadblock_policy=ThreadblockPolicy.manual):
+        interleaved_replication=False, threadblock_policy=ThreadblockPolicy.manual, dependence_nop=True):
         
         # Each rank sends the nth chunk to the nth rank into scratch space
         for r1 in range(size):

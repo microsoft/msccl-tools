@@ -208,7 +208,7 @@ _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.re
                     Instruction.recv_reduce_copy_send}
 
 
-def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True):
+def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
     # Figure out sizes of buffers based on usage
     buffer_sizes = defaultdict(lambda: 0)
     for gpu in program.gpus:
@@ -261,34 +261,34 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
             for op in tb.ops:
                 has_dependence.update(op.depends)
 
-    # Temp hack - expand deps into nop
-    for gpu in program.gpus:
-        for tb in gpu.threadblocks:
-            pre_ops = []
-            after_ops = []
-            first_re = None
-            first_dep = None
-            for i, op in enumerate(tb.ops):
-                # Expand extra dependencies into nop operations
-                num_depends = len(op.depends)
-                if op.inst is Instruction.reduce:
-                    if num_depends > 0:
-                        for dep in op.depends:
-                            if first_dep is None:
-                                first_dep = dep
-                            else:    
-                                pre_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
-                        op.depends = []
-                    if first_re is None:
-                        first_re = op
+    if dependence_nop:
+        for gpu in program.gpus:
+            for tb in gpu.threadblocks:
+                pre_ops = []
+                after_ops = []
+                first_re = None
+                first_dep = None
+                for i, op in enumerate(tb.ops):
+                    # Expand extra dependencies into nop operations
+                    num_depends = len(op.depends)
+                    if op.inst is Instruction.reduce:
+                        if num_depends > 0:
+                            for dep in op.depends:
+                                if first_dep is None:
+                                    first_dep = dep
+                                else:    
+                                    pre_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
+                            op.depends = []
+                        if first_re is None:
+                            first_re = op
 
-                if first_re is not None:
-                    after_ops.append(op)
-                else:
-                    pre_ops.append(op)
-            if first_dep is not None:
-                first_re.depends = [first_dep]
-            tb.ops = pre_ops + after_ops
+                    if first_re is not None:
+                        after_ops.append(op)
+                    else:
+                        pre_ops.append(op)
+                if first_dep is not None:
+                    first_re.depends = [first_dep]
+                tb.ops = pre_ops + after_ops
 
     # Do some additional postprocessing of operations:
     # - Expand operations with extra dependencies with no-ops
