@@ -58,8 +58,8 @@ def custom_example1():
         # Can specify the sender's tb, receiver's tb, and channel for the send operation
         # SCCLang provides a default threadblock assignment if they aren't specified
         # SCCLang will also check the tb/channel combos are valid
-        c.send(1, buffer=Buffer.output, index=0, sendtb=1, recvtb=1, ch=0)
-        c.send(2, buffer=Buffer.output, index=0, sendtb=2, recvtb=1, ch=1)
+        c.copy(1, buffer=Buffer.output, index=0, sendtb=1, recvtb=1, ch=0)
+        c.copy(2, buffer=Buffer.output, index=0, sendtb=2, recvtb=1, ch=1)
 
         XML() # Generates the XML for this collective
         Check() # Checks the routes defined for each chunk are correct. Currently doesn't check XML correct
@@ -75,8 +75,8 @@ def custom_example2():
         # This is the same program as above but instead of rank 0 sending to 1 and 2
         # 0 sends to 1 which sends to 2
         # send returns the chunk on the receiver's side
-        c = c.send(1, buffer=Buffer.output, index=0, sendtb=1, recvtb=1, ch=0)
-        c.send(2, buffer=Buffer.output, index=0, sendtb=2, recvtb=1, ch=1)
+        c = c.copy(1, buffer=Buffer.output, index=0, sendtb=1, recvtb=1, ch=0)
+        c.copy(2, buffer=Buffer.output, index=0, sendtb=2, recvtb=1, ch=1)
 
         XML()
         Check() 
