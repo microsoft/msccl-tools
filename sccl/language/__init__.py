@@ -189,8 +189,15 @@ class Ref(ChunkRef):
         return Ref(self.rank, self.buffer, first.index, end - first.index, self.prog)
         
     # Copies the chunk(s) referenced by this chunkref onto Rank dst at location (buffer, index)
-    def copy(self, dst, buffer, index, sendtb=-1, recvtb=-1, ch=-1):
+    def copy(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=-1):
         self.prog.check_buffer_exists(dst, buffer)
+
+        # If index is not specified assume it is going to the same place in the next gpu
+        if index == -1 and buffer == None:
+            index = self.index
+            buffer = self.buffer
+        elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
+            index = self.prog.buffers[dst][buffer].instance_size()
 
         # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
         buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)

@@ -13,13 +13,12 @@ from sccl.language.collectives import AllReduce
 def allreduce_ring(size, channels):   
     # Reduce ring
     for step in range(0, size-1):
-        for index in range(0, size):
-            rank = (index + step) % size
-            c1 = chunk(rank, Buffer.input, index)
-            next_rank = (index + step + 1) % size
-            channel = index%channels
-            c = chunk(next_rank, Buffer.input, index)
-            c.reduce(c1, ch=channel, recvtb=channel, sendtb=channel)
+            for index in range(0, size):
+                rank = (index + step) % size
+                next_rank = (index + step + 1) % size
+                channel = index%channels
+                c = chunk(next_rank, Buffer.input, index)
+                c.reduce(chunk(rank, Buffer.input, index), ch=channel, recvtb=channel, sendtb=channel)
     # Propagate ring
     for step in range(-1, size-2):
         for index in range(0, size):
