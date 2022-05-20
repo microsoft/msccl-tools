@@ -21,6 +21,18 @@ class Gpu:
     rank: int
     threadblocks: list = field(default_factory=list)
 
+    # From ncclize
+    precopies: list = field(default_factory=list)
+    postcopies: list = field(default_factory=list)
+    inputs: dict = field(default_factory=dict)
+    outputs: dict = field(default_factory=dict)
+    input_chunks: int = 0
+    output_chunks: int = 0
+    scratch: dict = field(default_factory=dict)
+
+    def scratch_size(self):
+        return max((idx for addr, idx in self.scratch.items()), default=-1) + 1
+
 
 @dataclass
 class Threadblock:
@@ -28,6 +40,7 @@ class Threadblock:
     send: int = -1
     recv: int = -1
     ops: list = field(default_factory=list)
+    rbid: int = -1 # threadblock id of the receiver
 
     def __eq__(self, other):
         return self is other
@@ -78,6 +91,13 @@ class Buffer(Enum):
     def __str__(self):
         return self.value
 
+    def __lt__(self, other):
+        return self.value < other.value
+    
+    def __gt__(self, other):
+        return self.value < other.value
+
+
 
 @dataclass
 class ChunkRef:
@@ -99,12 +119,13 @@ class Op:
     depends: list = field(default_factory=list)
     step: int = -1 # Step in the TB
     tb: int = -1 # TB this op is assigned to
-    prev: list = field(default_factory=list)
-    next: list = field(default_factory=list)
+    prev: list = field(default_factory=list) # List of instructions that happen before
+    next: list = field(default_factory=list) # List of instructions that happen after
     num: int = -1
     chunk_step: int = -1
     priority: int = -1
-    match: list = field(default_factory=list) # This should be another Op
+    recv_match =  None
+    send_match =  None
     channel: int = -1
 
     def cnt(self):
@@ -129,6 +150,33 @@ class Op:
             self.inst == Instruction.recv_reduce_copy_send or \
             self.inst == Instruction.recv_copy_send or \
             self.inst == Instruction.recv_reduce_send
+
+    def is_fused(self):
+        return self.inst == Instruction.recv_reduce_copy_send or \
+            self.inst == Instruction.recv_copy_send or \
+            self.inst == Instruction.recv_reduce_send
+
+    def is_local(self):
+        return self.inst == Instruction.copy or \
+            self.inst == Instruction.reduce
+
+    def peer(self):
+        if self.inst == Instruction.send:
+            return self.dst.rank
+        elif self.inst == Instruction.recv:
+            return self.src.rank
+        else:
+            return None
+
+    def send_peer(self):
+        if self.is_send():
+            return self.dst.rank
+        return -1
+    
+    def recv_peer(self):
+        if self.is_recv():
+            return self.src.rank
+        return -1
 
     def __eq__(self, other):
         return self is other
@@ -160,7 +208,7 @@ _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.re
                     Instruction.recv_reduce_copy_send}
 
 
-def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True):
+def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
     # Figure out sizes of buffers based on usage
     buffer_sizes = defaultdict(lambda: 0)
     for gpu in program.gpus:
@@ -213,6 +261,35 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
             for op in tb.ops:
                 has_dependence.update(op.depends)
 
+    if dependence_nop:
+        for gpu in program.gpus:
+            for tb in gpu.threadblocks:
+                pre_ops = []
+                after_ops = []
+                first_re = None
+                first_dep = None
+                for i, op in enumerate(tb.ops):
+                    # Expand extra dependencies into nop operations
+                    num_depends = len(op.depends)
+                    if op.inst is Instruction.reduce:
+                        if num_depends > 0:
+                            for dep in op.depends:
+                                if first_dep is None:
+                                    first_dep = dep
+                                else:    
+                                    pre_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
+                            op.depends = []
+                        if first_re is None:
+                            first_re = op
+
+                    if first_re is not None:
+                        after_ops.append(op)
+                    else:
+                        pre_ops.append(op)
+                if first_dep is not None:
+                    first_re.depends = [first_dep]
+                tb.ops = pre_ops + after_ops
+
     # Do some additional postprocessing of operations:
     # - Expand operations with extra dependencies with no-ops
     # - Mark the index of each operation taking any extra no-ops into account
@@ -233,12 +310,17 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                 op_idx[new_ops[-1]] = len(new_ops) - 1
             tb.ops = new_ops
 
+    nchannels = 0
+    for gpu in program.gpus:
+        max_tb_channels = 0
+        if len(gpu.threadblocks) > 0:
+            max_tb_channels = max(tb.channel+1 for tb in gpu.threadblocks)
+        nchannels = max(nchannels, max_tb_channels)
     # Generate the XML structure
     algo_elem = ET.Element('algo')
     algo_elem.set('name', program.name)
     algo_elem.set('proto', program.protocol)
-    algo_elem.set('nchannels', str(
-        1 + max(max(tb.channel for tb in gpu.threadblocks) for gpu in program.gpus)))
+    algo_elem.set('nchannels', str(nchannels))
     if old_format:
         algo_elem.set('nchunksperloop', str(
             max(max(buffer_sizes[(gpu.rank, Buffer.input)], buffer_sizes[(gpu.rank, Buffer.output)]) for gpu in program.gpus)))
@@ -248,9 +330,9 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     for gpu in program.gpus:
         gpu_elem = ET.SubElement(algo_elem, 'gpu')
         gpu_elem.set('id', str(gpu.rank))
-        gpu_elem.set('i_chunks', str(buffer_sizes[(gpu.rank, Buffer.input)]))
-        gpu_elem.set('o_chunks', str(buffer_sizes[(gpu.rank, Buffer.output)]))
-        gpu_elem.set('s_chunks', str(buffer_sizes[(gpu.rank, Buffer.scratch)]))
+        gpu_elem.set('i_chunks', str(max(buffer_sizes[(gpu.rank, Buffer.input)], gpu.input_chunks)))
+        gpu_elem.set('o_chunks', str(max(buffer_sizes[(gpu.rank, Buffer.output)], gpu.output_chunks)))
+        gpu_elem.set('s_chunks', str(max(buffer_sizes[(gpu.rank, Buffer.scratch)], gpu.scratch_size())))
         for tb in gpu.threadblocks:
             tb_elem = ET.SubElement(gpu_elem, 'tb')
             tb_elem.set('id', str(tb_id[tb]))

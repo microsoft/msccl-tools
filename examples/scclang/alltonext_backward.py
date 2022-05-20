@@ -59,26 +59,26 @@ def pipeline(num_nodes, instances):
                 if r == 0:
                     continue
 
-                # Cross node send - cooperative
+                # Cross node copy - cooperative
                 if g == 0:
                     for ch in range(chunks):
                         c = chunk(r, Buffer.input, ch)
                         if ch == 0:
-                            # 2 steps: IB send to (node-1, g) then gather onto (node+1, num_local_gpus-1)
-                            c = c.send(rank(n-1, ch), 'gather', 0, ch=ch%2)
+                            # 2 steps: IB copy to (node-1, g) then gather onto (node+1, num_local_gpus-1)
+                            c = c.copy(rank(n-1, ch), f's{n}->{n+1}', 0, ch=ch%2)
                         elif ch == num_local_gpus-1: 
-                            # 2 steps: Scatter - send to (node, num_local_gpus-1), IB send to (node+1, num_local_gpus-1)
-                            c = c.send(rank(n, ch), 'scatter', 0, ch=ch%2)
+                            # 2 steps: Scatter - copy to (node, num_local_gpus-1), IB copy to (node+1, num_local_gpus-1)
+                            c = c.copy(rank(n, ch), f's{n}->{n+1}', 0, ch=ch%2)
                         else:
-                            # 3 steps: Scatter - send to (node, g), IB send to (node-1, g), gather onto (node-1, num_local_gpus-1)
-                            c = c.send(rank(n, ch), 'scatter', 0, ch=ch%2)
-                            c = c.send(rank(n-1, ch), 'gather', 0, ch=ch%2)
-                        c.send(r-1, Buffer.output, c.get_dst_index(), ch=ch%2)
+                            # 3 steps: Scatter - copy to (node, g), IB copy to (node-1, g), gather onto (node-1, num_local_gpus-1)
+                            c = c.copy(rank(n, ch), f's{n}->{n+1}', 0, ch=ch%2)
+                            c = c.copy(rank(n-1, ch), f's{n}->{n+1}', 0, ch=ch%2)
+                        c.copy(r-1, Buffer.output, c.get_dst_index(), ch=ch%2)
                         
-                # Normal send - directly
+                # Normal copy - directly
                 else:
                     c = chunk(r, Buffer.input, 0, chunks)
-                    c.send(r-1, Buffer.output, 0, ch=g%2)
+                    c.copy(r-1, Buffer.output, 0, ch=g%2)
         
         Check()
         XML()

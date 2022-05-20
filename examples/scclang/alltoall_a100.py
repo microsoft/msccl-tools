@@ -62,13 +62,13 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
         #                         buffer_key = (n1, n2)
         #                         # Send chunk to the gather_rank. Send returns a chunk reference to the 
         #                         # receiver's chunk
-        #                         c = c.send(gather_rank, buffer=buffer_key, ch=ch)
+        #                         c = c.copy(gather_rank, buffer=buffer_key, ch=ch)
         #                         # Group the chunks using a particular IB pair into one large chunk reference
         #                         AddChunk(ib_chunks, buffer_key, c) 
         #                     else:
-        #                         # Directly send chunks destined for ranks within the node or
+        #                         # Directly copy chunks destined for ranks within the node or
         #                         # copy chunks destined for current rank into the output buffer
-        #                         c.send(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch)
+        #                         c.copy(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch)
 
         for n1 in range(num_nodes):
             for g1 in range(gpus_per_node):
@@ -83,17 +83,17 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
                             buffer_key = (n1, n2)
                             # Send chunk to the gather_rank. Send returns a chunk reference to the 
                             # receiver's chunk
-                            c = c.send(gather_rank, buffer=buffer_key, ch=ch*2)
+                            c = c.copy(gather_rank, buffer=buffer_key, ch=ch*2)
                             # Group the chunks using a particular IB pair into one large chunk reference
                             AddChunk(ib_chunks, buffer_key, c) 
                         else:
-                            # Within a node - direct send/copy the chunks over nvlink to the output buffer. 
-                            # Use a different channel to ensure that we don't get in the way of sends/receives above
+                            # Within a node - direct copy/copy the chunks over nvlink to the output buffer. 
+                            # Use a different channel to ensure that we don't get in the way of copys/receives above
                             # which are on the critical path.
                             for g2 in range(gpus_per_node):
                                 r2 = RankFromNodeGpuPair(n2, g2)
                                 c = chunk(r1, Buffer.input, r2 * instances + ch)
-                                c.send(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch*2)
+                                c.copy(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch*2)
 
                     
 
@@ -101,23 +101,23 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
         for buffer_key, ib_chunk in ib_chunks.items(): 
             (n1, n2) = buffer_key
             _, scatter_rank = CrossNodeGpus(n1, n2)
-            # IB send divided across multiple parallel channels
+            # IB copy divided across multiple parallel channels
             chunks = ib_chunk.split(ib_connections)
             for ch, c in enumerate(chunks):
-                # Note: If we are only going to use 1 IB connection for each IB send
+                # Note: If we are only going to use 1 IB connection for each IB copy
                 # alternate between channels 0 and 1 to utilize both IB links.
                 if ib_connections == 1:
                     ib_channel = c.rank % 2
                 else:
                     ib_channel = ch
-                c = c.send(scatter_rank, buffer=buffer_key, ch=ib_channel)
+                c = c.copy(scatter_rank, buffer=buffer_key, ch=ib_channel)
                 # Local scatter
                 cs = c.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):
                     # Access the chunk's destination rank and index to route it to its final place
                     final_rank = c.get_dst_rank()
                     index = c.get_dst_index()
-                    c.send(final_rank, buffer=Buffer.output, index=index, ch=ch*2 + 1)
+                    c.copy(final_rank, buffer=Buffer.output, index=index, ch=ch*2 + 1)
 
         XML() # Prints the XML
         Check()
@@ -126,7 +126,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
 parser.add_argument('instances', type=int, help='number of instances')
-parser.add_argument('--ib_connections', type=int, default=-1, help='Number of connections used for each IB send. Default: number of instances')
+parser.add_argument('--ib_connections', type=int, default=-1, help='Number of connections used for each IB copy. Default: number of instances')
 args = parser.parse_args()
 
 if args.ib_connections == -1:

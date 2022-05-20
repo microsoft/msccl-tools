@@ -48,17 +48,17 @@ def alltoall_three_step(num_nodes, gpus_per_node, instances=1, ib_connections=1)
                         buffer_key = (n1, n2)
                         # Send chunk to the gather_rank. Send returns a chunk reference to the 
                         # receiver's chunk
-                        c = c.send(gather_rank, buffer=buffer_key, ch=ch*2)
+                        c = c.copy(gather_rank, buffer=buffer_key, ch=ch*2)
                         # Group the chunks using a particular IB pair into one large chunk reference
                         AddChunk(ib_chunks, buffer_key, c) 
                     else:
-                        # Within a node - direct send/copy the chunks over nvlink to the output buffer. 
-                        # Use a different channel to ensure that we don't get in the way of sends/receives above
+                        # Within a node - direct copy/copy the chunks over nvlink to the output buffer. 
+                        # Use a different channel to ensure that we don't get in the way of copys/receives above
                         # which are on the critical path.
                         for g2 in range(gpus_per_node):
                             r2 = RankFromNodeGpuPair(n2, g2)
                             c = chunk(r1, Buffer.input, r2 * instances + ch)
-                            c.send(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch*2)
+                            c.copy(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch*2)
 
                 
 
@@ -66,20 +66,20 @@ def alltoall_three_step(num_nodes, gpus_per_node, instances=1, ib_connections=1)
     for buffer_key, ib_chunk in ib_chunks.items(): 
         (n1, n2) = buffer_key
         _, scatter_rank = CrossNodeGpus(n1, n2)
-        # IB send divided across multiple parallel channels
+        # IB copy divided across multiple parallel channels
         chunks = ib_chunk.split(ib_connections)
         for ch, c in enumerate(chunks):
-            # Note: If we are only going to use 1 IB connection for each IB send
+            # Note: If we are only going to use 1 IB connection for each IB copy
             # alternate between channels 0 and 1 to utilize both IB links.
             if ib_connections == 1:
                 ib_channel = c.rank % 2
             else:
                 ib_channel = ch
-            c = c.send(scatter_rank, buffer=buffer_key, ch=ib_channel)
+            c = c.copy(scatter_rank, buffer=buffer_key, ch=ib_channel)
             # Local scatter
             cs = c.split(gpus_per_node * gpus_per_node)
             for i, c in enumerate(cs):
                 # Access the chunk's destination rank and index to route it to its final place
                 final_rank = c.get_dst_rank()
                 index = c.get_dst_index()
-                c.send(final_rank, buffer=Buffer.output, index=index, ch=ch*2 + 1)
+                c.copy(final_rank, buffer=Buffer.output, index=index, ch=ch*2 + 1)

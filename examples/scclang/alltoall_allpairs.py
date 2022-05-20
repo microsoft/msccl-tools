@@ -14,7 +14,7 @@ def alltoall(num_ranks, instances, protocol):
     with SCCLProgram("alltoall_allpairs", topology, collective, instances=instances, protocol=protocol):
         for r in range(num_ranks):
             for index in range(num_ranks):
-                chunk(r, Buffer.input, index).send(index, Buffer.output, r)
+                chunk(r, Buffer.input, index).copy(index, Buffer.output, r)
         XML()
         Check()
 
@@ -22,7 +22,7 @@ def alltoall(num_ranks, instances, protocol):
 parser = argparse.ArgumentParser()
 parser.add_argument('num_gpus', type=int, help ='number of gpus')
 parser.add_argument('instances', type=int, help ='number of instances')
-parser.add_argument('protocol', type=str, default='Simple', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: Simple')
+parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: Simple')
 args = parser.parse_args()
 
 alltoall(args.num_gpus, args.instances, args.protocol)

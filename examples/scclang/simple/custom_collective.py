@@ -13,7 +13,7 @@ from sccl.language.collectives import Collective
 class CollEx(Collective):
     # Initial state is chunk0 is on rank0 in the input buffer
     def init_buffers(self):
-        chunks_per_node = self.instances
+        chunks_per_node = self.chunk_factor
         rank_buffers = []
         for r in range(self.num_ranks):
             input_buffer = [None] * chunks_per_node
@@ -35,7 +35,7 @@ class CollEx(Collective):
         correct = True
         for r in range(1, self.num_ranks):
             output = prog.buffers[r][Buffer.output]
-            for c in range(self.instances):
+            for c in range(self.chunk_factor):
                 chunk = output[c]
                 # Check that we got chunk 0 from rank 0
                 if chunk is None or chunk.origin_rank != 0 or chunk.origin_index != 0:
@@ -50,16 +50,16 @@ def custom_example1():
     size = 3
     topology = fully_connected(size) 
     # Collectives take in number of ranks in the network, chunksperloop of the collective, whether it is inplace, 
-    collective = CollEx(size, 1, inplace=False")
-    with SCCLProgram("allgather_ring", topology, collective, 1, protocol="Simple"):
+    collective = CollEx(size, 1, inplace=False)
+    with SCCLProgram("allgather_ring", topology, collective, instances=1, protocol="Simple"):
         # Get the chunk at rank 0 index 0 of the input buffer
         c = chunk(0, Buffer.input, 0)
         # Send chunks to 1 and 2
         # Can specify the sender's tb, receiver's tb, and channel for the send operation
         # SCCLang provides a default threadblock assignment if they aren't specified
         # SCCLang will also check the tb/channel combos are valid
-        c.send(1, buffer=Buffer.output, index=0, sendtb=1, recvtb=1, ch=0)
-        c.send(2, buffer=Buffer.output, index=0, sendtb=2, recvtb=1, ch=1)
+        c.copy(1, buffer=Buffer.output, index=0, sendtb=1, recvtb=1, ch=0)
+        c.copy(2, buffer=Buffer.output, index=0, sendtb=2, recvtb=1, ch=1)
 
         XML() # Generates the XML for this collective
         Check() # Checks the routes defined for each chunk are correct. Currently doesn't check XML correct
@@ -70,13 +70,13 @@ def custom_example2():
     topology = fully_connected(size) 
 
     collective = CollEx(size, 1, inplace=False)
-    with SCCLProgram("allgather_ring", topology, collective, 1, protocol="Simple"):
+    with SCCLProgram("allgather_ring", topology, collective, instances=1, protocol="Simple"):
         c = chunk(0, Buffer.input, 0)
         # This is the same program as above but instead of rank 0 sending to 1 and 2
         # 0 sends to 1 which sends to 2
         # send returns the chunk on the receiver's side
-        c = c.send(1, buffer=Buffer.output, index=0, sendtb=1, recvtb=1, ch=0)
-        c.send(2, buffer=Buffer.output, index=0, sendtb=2, recvtb=1, ch=1)
+        c = c.copy(1, buffer=Buffer.output, index=0, sendtb=1, recvtb=1, ch=0)
+        c.copy(2, buffer=Buffer.output, index=0, sendtb=2, recvtb=1, ch=1)
 
         XML()
         Check() 
