@@ -2,8 +2,6 @@
 # Licensed under the MIT License.
 
 from msccl.language import *
-from msccl.topologies import *
-from msccl.language.collectives import AllToAll
 
 def alltoall_three_step(num_nodes, gpus_per_node, instances=1, ib_connections=1):
     num_ranks = num_nodes * gpus_per_node
@@ -29,10 +27,6 @@ def alltoall_three_step(num_nodes, gpus_per_node, instances=1, ib_connections=1)
             ib_chunks[key] = ib_chunks[key].group(c)
         else:
             ib_chunks[key] = c
-        
-
-    topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, instances, inplace=False)
     
     ib_chunks = {} # Keeps track of chunks going over IB buffer buffer name -> chunk
     for n1 in range(num_nodes):

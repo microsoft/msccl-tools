@@ -1,9 +1,7 @@
-import argparse
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
 
 from msccl.language import *
-from msccl.topologies import *
-from msccl.language.collectives import AllToAll
-
 
 def alltoall_hierarchical(num_nodes, gpus_per_node):
     num_ranks = num_nodes * gpus_per_node
