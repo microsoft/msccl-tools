@@ -50,10 +50,10 @@ RUN cd ${STAGE_DIR} && mkdir openmpi/ && cd openmpi && wget https://www.open-mpi
     rm -rf ${STAGE_DIR}/openmpi/
 
 ##############################################################################
-# SCCL
+# MSCCL
 ##############################################################################
 
-# update NCCL in pytorch, install SCCL interpreter
+# update NCCL in pytorch, install MSCCL interpreter
 RUN pip uninstall torch -y
 
 RUN pip install numpy ninja pyyaml mkl mkl-include setuptools cmake cffi typing_extensions future six requests dataclasses
@@ -62,11 +62,11 @@ RUN conda install -c pytorch magma-cuda111 -y
 
 ENV CMAKE_PREFIX_PATH=/opt/conda
 
-# Change NCCL to SCCL Runtime
+# Change NCCL to MSCCL Runtime
 RUN cd ${STAGE_DIR} && \
     git clone https://github.com/pytorch/pytorch.git && \
     cd pytorch && \
-    git checkout tags/v1.9.0 -b v1.9.0_sccl && \
+    git checkout tags/v1.9.0 -b v1.9.0_msccl && \
     perl -p -i -e  's/url = https:\/\/github\.com\/NVIDIA\/nccl/url = https:\/\/github\.com\/microsoft\/msccl/g' .gitmodules && \
     git submodule sync third_party/nccl  && \
     git submodule update --init --recursive  && \
@@ -79,12 +79,12 @@ RUN cd ${STAGE_DIR} && \
     cd ${STAGE_DIR} && \
     rm -rf ${STAGE_DIR}/pytorch
 
-# Install SCCL
+# Install MSCCL
 RUN cd ${STAGE_DIR}/ && \
-    git clone https://github.com/microsoft/sccl.git && \
-    cd sccl/ && python setup.py install && \
+    git clone https://github.com/microsoft/msccl.git && \
+    cd msccl/ && python setup.py install && \
     cd ${STAGE_DIR} && \
-    rm -rf ${STAGE_DIR}/sccl/
+    rm -rf ${STAGE_DIR}/msccl/
 
 ##############################################################################
 # inspector-topo

@@ -2,9 +2,9 @@
 # Licensed under the MIT License.
 
 import pytest
-from sccl.topologies import Topology
-from sccl.collectives import build_collective
-from sccl.rounds_bound import *
+from msccl.topologies import Topology
+from msccl.collectives import build_collective
+from msccl.rounds_bound import *
 
 def test_rounds_bound_unimplementable():
     topo = Topology('Unconnected', [[0,0],[0,0]])

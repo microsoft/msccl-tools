@@ -1,6 +1,6 @@
-# SCCL specific
-*.sccl.json
-*.sccl.xml
+# MSCCL specific
+*.msccl.json
+*.msccl.xml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
