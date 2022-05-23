@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from sccl.collectives import *
+from msccl.collectives import *
 
 def null_collective(num_nodes):
     return build_collective(f'Null(n={num_nodes})', num_nodes, 1,

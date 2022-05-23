@@ -2,11 +2,11 @@
 # Licensed under the MIT License.
 
 from .common import *
-from sccl.topologies import fully_connected, ring, distributed_fully_connected
-from sccl.collectives import alltoall
-from sccl.instance import Instance
-from sccl.path_encoding import PathEncoding
-from sccl.distributors import *
+from msccl.topologies import fully_connected, ring, distributed_fully_connected
+from msccl.collectives import alltoall
+from msccl.instance import Instance
+from msccl.path_encoding import PathEncoding
+from msccl.distributors import *
 
 
 def test_greedy_alltoall():

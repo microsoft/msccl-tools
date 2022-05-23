@@ -1,11 +1,11 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-import sccl
-from sccl.topologies import line, fully_connected
-from sccl.language import *
-from sccl.language.routines import *
-from sccl.language.collectives import *
+import msccl
+from msccl.topologies import line, fully_connected
+from msccl.language import *
+from msccl.language.routines import *
+from msccl.language.collectives import *
 import os
 import pytest
 
@@ -75,7 +75,7 @@ def test_send():
     chunksperloop = 1
     instances = 1
     collective = Send(num_gpus, chunksperloop, inplace=False)
-    with SCCLProgram("send", topology, collective, instances):
+    with MSCCLProgram("send", topology, collective, instances):
         chunk(0, Buffer.input, 0).copy(1, 'scratch').copy(2, Buffer.output, 0)
         assert Check()
 
@@ -86,7 +86,7 @@ def test_reduce():
     chunksperloop = 1
     instances = 1
     collective = Reduce(num_gpus, chunksperloop, inplace=True)
-    with SCCLProgram("reduce", topology, collective, instances):
+    with MSCCLProgram("reduce", topology, collective, instances):
         c10 = chunk(1, Buffer.input, 0).reduce(chunk(0, Buffer.input, 0))
         chunk(2, Buffer.input, 0).reduce(c10)
         assert Check()
@@ -98,7 +98,7 @@ def test_local_copy():
     chunksperloop = 1
     instances = 1
     collective = Send(num_gpus, chunksperloop, inplace=False)
-    with SCCLProgram("cpy", topology, collective, instances):
+    with MSCCLProgram("cpy", topology, collective, instances):
         chunk(0, Buffer.input, 0).copy(2, 'scratch').copy(2, Buffer.output, 0)
         assert Check()
 
@@ -109,7 +109,7 @@ def test_local_reduce():
     chunksperloop = 1
     instances = 1
     collective = Reduce(num_gpus, chunksperloop, inplace=True)
-    with SCCLProgram("local-reduce", topology, collective, instances):
+    with MSCCLProgram("local-reduce", topology, collective, instances):
         c = chunk(1, Buffer.input, 0).reduce(chunk(0, Buffer.input, 0))
         c = c.copy(2, 'scratch', 0)
         chunk(2, Buffer.input, 0).reduce(c)
@@ -123,7 +123,7 @@ def test_scratch_buffers():
     chunksperloop = num_gpus
     instances = 1
     collective = AllReduce(num_gpus, chunksperloop, inplace=False)
-    with SCCLProgram("test", topology, collective, instances):
+    with MSCCLProgram("test", topology, collective, instances):
         chunk(0, Buffer.input, 0).copy(2, 'scratch', 2)
         c = chunk(2, 'scratch', 2)
         assert c.index == 2
@@ -138,7 +138,7 @@ def test_program_order():
     chunksperloop = num_gpus
     instances = 1
     collective = AllReduce(num_gpus, chunksperloop, inplace=False)
-    prgm = SCCLProgram("test", topology, collective, instances)
+    prgm = MSCCLProgram("test", topology, collective, instances)
     with prgm:
         chunk(1, Buffer.input, 0).copy(0, 'sc', 1)
         # This send should depend on the send above finishing
@@ -153,7 +153,7 @@ def test_program_order():
 def test_allgather():
     topology = fully_connected(2)
     collective = AllGather(2, 1, True)
-    with SCCLProgram("allgather", topology, collective, 1):
+    with MSCCLProgram("allgather", topology, collective, 1):
         chunk(0, Buffer.input, 0).copy(1, Buffer.output, 0)
         chunk(1, Buffer.input, 0).copy(0, Buffer.output, 1)
         assert Check()
@@ -161,7 +161,7 @@ def test_allgather():
 def test_reducescatter():
     topology = fully_connected(2)
     collective = ReduceScatter(2, 1, True)
-    with SCCLProgram("reducescatter", topology, collective, 1):
+    with MSCCLProgram("reducescatter", topology, collective, 1):
         chunk(1, Buffer.input, 1).reduce(chunk(0, Buffer.input, 1))
         chunk(0, Buffer.input, 0).reduce(chunk(1, Buffer.input, 0))
         assert Check()
@@ -170,7 +170,7 @@ def test_reducescatter():
 def test_alltoall():
     topology = fully_connected(2)
     collective = AllToAll(2, 1, False)
-    with SCCLProgram("alltoall", topology, collective, 1):
+    with MSCCLProgram("alltoall", topology, collective, 1):
         chunk(0, Buffer.input, 0).copy(0, Buffer.output, 0)
         chunk(0, Buffer.input, 1).copy(1, Buffer.output, 0)
         chunk(1, Buffer.input, 0).copy(0, Buffer.output, 1)
@@ -180,7 +180,7 @@ def test_alltoall():
 def test_allreduce():
     topology = fully_connected(2)
     collective = AllReduce(2, 2, True)
-    with SCCLProgram("allreduce", topology, collective, 1):
+    with MSCCLProgram("allreduce", topology, collective, 1):
         chunk(1, Buffer.output, 0).reduce(chunk(0, Buffer.input, 0)).copy(0, Buffer.input, 0)
         chunk(0, Buffer.input, 1).reduce(chunk(1, Buffer.input, 1)).copy(1, Buffer.input, 1)
         assert Check()
@@ -188,7 +188,7 @@ def test_allreduce():
 def test_instruction_fusion():
     topology = fully_connected(3)
     collective = AllReduce(3, 3, True)
-    prgm = SCCLProgram("allreduce", topology, collective, 1, threadblock_policy=ThreadblockPolicy.manual)
+    prgm = MSCCLProgram("allreduce", topology, collective, 1, threadblock_policy=ThreadblockPolicy.manual)
     with prgm:
         c01 = chunk(1, Buffer.input, 0, 3).reduce(chunk(0, Buffer.input, 0, 3), sendtb=0, recvtb=0, ch=0)
         c012 = chunk(2, Buffer.input, 0, 3).reduce(c01, sendtb=0, recvtb=0, ch=0)
@@ -204,7 +204,7 @@ def test_instruction_fusion():
 def test_replication():
     topology = fully_connected(2)
     collective = AllToAll(2, 1, False)
-    prgm = SCCLProgram("alltoall", topology, collective, 1)
+    prgm = MSCCLProgram("alltoall", topology, collective, 1)
     with prgm:
         chunk(0, Buffer.input, 0).copy(0, Buffer.output, 0)
         chunk(0, Buffer.input, 1).copy(1, Buffer.output, 0)
@@ -212,7 +212,7 @@ def test_replication():
         chunk(1, Buffer.input, 1).copy(1, Buffer.output, 1)
 
     instances = 2
-    replicated_prgm = SCCLProgram("alltoall", topology, collective, instances)
+    replicated_prgm = MSCCLProgram("alltoall", topology, collective, instances)
     with replicated_prgm:
             chunk(0, Buffer.input, 0).copy(0, Buffer.output, 0)
             chunk(0, Buffer.input, 1).copy(1, Buffer.output, 0)
@@ -229,7 +229,7 @@ def test_illegal_tb_assignment():
     num_gpus = 3
     topology = fully_connected(num_gpus)
     collective = AllToAll(num_gpus, 1, False)
-    prgm = SCCLProgram("alltoall", topology, collective, 1, threadblock_policy=ThreadblockPolicy.manual)
+    prgm = MSCCLProgram("alltoall", topology, collective, 1, threadblock_policy=ThreadblockPolicy.manual)
     with prgm:
         with pytest.raises(Exception):
             # Cannot send to two different gpus on the same threadblock
@@ -238,38 +238,38 @@ def test_illegal_tb_assignment():
             XML()
 
 def test_registered_alltoall_yifan():
-    from sccl.programs.alltoall_a100_yifan import alltoall_hierarchical 
+    from msccl.programs.alltoall_a100_yifan import alltoall_hierarchical 
 
     num_nodes = 4
     gpus_per_node = 8
     num_ranks = num_nodes * gpus_per_node
     topology = fully_connected(num_ranks)
     collective = AllToAll(num_ranks, 1, inplace=False)
-    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
+    with MSCCLProgram("hierarchical_all_to_all", topology, collective, 1):
         alltoall_hierarchical(num_nodes, gpus_per_node)
         assert Check()
 
 def test_registered_alltoall_8kp1():
-    from sccl.programs.alltoall_a100_8kp1 import alltoall_three_step 
+    from msccl.programs.alltoall_a100_8kp1 import alltoall_three_step 
 
     num_nodes = 9
     gpus_per_node = 8
     num_ranks = num_nodes * gpus_per_node
     topology = fully_connected(num_ranks)
     collective = AllToAll(num_ranks, 1, inplace=False)
-    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1):
+    with MSCCLProgram("hierarchical_all_to_all", topology, collective, 1):
         alltoall_three_step(num_nodes, gpus_per_node)
         assert Check()
         XML()
 
 def test_registered_allreduce():
-    from sccl.programs.allreduce_a100_ring import allreduce_ring 
+    from msccl.programs.allreduce_a100_ring import allreduce_ring 
 
     num_ranks = 8
     instances = 4
     topology = fully_connected(num_ranks)
     collective = AllReduce(num_ranks, num_ranks, inplace=True)
-    with SCCLProgram(f"allreduce", topology, collective, instances,
+    with MSCCLProgram(f"allreduce", topology, collective, instances,
         protocol="LL128", threadblock_policy=ThreadblockPolicy.manual):
         allreduce_ring(num_ranks, num_ranks)
         assert Check()
@@ -279,7 +279,7 @@ def test_routines_allgather_ring_inplace():
     size = 4
     topology = fully_connected(size)
     collective = AllGather(size, 1, True)
-    with SCCLProgram("allgather_ring", topology, collective, 1):
+    with MSCCLProgram("allgather_ring", topology, collective, 1):
         allgather_ring_inplace(size)
         assert Check()
 
@@ -287,7 +287,7 @@ def test_routines_allgather_ring_nodes():
     size = 8
     topology = fully_connected(size)
     collective = AllGather(size, 1, True)
-    with SCCLProgram("allgather_multi", topology, collective, 1):
+    with MSCCLProgram("allgather_multi", topology, collective, 1):
         # Two parallel rings [0-4] and [4-8]
         allgather_ring_inplace(4, 0, 0)
         allgather_ring_inplace(4, 4, 4)
@@ -302,7 +302,7 @@ def test_routines_allreduce_ring_inplace():
     size = 4
     topology = fully_connected(size)
     collective = AllReduce(size, size, True)
-    with SCCLProgram("allreduce_ring", topology, collective, 1):
+    with MSCCLProgram("allreduce_ring", topology, collective, 1):
         allreduce_ring_inplace(size)
         assert Check()
 
@@ -310,7 +310,7 @@ def test_routines_allreduce_nodes():
     size = 8
     topology = fully_connected(size)
     collective = AllReduce(size, size, True)
-    with SCCLProgram("allreduce_multi", topology, collective, 1):
+    with MSCCLProgram("allreduce_multi", topology, collective, 1):
         # Two parallel rings [0-4] and [4-8]
         allreduce_ring_inplace(4, 0, 0)
         allreduce_ring_inplace(4, 0, 4, ch=1)

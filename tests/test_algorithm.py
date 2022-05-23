@@ -3,9 +3,9 @@
 
 import pytest
 from .common import *
-from sccl.algorithm import Algorithm, Step
-from sccl.topologies import fully_connected
-from sccl.instance import Instance
+from msccl.algorithm import Algorithm, Step
+from msccl.topologies import fully_connected
+from msccl.instance import Instance
 
 def test_invalid_empty():
     with pytest.raises(RuntimeError):

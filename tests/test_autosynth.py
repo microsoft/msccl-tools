@@ -2,37 +2,37 @@
 # Licensed under the MIT License.
 
 import pytest
-import sccl
+import msccl
 import os
-from sccl.autosynth.registry import register_synthesis_plan
+from msccl.autosynth.registry import register_synthesis_plan
 
 
-def test_sccl_init(capsys):
-    sccl.init('not_a_machine_type', 4, ('alltoall', 0))
+def test_msccl_init(capsys):
+    msccl.init('not_a_machine_type', 4, ('alltoall', 0))
     out, err = capsys.readouterr()
     assert 'No plan found' in out
-    assert not 'SCCL_CONFIG' in os.environ
+    assert not 'MSCCL_CONFIG' in os.environ
     assert 'NCCL_ALGO' not in os.environ
 
-    sccl.init('ndv2', 2, ('alltoall', '1MB'))
+    msccl.init('ndv2', 2, ('alltoall', '1MB'))
     out, err = capsys.readouterr()
     assert 'synthesize_ndv2_relay_alltoall' in out
-    assert 'SCCL_CONFIG' in os.environ
+    assert 'MSCCL_CONFIG' in os.environ
     assert 'NCCL_IB_AR_THRESHOLD' not in os.environ
-    assert 'NCCL_ALGO' in os.environ and os.environ['NCCL_ALGO'] == 'SCCL,RING,TREE'
+    assert 'NCCL_ALGO' in os.environ and os.environ['NCCL_ALGO'] == 'MSCCL,RING,TREE'
 
-    os.environ['NCCL_ALGO'] = 'RING,FAKE_SCCL'
-    sccl.init('ndv4', 8, (sccl.Collective.alltoall, '2MB'))
+    os.environ['NCCL_ALGO'] = 'RING,FAKE_MSCCL'
+    msccl.init('ndv4', 8, (msccl.Collective.alltoall, '2MB'))
     out, err = capsys.readouterr()
     assert 'ndv4_alltoall' in out
     assert 'NCCL_IB_AR_THRESHOLD' in os.environ
-    assert 'NCCL_ALGO' in os.environ and os.environ['NCCL_ALGO'] == 'SCCL,RING,FAKE_SCCL'
+    assert 'NCCL_ALGO' in os.environ and os.environ['NCCL_ALGO'] == 'MSCCL,RING,FAKE_MSCCL'
 
-    os.environ['NCCL_ALGO'] = 'HELLO,SCCL,WORLD'
-    sccl.init('ndv4', 16, (sccl.Collective.alltoall, '35MB'))
+    os.environ['NCCL_ALGO'] = 'HELLO,MSCCL,WORLD'
+    msccl.init('ndv4', 16, (msccl.Collective.alltoall, '35MB'))
     out, err = capsys.readouterr()
     assert 'ndv4_alltoall' in out
-    assert 'NCCL_ALGO' in os.environ and os.environ['NCCL_ALGO'] == 'HELLO,SCCL,WORLD'
+    assert 'NCCL_ALGO' in os.environ and os.environ['NCCL_ALGO'] == 'HELLO,MSCCL,WORLD'
 
 
 def test_register_plan():

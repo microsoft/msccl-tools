@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from sccl.topologies import *
+from msccl.topologies import *
 
 def test_local_topologies():
     assert hub_and_spoke(4) != None

@@ -1,10 +1,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from sccl.path_encoding import PathEncoding
-from sccl.topologies import fully_connected, line, dgx1
-from sccl.collectives import *
-from sccl.instance import Instance
+from msccl.path_encoding import PathEncoding
+from msccl.topologies import fully_connected, line, dgx1
+from msccl.collectives import *
+from msccl.instance import Instance
 
 def test_fc_noncombining():
     num_nodes = 2

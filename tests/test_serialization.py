@@ -2,10 +2,10 @@
 # Licensed under the MIT License.
 
 from .common import *
-from sccl.serialization import SCCLEncoder, SCCLDecoder
-from sccl.algorithm import Algorithm, Step
-from sccl.topologies import fully_connected
-from sccl.instance import Instance
+from msccl.serialization import MSCCLEncoder, MSCCLDecoder
+from msccl.algorithm import Algorithm, Step
+from msccl.topologies import fully_connected
+from msccl.instance import Instance
 
 def test_algorithm_roundtrip():
     name = 'test_algorithm'
@@ -15,10 +15,10 @@ def test_algorithm_roundtrip():
     steps = [Step(1,[(0,0,1)]),Step(2,[(1,1,0),(1,0,1)]),Step(1,[(0,1,0)])]
     instance = Instance(3, pipeline=2)
     algo1 = Algorithm(name, collective, topo, instance, steps)
-    json = SCCLEncoder().encode(algo1)
+    json = MSCCLEncoder().encode(algo1)
     assert json != None
 
-    algo2 = SCCLDecoder().decode(json)
+    algo2 = MSCCLDecoder().decode(json)
     assert algo2.name == name
     assert algo2.instance == instance
     assert algo2.steps == steps

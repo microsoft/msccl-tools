@@ -4,16 +4,16 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='sccl',
+    name='msccl',
     version='2.3.0',
     packages=find_packages(),
     entry_points={
         'console_scripts': [
-            'sccl = sccl.__main__:main',
+            'msccl = msccl.__main__:main',
         ],
     },
     scripts = [
-        'sccl/autosynth/sccl_ndv2_launcher.sh'
+        'msccl/autosynth/msccl_ndv2_launcher.sh'
     ],
     install_requires=[
         'dataclasses; python_version < "3.7"',
