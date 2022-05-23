@@ -1,10 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-import argparse
 from msccl.language import *
-from msccl.topologies import *
-from msccl.language.collectives import AllReduce
 
 # Ring all reduce for A100s
 # Vary channels from [1-8] to divide parts of the ring over multiple channels/tbs.

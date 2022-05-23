@@ -262,16 +262,29 @@ def test_registered_alltoall_8kp1():
         assert Check()
         XML()
 
-def test_registered_allreduce():
+def test_registered_allreduce_ring():
     from msccl.programs.allreduce_a100_ring import allreduce_ring 
 
     num_ranks = 8
     instances = 4
     topology = fully_connected(num_ranks)
     collective = AllReduce(num_ranks, num_ranks, inplace=True)
-    with MSCCLProgram(f"allreduce", topology, collective, instances,
+    with MSCCLProgram(f"allreduce_ring", topology, collective, instances,
         protocol="LL128", threadblock_policy=ThreadblockPolicy.manual):
         allreduce_ring(num_ranks, num_ranks)
+        assert Check()
+        XML()
+
+def test_registered_allreduce_allpairs():
+    from msccl.programs.allreduce_allpairs import allreduce_allpairs
+
+    num_ranks = 8
+    instances = 2
+    topology = fully_connected(num_ranks)
+    collective = AllReduce(num_ranks, num_ranks*num_ranks, inplace=True)
+    with MSCCLProgram(f"allreduce_allpairs", topology, collective, instances,
+        protocol="LL", threadblock_policy=ThreadblockPolicy.manual):
+        allreduce_allpairs(num_ranks)
         assert Check()
         XML()
 
