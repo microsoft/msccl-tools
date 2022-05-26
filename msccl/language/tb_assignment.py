@@ -95,6 +95,51 @@ def auto_assign_tbs(rank_dag):
         op.tb = tbid
         current_tb_step[rank][tbid] = op.chunk_step
 
+
+def reorder_sends_and_recvs(rank_dag):
+    """make certain the sends and receives between a pair of GPUs are ordered consistently"""
+    
+    # get receive peer tb for each tb
+    listening_on = defaultdict(dict) # int -> ((int, int) -> int) : rank -> (channel, rank_recv_peer) -> tbid listening on that channel
+    for rank, rank_tbs in enumerate(rank_dag.tbs):
+        for tbid in rank_tbs:
+            channel = rank_tbs[tbid].channel
+            rank_recv_peer = rank_tbs[tbid].recv
+
+            if -1 not in (channel, rank_recv_peer):
+                listening_on[rank][channel, rank_recv_peer] = tbid
+
+
+    tb_recv_peer = {} # (int, int) -> (int, int) : (rank, tbid) that's sending -> (rank, tbid) that's listening
+    for rank, rank_tbs in enumerate(rank_dag.tbs):
+        for tbid in rank_tbs:
+            tb = rank_tbs[tbid]
+            if tb.send == -1:
+                continue
+            tb_recv_peer[rank, tbid] = (tb.send, listening_on[tb.send][tb.channel, rank])
+
+
+    # for each sequence of sends in a tb, iterate over the matching sequence of recvs and add dependences to enforce the ordering
+    for send_rank, send_tbid in tb_recv_peer:
+        # recv_rank, recv_tbid = tb_recv_peer[send_rank, send_tbid]
+        send_sequence = list(filter(lambda op: op.inst == Instruction.send, rank_dag.tbs[send_rank][send_tbid].ops))
+
+        for p, n in zip(send_sequence, send_sequence[1:]):
+            p.next.add(n)
+            n.prev.add(p)
+            p.recv_match.next.add(n.recv_match)
+            n.recv_match.prev.add(p.recv_match)
+
+        
+    # TODO: find a better way to do this, maybe
+    new_ordered = topo_sort_instrs(rank_dag)
+    for rank, rank_tbs in enumerate(rank_dag.tbs):
+        for tbid in rank_tbs:
+            rank_tbs[tbid].ops.sort(key=new_ordered.index)
+            for i, op in enumerate(rank_tbs[tbid].ops):
+                op.step = i
+
+
 # Topologically orders instructions so that (1): Sends occur before their receives
 # (2): Dependent instructions occur before 
 def topo_sort_instrs(rank_dag):
@@ -197,30 +242,3 @@ def channel_assignment(instrs, rank_dag):
     for op in instrs:
         if op.inst == Instruction.send and op.recv_match.is_fused():
             dfs(op, all_channels(), [])
-
-    # Iterate through and make certain the sends and receives between a pair of GPUs is consistent
-    # Shift a (s,r) pair to another channel if the ordering isn't consistent
-    repeat = True
-    while repeat:
-        repeat = False
-        pending_recv = defaultdict(list)  # (sender, receiver, ch) -> pending receive
-        for op in instrs:
-            rank = op.rank
-            channel = 0 if op.channel == -1 else op.channel
-            if op.is_send():
-                dst = op.dst.rank
-                pending_recv[(rank, dst, channel)].append(op.recv_match)
-            
-            if op.is_recv():
-                src = op.src.rank
-                pr = pending_recv[(src, rank, channel)]
-                if op in pr:
-                    if pr[0] is op:
-                        del pr[0]
-                    else:
-                        repeat = True
-                        op.channel += 1
-                        op.send_match.channel += 1
-                        pr.remove(op)
-
-
