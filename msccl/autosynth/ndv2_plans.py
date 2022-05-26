@@ -18,4 +18,4 @@ def register_ndv2_plans():
         scatter_algo = solve_least_steps(dgx1(), scatter_coll)
         algo = synthesize_gather_scatter_distributed_alltoall(
             machines, gather_algo, scatter_algo)
-        return ncclize(algo, instances=8)
+        return ncclize(algo, instances=8, instr_fusion=False)
