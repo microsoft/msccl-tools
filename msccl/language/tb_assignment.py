@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 from enum import Enum
 import heapq
+from typing import Dict, Tuple
 
 from msccl.language.ir import *
 from msccl.language.rank_dag import *
@@ -100,7 +101,7 @@ def reorder_sends_and_recvs(rank_dag):
     """make certain the sends and receives between a pair of GPUs are ordered consistently"""
     
     # get receive peer tb for each tb
-    listening_on = defaultdict(dict) # int -> ((int, int) -> int) : rank -> (channel, rank_recv_peer) -> tbid listening on that channel
+    listening_on: Dict[int, Dict[Tuple[int, int], int]] = defaultdict(dict) # int -> ((int, int) -> int) : rank -> (channel, rank_recv_peer) -> tbid listening on that channel
     for rank, rank_tbs in enumerate(rank_dag.tbs):
         for tbid in rank_tbs:
             channel = rank_tbs[tbid].channel
@@ -108,7 +109,6 @@ def reorder_sends_and_recvs(rank_dag):
 
             if -1 not in (channel, rank_recv_peer):
                 listening_on[rank][channel, rank_recv_peer] = tbid
-
 
     tb_recv_peer = {} # (int, int) -> (int, int) : (rank, tbid) that's sending -> (rank, tbid) that's listening
     for rank, rank_tbs in enumerate(rank_dag.tbs):
@@ -118,11 +118,16 @@ def reorder_sends_and_recvs(rank_dag):
                 continue
             tb_recv_peer[rank, tbid] = (tb.send, listening_on[tb.send][tb.channel, rank])
 
-
     # for each sequence of sends in a tb, iterate over the matching sequence of recvs and add dependences to enforce the ordering
     for send_rank, send_tbid in tb_recv_peer:
         # recv_rank, recv_tbid = tb_recv_peer[send_rank, send_tbid]
         send_sequence = list(filter(lambda op: op.inst == Instruction.send, rank_dag.tbs[send_rank][send_tbid].ops))
+
+        for i in send_sequence:
+            i.next = set(i.next)
+            i.prev = set(i.prev)
+            i.recv_match.next = set(i.recv_match.next)
+            i.recv_match.prev = set(i.recv_match.prev)
 
         for p, n in zip(send_sequence, send_sequence[1:]):
             p.next.add(n)
@@ -132,13 +137,14 @@ def reorder_sends_and_recvs(rank_dag):
 
         
     # TODO: find a better way to do this, maybe
-    new_ordered = topo_sort_instrs(rank_dag)
+    new_ordered = topo_sort_instrs(rank_dag) # if this fails, the previous step probably created a cycle :)
     for rank, rank_tbs in enumerate(rank_dag.tbs):
         for tbid in rank_tbs:
             rank_tbs[tbid].ops.sort(key=new_ordered.index)
             for i, op in enumerate(rank_tbs[tbid].ops):
                 op.step = i
 
+    rank_dag.convert_set_list()
 
 # Topologically orders instructions so that (1): Sends occur before their receives
 # (2): Dependent instructions occur before 

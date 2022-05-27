@@ -108,6 +108,7 @@ class MSCCLProgram:
         # self.chunk_dag._complete_metadata()
         # self.chunk_dag.channel_assignment()
         # self.chunk_dag.lower_instr_dag(self.instr_dag)
+        self.instr_dag.convert_set_list() # convert sets to lists
         if self.instr_fusion:
             self.instr_dag.optimize()
         self.instr_dag._complete_metadata()
@@ -116,7 +117,6 @@ class MSCCLProgram:
         else:
             auto_assign_tbs(self.instr_dag)
         reorder_sends_and_recvs(self.instr_dag)
-        self.instr_dag.convert_set_list() # convert sets to lists
         self.instr_dag.lower_pt1(self.instances)
         gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
         if self.check_xml:
