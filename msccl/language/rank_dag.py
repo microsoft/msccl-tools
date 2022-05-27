@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 import heapq
 import functools
+from typing import Dict, List, Set, Tuple
+from msccl.language.buffer import BufferSlice
 
 from msccl.language.ir import *
 from msccl.language.passes import *
@@ -28,24 +30,27 @@ def same_buf_dst(op1, op2):
     return op1.dst.buffer == op2.dst.buffer and op1.dst.index == op2.dst.index
 
 class InstructionDAG:
-    def __init__(self, num_ranks, buffers):
+
+    Slot = Tuple[int, Buffer, int]
+
+    def __init__(self, num_ranks: int, buffers: List[Dict[Buffer, BufferSlice]]):
         self.num_ranks = num_ranks
         self.buffers = buffers
         # State for the actual instruction DAG
-        self.operations = {} # slot -> operations
-        self.last_writer = {} # slot -> last writing op
-        self.last_readers = defaultdict(list) # slot -> list of last reading ops
+        self.operations: Dict[InstructionDAG.Slot, Op] = {} # slot -> operations
+        self.last_writer: Dict[InstructionDAG.Slot, Op] = {} # slot -> last writing op
+        self.last_readers: Dict[InstructionDAG.Slot, List[Op]] = defaultdict(list) # slot -> list of last reading ops
         # State for the MSCCL-IR
-        self.tbs = [] 
+        self.tbs: List[Dict[int, Threadblock]] = [] 
         for _ in range(num_ranks):
             self.tbs.append({}) 
-        self.tb_mapping = {}
+        self.tb_mapping: dict = {}
         self.num_channels = [1] * num_ranks
 
 
     # InstructionDAG helper - identifies the dependencies for a write-type operation (recv, copy, rrc, reduce)
-    def _write(self, rank, buffer, index, size, op, read=False):
-        prev_ops = set()
+    def _write(self, rank: int, buffer: Buffer, index: int, size: int, op: Op, read=False):
+        prev_ops: Set[Op] = set()
         for i in range(index, index+size):
             slot = (rank, buffer, i)
             if read:
@@ -69,12 +74,12 @@ class InstructionDAG:
 
         # Update the next pointer of the previous ops
         for prev_op in prev_ops:
-            prev_op.next.add(op)
-            op.prev.add(prev_op)
+            prev_op.next.add(op) # type: ignore
+            op.prev.add(prev_op) # type: ignore
 
     # InstructionDAG helper - identifies the dependencies for read-type operations (send, copy, reduce)
-    def _read(self, rank, buffer, index, size, op):
-        prev_ops = set()
+    def _read(self, rank: int, buffer: Buffer, index: int, size: int, op: Op):
+        prev_ops: Set[Op] = set()
         for i in range(index, index+size):
             slot = (rank, buffer, i)
             assert slot in self.last_writer, f"Slot has never been written before a read-type {op}"
@@ -85,18 +90,18 @@ class InstructionDAG:
             
         # Update the next pointer of the previous ops
         for prev_op in prev_ops:
-            prev_op.next.add(op)
-            op.prev.add(prev_op)
+            prev_op.next.add(op) # type: ignore
+            op.prev.add(prev_op) # type: ignore
 
     # InstructionDAG - builds the roots of the DAG
-    def add_start(self, rank, buffer, index, ref):
+    def add_start(self, rank: int, buffer: Buffer, index: int, ref: ChunkRef):
         slot = (rank, buffer, index)
         op = Op(Instruction.start, rank, ref, ref, next=set(), prev=set(), chunk_step=-1)
         self.operations[slot] = op
         self.last_writer[slot] = op
 
     # InstructionDAG - adds a copy node
-    def add_copy(self, rank, send_ref, recv_ref, tb, ch):
+    def add_copy(self, rank: int, send_ref: ChunkRef, recv_ref: ChunkRef, tb: int, ch: int):
         op = Op(Instruction.copy, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
@@ -110,14 +115,14 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a redduce node
-    def add_reduce(self, rank, send_ref, recv_ref, tb, ch):
+    def add_reduce(self, rank: int, send_ref: ChunkRef, recv_ref: ChunkRef, tb: int, ch: int):
         op = Op(Instruction.reduce, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
         srcbuffer = send_ref.buffer
         srcindex = send_ref.index
         size = recv_ref.size
-        prev_ops = []
+        prev_ops: List[Op] = []
         # Sending part of reduce
         self._read(rank, srcbuffer, srcindex, size, op)
         # Reduce part of copy
@@ -125,7 +130,7 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a send node
-    def add_send(self, rank, send_ref, recv_ref, tb, ch):
+    def add_send(self, rank: int, send_ref: ChunkRef, recv_ref: ChunkRef, tb: int, ch: int):
         op = Op(Instruction.send, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = send_ref.buffer
         index = send_ref.index
@@ -134,7 +139,7 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a recv node
-    def add_recv(self, rank, send_ref, recv_ref, tb, ch, send_op):
+    def add_recv(self, rank: int, send_ref: ChunkRef, recv_ref: ChunkRef, tb: int, ch: int, send_op: Op):
         op = Op(Instruction.recv, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
@@ -144,7 +149,7 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a rrc node
-    def add_recv_reduce_copy(self, rank, send_ref, recv_ref, tb, ch, send_op):
+    def add_recv_reduce_copy(self, rank: int, send_ref: ChunkRef, recv_ref: ChunkRef, tb: int, ch: int, send_op: Op):
         op = Op(Instruction.recv_reduce_copy, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
@@ -250,11 +255,11 @@ class InstructionDAG:
                         remove_op(next_op)
                 frontier = frontier[1:] + op.next
 
-    def lower_pt1(self, instances):
+    def lower_pt1(self, instances: int):
         self.infer_dependencies()
         self.lower_buffers(instances)
     
-    def lower_pt2(self, instances, interleaved):
+    def lower_pt2(self, instances: int, interleaved: bool):
         self.replicate(instances, interleaved)
         return self.lower_tbs()
 
@@ -277,7 +282,7 @@ class InstructionDAG:
                 frontier = frontier[1:] + op.next
 
     # Convert local scratch buffers to index into one global scratch buffer
-    def lower_chunk(self, chunk):
+    def lower_chunk(self, chunk: ChunkRef):
         if chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
             buffer = self.buffers[chunk.rank][chunk.buffer].get_buffer()
             index = self.buffers[chunk.rank][chunk.buffer].get_global_index(chunk.index)
@@ -285,7 +290,7 @@ class InstructionDAG:
         return chunk
 
     # Assigns each scratch buffer an offset into the global scratch buffer
-    def lower_buffers(self, instances):
+    def lower_buffers(self, instances: int):
         for rank_buffers in self.buffers:
             offset = 0
             for key, buf in rank_buffers.items():
@@ -295,7 +300,7 @@ class InstructionDAG:
 
     # Preprocess the threadblocks for lowering into xml
     def lower_tbs(self):
-        gpus = []
+        gpus: List[Gpu] = []
         for rank, rank_tbs in enumerate(self.instanced_tbs):
             lowered_tbs = {}
             for tbid, tb in rank_tbs.items():
@@ -315,7 +320,7 @@ class InstructionDAG:
     # only interleaved replication will be correct
     # Interleaved policy only supports single count sends/receives from the input/output buffer
     # (multicount ops are fine between scratch)
-    def replicate(self, instances, interleaved):
+    def replicate(self, instances: int, interleaved: bool):
         if instances == 1:
             self.instanced_tbs = self.tbs
             return 
@@ -324,10 +329,10 @@ class InstructionDAG:
         for _ in range(self.num_ranks):
             self.instanced_tbs.append({})
 
-        def is_scratch(buffer):
+        def is_scratch(buffer: Buffer):
             return buffer != Buffer.input and buffer != Buffer.output
 
-        def get_new_index(rank, buffer, index, size, i):
+        def get_new_index(rank: int, buffer: Buffer, index: int, size: int, i: int):
             # Scratch buffers always use batched
             if is_scratch(buffer):
                 buf_instance_len = self.buffers[rank][buffer].instance_size()
@@ -339,7 +344,7 @@ class InstructionDAG:
             else:
                 return  len(self.buffers[rank][buffer]) * i + index
 
-        def get_instance_ref(ref):
+        def get_instance_ref(ref: ChunkRef):
             iindex = get_new_index(ref.rank, ref.buffer, ref.index, ref.size, i)
             iref = ChunkRef(ref.rank, ref.buffer, iindex, ref.size)
             return iref
@@ -357,7 +362,7 @@ class InstructionDAG:
                     for s, op in enumerate(tb.ops):
                         isrc = get_instance_ref(op.src)
                         idst = get_instance_ref(op.dst)
-                        idepends = [] 
+                        idepends: list = [] 
                         # Note: We don't need the fill out the rest of the metadata since replication is the last optimization
                         iop = Op(op.inst, op.rank, isrc, idst, idepends, op.step, itbid) 
                         itb.ops[s] = iop

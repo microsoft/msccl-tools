@@ -2,15 +2,18 @@
 # Licensed under the MIT License.
 
 # Scratch buffer slice with manual indexing
+from msccl.language.ir import Buffer
+
+
 class BufferSlice:
-    def __init__(self, buf, name):
+    def __init__(self, buf: Buffer, name: str):
         self.name = name
         self.buf = buf
-        self.offset = -1 # Offset into the global scratch buffer
-        self.chunks = []
+        self.offset: int = -1 # Offset into the global scratch buffer
+        self.chunks: list = []
 
     # Returns the global index into the scratch buffer
-    def get_global_index(self, index):
+    def get_global_index(self, index: int):
         assert (self.offset > -1), 'set_offset needs to be called first'
         return self.offset + index
 

@@ -1,6 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+from __future__ import annotations
+
 from lxml import etree as ET
 from dataclasses import dataclass, field
 from enum import Enum
@@ -119,13 +121,13 @@ class Op:
     depends: list = field(default_factory=list)
     step: int = -1 # Step in the TB
     tb: int = -1 # TB this op is assigned to
-    prev: list = field(default_factory=list) # List of instructions that happen before
-    next: list = field(default_factory=list) # List of instructions that happen after
+    prev: list | set = field(default_factory=list) # List of instructions that happen before
+    next: list | set = field(default_factory=list) # List of instructions that happen after
     num: int = -1
     chunk_step: int = -1
     priority: int = -1
-    recv_match =  None
-    send_match =  None
+    recv_match: Op | None =  None
+    send_match: Op | None =  None
     channel: int = -1
 
     def cnt(self):

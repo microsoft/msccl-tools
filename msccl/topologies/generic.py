@@ -3,7 +3,7 @@
 
 from .topology import Topology
 
-def hub_and_spoke(num_nodes):
+def hub_and_spoke(num_nodes: int) -> Topology:
     links = [[0 if x==y else 1 for y in range(num_nodes)] for x in range(num_nodes)]
     switches = []
     for node in range(num_nodes):
@@ -12,7 +12,7 @@ def hub_and_spoke(num_nodes):
         switches.append((others,[node],1,f'node_{node}_in'))
     return Topology(f'HubAndSpoke(n={num_nodes})', links, switches)
 
-def fully_connected(num_nodes):
+def fully_connected(num_nodes: int) -> Topology:
     links = []
     for i in range(num_nodes):
         row = [1] * num_nodes
@@ -20,7 +20,8 @@ def fully_connected(num_nodes):
         links.append(row)
     return Topology(f'FullyConnected(n={num_nodes})', links)
 
-def ring(num_nodes):
+
+def ring(num_nodes: int) -> Topology:
     links = []
     for i in range(num_nodes):
         row = [0] * num_nodes
@@ -29,7 +30,7 @@ def ring(num_nodes):
         links.append(row)
     return Topology(f'Ring(n={num_nodes})', links)
 
-def line(num_nodes):
+def line(num_nodes: int) -> Topology:
     links = []
     for i in range(num_nodes):
         row = [0] * num_nodes
@@ -40,7 +41,7 @@ def line(num_nodes):
         links.append(row)
     return Topology(f'Line(n={num_nodes})', links)
 
-def star(num_nodes, non_blocking=True):
+def star(num_nodes: int, non_blocking=True) -> Topology:
     links = [[0 if i == 0 else 1 for i in range(num_nodes)]]
     for i in range(1, num_nodes):
         links.append([1 if j == 0 else 0 for j in range(num_nodes)])
