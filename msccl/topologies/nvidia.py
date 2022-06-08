@@ -40,6 +40,13 @@ def dgx1():
 
     return Topology('DGX1', links)
 
+def dgx_a100():
+    links = [[12]*8 for i in range(8)]  
+    for i in range(8):
+        links[i][i] = 0
+    
+    return Topology('DGX_A100', links)
+
 def nvlink_only(nvidia_smi_topo=None):
     if nvidia_smi_topo == None:
         nvidia_smi_topo = _get_nvidia_smi_topo()

@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from msccl.topologies import dgx1, nvlink_only
+from msccl.topologies import dgx1, dgx_a100, nvlink_only
 from msccl.isomorphisms import find_isomorphisms
 from msccl.autosynth.registry import synthesis_plans
 from lxml import etree as ET
@@ -34,6 +34,18 @@ class Collective(Enum):
 
 
 def init(machine_type, num_machines, *collectives):
+    # first detect the machine type in case auto was passed in
+    if machine_type == "auto":
+        nvlink_matrix = nvlink_only()
+        isomorphisms = find_isomorphisms(dgx1(), nvlink_matrix)
+        if len(isomorphisms) == 4:
+            machine_type = "ndv2"
+        elif nvlink_matrix.links == dgx_a100().links:
+            machine_type = "ndv4"
+        else:
+            raise RuntimeError(
+                f'Did not recognize the SKU type automatically. If you are sure about the SKU, try replacing "auto" with your explicit SKU name.')        
+
     # Collect and sort all plans that match the collectives and sizes given by the user.
     selected_plans = {}
     for collective in collectives:
