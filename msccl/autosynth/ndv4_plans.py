@@ -12,12 +12,12 @@ from msccl.language.ir import ThreadblockPolicy
 def register_ndv4_plans():
 
     @register_msccl_program(fully_connected(8), 'allreduce', 'ndv4', chunk_factor=64, inplace=True,
-        instances=2, protocol='LL', sizes=('512B', '82944B'), threadblock_policy=ThreadblockPolicy.manual, machines= lambda x: x == 1)
+        instances=2, protocol='LL', sizes=('512B', '82944B'), threadblock_policy=ThreadblockPolicy.manual, interleaved_replication=False, dependence_nop=True, machines= lambda x: x == 1)
     def ndv4_allpairs_allreduce_config1(prog, nodes):
         allreduce_allpairs(8)
 
     @register_msccl_program(fully_connected(8), 'allreduce', 'ndv4', chunk_factor=64, inplace=True,
-        instances=4, protocol='LL', sizes=('82944B', '458752B'), threadblock_policy=ThreadblockPolicy.manual, machines= lambda x: x == 1)
+        instances=4, protocol='LL', sizes=('82944B', '458752B'), threadblock_policy=ThreadblockPolicy.manual, interleaved_replication=False, dependence_nop=True, machines= lambda x: x == 1)
     def ndv4_allpairs_allreduce_config2(prog, nodes):
         allreduce_allpairs(8)
 
