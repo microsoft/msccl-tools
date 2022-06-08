@@ -72,7 +72,7 @@ def init(machine_type, num_machines, *collectives):
             selected_plans[name] = plans
 
     # Execute the plans to find or synthesize the algorithms and format them in the XML format expected by MSCCL-RT.
-    algos_elem = ET.Element('sccl_algos')
+    algos_elem = ET.Element('msccl_algos')
     any_selected = False
     for collective_name, plans in selected_plans.items():
         for plan, params in plans:
@@ -95,14 +95,14 @@ def init(machine_type, num_machines, *collectives):
 
         # Set environment variables
         env = {
-            'SCCL_CONFIG': path,
+            'MSCCL_CONFIG': path,
         }
         if 'NCCL_ALGO' in os.environ and os.environ['NCCL_ALGO'] != '':
             existing_algos = os.environ['NCCL_ALGO']
             if 'MSCCL' not in existing_algos.split(','):
-                os.environ['NCCL_ALGO'] = 'SCCL,' + existing_algos
+                os.environ['NCCL_ALGO'] = 'MSCCL,' + existing_algos
         else:
-            env['NCCL_ALGO'] = 'SCCL,RING,TREE'
+            env['NCCL_ALGO'] = 'MSCCL,RING,TREE'
         if machine_type == 'ndv4' and num_machines >= 8 and 'alltoall' in selected_plans:
             print(f'MSCCL: Setting NCCL_IB_AR_THRESHOLD=0 (reason: alltoall and at least 16 ndv4 machines)')
             env['NCCL_IB_AR_THRESHOLD'] = '0'
