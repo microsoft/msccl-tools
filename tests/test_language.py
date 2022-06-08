@@ -237,57 +237,6 @@ def test_illegal_tb_assignment():
             chunk(0, Buffer.input, 1).copy(2, Buffer.output, 0, sendtb=0, recvtb=1)
             XML()
 
-def test_registered_alltoall_yifan():
-    from msccl.programs.alltoall_a100_yifan import alltoall_hierarchical 
-
-    num_nodes = 4
-    gpus_per_node = 8
-    num_ranks = num_nodes * gpus_per_node
-    topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, 1, inplace=False)
-    with MSCCLProgram("hierarchical_all_to_all", topology, collective, 1):
-        alltoall_hierarchical(num_nodes, gpus_per_node)
-        assert Check()
-
-def test_registered_alltoall_8kp1():
-    from msccl.programs.alltoall_a100_8kp1 import alltoall_three_step 
-
-    num_nodes = 9
-    gpus_per_node = 8
-    num_ranks = num_nodes * gpus_per_node
-    topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, 1, inplace=False)
-    with MSCCLProgram("hierarchical_all_to_all", topology, collective, 1):
-        alltoall_three_step(num_nodes, gpus_per_node)
-        assert Check()
-        XML()
-
-def test_registered_allreduce_ring():
-    from msccl.programs.allreduce_a100_ring import allreduce_ring 
-
-    num_ranks = 8
-    instances = 4
-    topology = fully_connected(num_ranks)
-    collective = AllReduce(num_ranks, num_ranks, inplace=True)
-    with MSCCLProgram(f"allreduce_ring", topology, collective, instances,
-        protocol="LL128", threadblock_policy=ThreadblockPolicy.manual):
-        allreduce_ring(num_ranks, num_ranks)
-        assert Check()
-        XML()
-
-def test_registered_allreduce_allpairs():
-    from msccl.programs.allreduce_allpairs import allreduce_allpairs
-
-    num_ranks = 8
-    instances = 2
-    topology = fully_connected(num_ranks)
-    collective = AllReduce(num_ranks, num_ranks*num_ranks, inplace=True)
-    with MSCCLProgram(f"allreduce_allpairs", topology, collective, instances,
-        protocol="LL", threadblock_policy=ThreadblockPolicy.manual):
-        allreduce_allpairs(num_ranks)
-        assert Check()
-        XML()
-
 def test_routines_allgather_ring_inplace():
     size = 4
     topology = fully_connected(size)
