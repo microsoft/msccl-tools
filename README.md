@@ -30,7 +30,8 @@ msccl.init('ndv2', 2, (msccl.Collective.alltoall, ('1MB')))
 ```
 This will find an algorithm provider that can create an Alltoall algorithm that is expected to be good with 1MB of data.
 That will call a synthesis routine that writes the algorithm to disk. `msccl.init` will then pass a configuration file
-pointing to this algorithm to the runtime through environment variables.
+pointing to this algorithm to the runtime through environment variables. If the SKU is unknown, ```'auto'``` can be passed
+in instead.
 
 See [the examples](examples/msccl_init.py) for more on `msccl.init` usage.
 

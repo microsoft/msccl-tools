@@ -43,8 +43,8 @@ def init(machine_type, num_machines, *collectives):
         elif nvlink_matrix.links == dgx_a100().links:
             machine_type = "ndv4"
         else:
-            raise RuntimeError(
-                f'Did not recognize the SKU type automatically. If you are sure about the SKU, try replacing "auto" with your explicit SKU name.')        
+            print(f'Did not recognize the SKU type automatically. If you are sure about the SKU, try replacing "auto" with your explicit SKU name. Falling back to NCCL.')
+            return
         print(f"The auto-detected SKU is a {machine_type}.")
 
     # Collect and sort all plans that match the collectives and sizes given by the user.
