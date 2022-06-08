@@ -63,7 +63,8 @@ def register_synthesis_plan(collective, machine_type, machines=lambda x: True, s
 
 
 def register_msccl_program(local_topology, collective, machine_type, machines=lambda x: True, sizes=None, protocol='Simple', 
-    chunk_factor=1, priority=0, collective_obj=None, instances=1, inplace=False, threadblock_policy=ThreadblockPolicy.auto):
+    chunk_factor=1, priority=0, collective_obj=None, instances=1, inplace=False, threadblock_policy=ThreadblockPolicy.auto,
+    interleaved_replication=True, dependence_nop=False):
     def decorator(fun):
         name = fun.__name__
         def wrapped(machines):
@@ -80,11 +81,12 @@ def register_msccl_program(local_topology, collective, machine_type, machines=la
                     co = lang_collectives.ReduceScatter(topology.num_nodes(), chunk_factor, inplace)
                 else:
                     raise RuntimeError(f'No collective_obj in msccl.language.collectives known for "{collective}"')
-            prog = MSCCLProgram(name, topology, co, instances, protocol, threadblock_policy)
+            prog = MSCCLProgram(name, topology, co, instances, protocol, threadblock_policy=threadblock_policy, 
+                interleaved_replication=interleaved_replication, dependence_nop=dependence_nop)
             with prog:
                 fun(prog, machines)
             prog.check()
-            ef = ir_to_xml(prog.lower())
+            ef = prog.generate_xml()
             fd, path = tempfile.mkstemp()
             with os.fdopen(fd, 'w') as f:
                 f.write(ef)
