@@ -42,3 +42,9 @@ def register_ndv4_plans():
     @register_msccl_program(fully_connected(8), 'alltoall', 'ndv4', protocol='Simple', sizes=('32MB', None), machines=lambda x: x == 64)
     def ndv4_alltoall_three_step(prog, nodes):
         alltoall_three_step(num_nodes=nodes, gpus_per_node=8)
+
+    @register_msccl_program(fully_connected(8), 'alltoall', 'ndv4', protocol='Simple', sizes=('1KB', None), machines=lambda x: x == 2 or x == 4)
+    def ndv4_alltoall_hierarchical_config2(prog, nodes):
+        alltoall_hierarchical(num_nodes=nodes, gpus_per_node=8)
+
+        
