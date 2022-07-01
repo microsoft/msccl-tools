@@ -1,9 +1,12 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+from math import log
 from dataclasses import dataclass
 from enum import Enum
 import functools
+from multiprocessing import dummy
+from sys import stderr, stdin, stdout
 from msccl.language.ir import *
 from msccl.language.passes import *
 from msccl.language.tb_assignment import *
@@ -11,9 +14,11 @@ from msccl.language.chunk import *
 from msccl.language.buffer import *
 from msccl.language.rank_dag import *
 import msccl.collectives as collectives
+
+from msccl.language.simulator import build_world
 # from msccl.language.visualize import *
 
-_current_program = None
+_current_program: Program = None # type: ignore
 def _curr():
     global _current_program
     if _current_program == None:
@@ -103,11 +108,56 @@ class MSCCLProgram:
     def check(self):
         return self.collective.check(self)
 
+
+    def enum_lower(self):
+        programs = []
+        print(f'{len(self.instr_dag.operations)} operations')
+
+        schedules = enumerate_schedules_fixch(self.instr_dag, count=100, maxchannels=32 // self.instances, maxtb=80 // self.instances)
+        for x, sched in enumerate(schedules):
+            # print(sorted(sched.tb_assignment.keys()))
+            print(sched.tb_assignment)
+            assert max(sched.tb_assignment.keys()) + 1 == len(sched.tb_assignment)
+            
+            instr_dag = deepcopy(self.instr_dag)
+            instrs = topo_sort_instrs(instr_dag)
+
+            for i in sched.tb_assignment:
+                instrs[i].tb = sched.tb_assignment[i]
+                instrs[i].channel = sched.ch_assignment[i]
+            
+                print(i, instrs[i], sched.tb_assignment[i], sched.ch_assignment[i])
+            
+ 
+            manual_assign_tbs(instr_dag)
+
+
+            instr_dag.convert_set_list()
+            if self.instr_fusion:
+                instr_dag.optimize()
+            instr_dag._complete_metadata()
+            reorder_sends_and_recvs(instr_dag)
+            instr_dag.lower_pt1(self.instances)
+            gpu_prgms = instr_dag.lower_pt2(self.instances, self.interleaved_replication)
+            if self.check_xml:
+                check_dependency_cycles(instr_dag.tbs)
+                check_threadblock_ordering(instr_dag)
+            
+            programs.append(Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms))
+
+        return programs
+        
+
     # Lower program to XML
-    def lower(self):
+    def lower(self, _enumerate=False):
         # self.chunk_dag._complete_metadata()
         # self.chunk_dag.channel_assignment()
         # self.chunk_dag.lower_instr_dag(self.instr_dag)
+
+        if _enumerate:
+            return self.enum_lower()
+        
+
         self.instr_dag.convert_set_list() # convert sets to lists
         if self.instr_fusion:
             self.instr_dag.optimize()
@@ -124,10 +174,10 @@ class MSCCLProgram:
             # For very large programs, turn off check_xml when shipping 
             check_dependency_cycles(self.instr_dag.tbs)
             check_threadblock_ordering(self.instr_dag)
-        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
+        return [Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  ]
 
-    def generate_xml(self):
-        return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop)
+    def generate_xml(self, enumerate=False):
+        return [(ir_to_xml(prog, dependence_nop=self.dependence_nop)) for prog in self.lower(enumerate)]
     
     def print_chunk_dag(self):
         visualize_chunk_dag(self.chunk_dag.chunk_paths)
@@ -148,8 +198,69 @@ def chunk(rank, buffer, index, size=1):
 def create_scratch(rank, name):
     return _curr().create_scratch(rank, name)
 
-def XML():
-   print(_curr().generate_xml())
+def XML(fout=None):
+    # import pickle
+    # for i, (sched, xml) in enumerate(_curr().generate_xml()):
+    #     # pickle.dump((sched.tb_assignment, sched.ch_assignment), open(f'{i + 1}.pkl', 'wb'))
+    #     open(f'{i+1}.xml', 'w').write(xml)
+   print(_curr().generate_xml()[0], file=fout)
+
+
+def Simulate(csv=False, fout=stdout, noprint=False, **opts):
+
+    def print_sz(sz):
+        # get postfix
+        idx = int(log(sz, 2)) // 10
+        # print(sz, log(sz, 2), idx, (2 << (10 * idx)))
+        idx = min(idx, 4)
+
+        prefix = ['B', 'KB', 'MB', 'GB', 'TB'][idx]
+
+        return f'{sz // (1 << (10 * idx))} {prefix}'
+
+    prog, = _curr().lower()
+    chunks = get_num_chunks(prog)
+
+    # Simulate from 1KB to 1GB
+    if 'sizes' in opts:
+        sizes = opts['sizes']
+    else:
+        sizes = [3 << p for p in range(10, 31)] # add a factor of 3 to allow for 6 and 12 instances
+    times = []
+
+    # input(sizes)
+
+    for sz in sizes:
+        # print(f'=== Simulating for {print_sz(sz)} ===', file=stderr)
+        world = build_world(prog, chunksize=sz / chunks, **opts)
+        world.initialize()
+        times.append(world.run())
+    import numpy as np
+    if noprint:
+        return np.array(times) 
+
+    if csv:
+        print('Size (bytes),Time (us)', file=fout)
+        for sz, time in zip(sizes, times):
+            print(f'{sz},{time}', file=fout)
+    else:
+        import tabulate
+        print(tabulate.tabulate(list(zip(map(print_sz, sizes), map(lambda t: f'{t:.2f} us', times))), headers=["Size", "Time"]))
+        # print('\n\n  Size    Time  ', file=fout)
+        # print('----------------', file=fout)
+
+        # for sz, time in zip(sizes, times):
+        #     print(f'  {print_sz(sz)}   {time:.2f} us', file=fout)
+
+    return np.array(times)
+
+
+    
+
+def EnumerateXML():
+    for i, xml in enumerate(_curr.generate_xml(enumerate=True)):
+        open(f'{i + 1}.xml', 'w').write(xml)
+
 
 def Check():
     return _curr().check()

@@ -1,0 +1,562 @@
+from __future__ import annotations
+
+from heapq import heappop, heappush
+import itertools
+from sys import stderr
+import inspect
+from typing import Type, Generator
+
+from msccl.language.ir import *
+
+import networkx as nx
+
+dgx2_top = nx.Graph()
+nodes = range(8)
+switches = [f's{i}' for i in range(12)]
+dgx2_top.add_nodes_from(nodes, switch=False)
+dgx2_top.add_nodes_from(switches, switch=True)
+dgx2_top.add_edges_from(itertools.product(nodes[:4], switches[:6]))
+dgx2_top.add_edges_from(itertools.product(nodes[4:], switches[6:]))
+dgx2_top.add_edges_from(zip(switches[:6], switches[6:]))
+
+link_t = tuple[int, ...]
+
+def get_links(topology: nx.Graph) -> dict[tuple[rank_t, rank_t], list[link_t]]:
+    gpus: set[rank_t] = {n for n, d in topology.nodes(data=True) if not d['switch']}
+    # assert nx.bipartite.is_bipartite_node_set(topology, gpus)
+
+    def get_gpu_links(n1: rank_t, n2: rank_t) -> Generator[link_t, None, None]:
+        allowed = nx.subgraph_view(topology, filter_node=lambda n: topology.nodes[n]['switch'] or n in (n1, n2))
+        yield from map(tuple, nx.all_simple_paths(allowed, n1, n2))
+
+    links = {}
+    for n1, n2 in itertools.combinations(gpus, 2):
+        links[n1, n2] = list(get_gpu_links(n1, n2))
+
+    return links
+
+
+EPS = 1e-10 # some events have to be ordered, we use EPS to ensure that
+pipeline_latency: int = int(1e100)
+send_buffering_threshold: int = 0
+
+event_counter = itertools.count()
+
+class Logger:
+    def __init__(self, parent, fmt):
+        self.parent = parent
+        self.fmt = fmt
+
+    @staticmethod
+    def __show_prefix(pfx: str):
+        return lambda self, msg: print(f'[{pfx}] {self.fmt.format(**inspect.currentframe().f_back.f_locals)}: {msg}') # type: ignore
+
+    debug = __show_prefix('DEBUG') # 
+    debug = lambda *args: None
+    info = __show_prefix('INFO')
+    warn = __show_prefix('WARN')
+    error = __show_prefix('ERROR')
+
+
+@dataclass 
+class Msg:
+    rank: rank_t
+    chan: chan_t
+
+
+@dataclass
+class ChunkAvailMsg(Msg):
+    def __hash__(self):
+        return hash(('chunk', self.rank, self.chan))
+
+    def __repr__(self) -> str:
+        return f'(chunk {self.rank} {self.chan})'
+
+
+@dataclass
+class ConnAvailMsg(Msg):
+    rank: rank_t
+    chan: chan_t
+
+    def __hash__(self):
+        return hash(('conn', self.rank, self.chan))
+
+    def __repr__(self) -> str:
+        return f'(conn {self.rank} {self.chan})'
+
+
+@dataclass
+class Event:
+    timestamp: float
+
+    def __lt__(self, other: Event):
+        return (self.timestamp, self.id) < (other.timestamp, other.id)
+
+    def __post_init__(self, *args, **kwargs):
+        self.id = next(event_counter)
+
+
+@dataclass
+class SubscribeEvent(Event):
+    """Subscribe a threadblock to a message"""
+    tb: TB # threadblock to subscribe
+    msg: Msg # message to subscribe to
+
+    def __repr__(self) -> str:
+        return f'SubscribeEvent(tb={str(self.tb)}, msg={self.msg})'
+
+
+@dataclass
+class NotifyEvent(Event):
+    """Notify all subscribers to a particular message"""
+    msg: Msg
+
+    def __repr__(self) -> str:
+        return f'NotifyEvent(msg={self.msg})'
+
+
+@dataclass
+class PollEvent(Event):
+    """Poll a threadblock for its next instruction to execute"""
+    tb: TB
+
+    def __repr__(self) -> str:
+        return f'PollEvent(tb={str(self.tb)})'
+
+
+@dataclass
+class ExecEvent(Event):
+    """Fired when an instruction is *finished* executing"""
+    op: Op
+    tb: TB
+
+    def __repr__(self) -> str:
+        return f'ExecEvent(tb={str(self.tb)}, op={self.op.inst})'
+
+
+
+
+@dataclass
+class AcquireChannel(Event):
+    """Fires when a send has *just started*"""
+    link: link_t | None
+    rank: rank_t
+    chan: chan_t
+
+    def __repr__(self) -> str:
+        return f'AcquireChannel(rank={self.rank}, chan={self.chan})'
+
+
+@dataclass
+class SendAvailable(Event):
+    """Fires when the first pipelined slice has finished sending"""
+    rank: rank_t
+    chan: chan_t
+
+    def __repr__(self) -> str:
+        return f'SendAvailable(rank={self.rank}, chan={self.chan})'
+
+
+chunk = NewType('chunk', bool)
+
+class buffer:
+    def __init__(self, rank: rank_t, flag: Type[Msg]):
+        self.chunks: Dict[chan_t, chunk] = defaultdict(lambda: chunk(False))
+        self.rank = rank
+        self.flag = flag
+        self.world: World = None # type: ignore
+
+    def set_world(self, world: World):
+        self.world = world
+
+    def put(self, chan: chan_t, val: bool, timestamp: float):
+        self.chunks[chan] = chunk(val)
+        self.world.notify(self.flag(rank=self.rank, chan=chan), timestamp)
+
+    def __call__(self, chan: chan_t):
+        return self.chunks[chan]
+
+def pretty_print(op: Op) -> str:
+    return f'{op.channel}@{op.inst}:{op.src.rank, op.src.index}->{op.dst.rank, op.dst.index}'
+
+class TB:
+    def __init__(self, ops: list[Op]) -> None:
+        self.ops = ops
+        self.rank: Rank = None # type: ignore
+        self.world: World = None # type: ignore
+
+        self.ip: int = 0
+        self.tbid: tbid_t = tbid_t(-1)
+
+        self.log = Logger(self, '<TB {self.rank.id}:{self.tbid}|{timestamp}>')
+    
+
+    def set_rank(self, rank: Rank, tbid: tbid_t, world: World):
+        self.rank = rank
+        self.tbid = tbid
+        self.world = world
+
+        timestamp = -1
+
+        self.log.debug(' ; '.join(map(pretty_print, self.ops)))
+
+
+    def get_events(self, timestamp: float):
+        if self.ip >= len(self.ops):
+            return
+
+        op = self.ops[self.ip]
+        # self.log.debug(f'Polled, current ip is {self.ip} and op is {pretty_print(op)}')
+
+        if op.is_recv():
+            # check if data is available in the buffer
+            if self.rank.dirty(op.channel):
+                # if it is, complete the receive (this will clear the dirty bit)
+                self.log.debug(f'Initiated recv from {self.rank.id, op.channel}')
+                self.world.schedule(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
+                self.ip += 1 # don't check the recv next time we look at this thread
+
+                # is the send still in-flight (i.e. there is more data to read)
+                # (this happens when sends are pipelined)
+                if self.rank.locked(op.channel):
+                    self.log.debug('Send not finished, subscribing to buffer')
+                    # this will notify the thread as soon as that send completes
+                    # a benefit of simulating everything is we don't actually have to process the receive of each slice :)
+                    self.world.schedule(SubscribeEvent(
+                        timestamp=timestamp + self.world.latency(op), 
+                        tb=self, msg=ConnAvailMsg(self.rank.id, op.channel)))
+                else:
+                    # we read everything we needed to
+                    self.log.debug(f'Finished receive, continuing execution')
+                    self.world.schedule(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
+
+            else:
+                self.log.debug(f'Trying to receive from {self.rank.id, op.channel}, waiting for data')
+                # notify when the send completes (thus making the connection available)
+                self.world.schedule(SubscribeEvent(
+                    timestamp=timestamp, tb=self, msg=ChunkAvailMsg(self.rank.id, op.channel)))
+
+        elif op.is_send():
+            # is another send is currently using this channel?
+            if self.world.ranks[op.dst.rank].locked(op.channel):
+                self.log.debug(f'Send in progress on chunk {op.dst.rank, op.channel}; subscribing to wait')
+                self.world.schedule(SubscribeEvent(
+                    timestamp=timestamp, tb=self, msg=ConnAvailMsg(op.dst.rank, op.channel)))
+            
+            # is there unread data in the buffer? (Note: this might be a fused op, in which case we're the ones meant to read that unread data as well) 
+            elif self.world.ranks[op.dst.rank].dirty(op.channel) and not (op.is_recv() and op.src.rank == op.dst.rank):
+                self.log.debug(f'Unread send in buffer {op.dst.rank, op.channel}; subscribing to wait')
+                self.world.schedule(SubscribeEvent(
+                    timestamp=timestamp, tb=self, msg=ChunkAvailMsg(op.dst.rank, op.channel)))
+
+            elif ((op.cnt() * self.world.chunksize > send_buffering_threshold) or True) and self.world.in_use[(link := self.world.mapping[op.src.rank, op.dst.rank, op.channel])]:
+                self.log.debug('Link already in use, subscribing to wait') # TODO: maybe decide to do something more clever than this
+                # raise SystemExit() # TODO: need to track the particular channel using the link, not just whether its in use or not
+            else: # no reason to wait; full steam ahead!
+                self.log.debug(f'Initiated send to {op.dst.rank, op.channel} on link {link}')
+                
+                # acquire the channel immediately
+                self.world.schedule(AcquireChannel(timestamp=timestamp, link=link, rank=op.dst.rank, chan=op.channel))
+
+                # after the pipeline delay, mark the data as available
+                self.world.schedule(SendAvailable(
+                    timestamp=timestamp + min(self.world.pipeline, self.world.latency(op)),
+                    rank=op.dst.rank, chan=op.channel))
+
+                # once the send has finished, release the channel by firing Exec(send)
+                self.world.schedule(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
+
+                # keep running this thread
+                self.world.schedule(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
+                self.ip += 1
+
+        else:
+            self.log.debug(f'Scheduling local {op}')
+            self.world.schedule(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
+            self.world.schedule(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
+            self.ip += 1
+
+
+
+
+    def __str__(self):
+        return f'TB {self.rank.id}:{self.tbid}'
+
+
+class Rank:
+    def __init__(self, rid: rank_t, tbs: list[TB]):
+        self.tbs = tbs
+
+        self.dirty = buffer(rid, ChunkAvailMsg) # chunks with unread data
+        self.locked = buffer(rid, ConnAvailMsg) # chunks actively being written to
+            
+        self.id = rid
+        self.world: World = None # type: ignore
+
+    def set_world(self, world: World):
+        for i, tb in enumerate(self.tbs):
+            tb.set_rank(self, tbid_t(i), world)
+
+        self.dirty.set_world(world)
+        self.locked.set_world(world)
+
+        self.world = world
+
+
+connection_t = tuple[rank_t, rank_t, chan_t]
+
+class World:
+
+    top: nx.Graph = None
+    links: dict[tuple[rank_t, rank_t], list[link_t]] = {}
+
+    @classmethod
+    def set_top(cls, top: nx.Graph):
+        World.top = top
+        World.links = get_links(top)
+
+    def __init__(self, ranks: dict[rank_t, Rank], 
+                        chunksize=1, 
+                        timing_info=None, 
+                        verbose=False,
+                        num_conns=0,
+                        mapping: dict[connection_t, link_t]={},
+                        restrict_tbs: List[Tuple[rank_t, tbid_t]]=[], **kwargs):
+
+        
+        self.ranks = ranks
+        self.queue: list[Event] = []
+        self.trace: list[tuple[float, Op]] = []
+
+        self.chunksize = chunksize
+        self.timing_info = timing_info
+
+        self.verbose = verbose
+        self.log = Logger(self, '<world|{event.timestamp}>')
+        
+
+        for _, rank in ranks.items():
+            rank.set_world(self)
+
+        self.timestamp = 0.
+        self.pipeline = int(1e100)
+
+        if timing_info:
+            self.timestamp = timing_info[3][0] * num_conns + timing_info[3][1]
+            self.pipeline = timing_info[4]
+            
+
+        self.subscribers: dict[Msg, set[TB]] = defaultdict(set)
+
+        self.mapping = mapping
+        self.in_use: dict[link_t, bool] = defaultdict(bool)
+
+    def notify(self, msg: Msg, timestamp: float):
+        self.schedule(NotifyEvent(timestamp=timestamp, msg=msg))
+
+
+    def schedule(self, event: Event):
+        heappush(self.queue, event)
+
+    def initialize(self):
+        for _, rank in self.ranks.items():
+            for tb in rank.tbs:
+                self.queue.append(PollEvent(0, tb))
+
+    def debug_mode(self):
+        print('Simulator paused; entering debug mode. Type "res" to resume or "quit" to quit')
+        while True:
+            line = input('debug> ')
+            if line == 'res':
+                break
+            try:
+                print(f'=> {eval(line)}')
+            except Exception as e:
+                print(e)
+                
+
+    def run(self) -> float:
+        try:
+            while len(self.queue):
+                event = heappop(self.queue)
+                # self.log.info(set(filter(lambda k: self.in_use.get, self.in_use.keys())))
+                if isinstance(event, PollEvent):
+                    event.tb.get_events(event.timestamp)
+                elif isinstance(event, ExecEvent):
+                    self.execute(event)
+                elif isinstance(event, SubscribeEvent):
+                    self.log.debug(f'Subscribing {str(event.tb)} to {event.msg}')
+                    self.subscribers[event.msg].add(event.tb)
+                elif isinstance(event, NotifyEvent):
+                    for sub in self.subscribers[event.msg]:
+                        self.log.debug(f'Notifying {str(sub)} of {event.msg}')
+                        heappush(self.queue, PollEvent(timestamp=event.timestamp, tb=sub))
+                    self.subscribers[event.msg] = set()
+                elif isinstance(event, AcquireChannel):
+                    self.log.debug(f'Channel {event.rank, event.chan} locked')
+                    self.ranks[event.rank].locked.put(event.chan, True, event.timestamp)
+
+                    # mark the link as in use
+                    if event.link is not None:
+                        self.in_use[event.link] = True
+
+                elif isinstance(event, SendAvailable):
+                    self.log.debug(f'Data available from send on (rank, channel) {event.rank, event.chan}')
+                    self.ranks[event.rank].dirty.put(event.chan, True, event.timestamp)
+
+        except KeyboardInterrupt:
+            self.debug_mode()
+
+        try:
+            for rank in self.ranks:
+                for tb in self.ranks[rank].tbs:
+                    assert tb.ip == len(tb.ops), f'{str(tb)} did not complete!'
+        except AssertionError as e:
+            self.log.error(e)
+            self.debug_mode()
+        return self.timestamp
+
+    def execute(self, event: ExecEvent):
+
+        # all fused ops follow the pattern `[recv]?[local]*[send]?`
+        if event.op.is_recv():
+            # the action of a receive is to clear the dirty bit, marking the chunk as being read
+            self.log.debug(f'From {str(event.tb)}: Executing recv to {event.op.rank, event.op.channel}')
+            self.ranks[event.op.rank].dirty.put(event.op.channel, False, event.timestamp)
+        
+        if event.op.is_local():
+            # local ops don't really have to be simulated
+            self.log.debug(f'Executing local {event.op} for {str(event.tb)}')
+
+        if event.op.is_send():
+            # the action of a send is to release the channel lock...
+            self.log.debug(f'From {str(event.tb)}: Executing send to {event.op.dst.rank, event.op.channel}')
+            assert self.ranks[event.op.dst.rank].locked(event.op.channel)
+            self.ranks[event.op.dst.rank].locked.put(event.op.channel, False, event.timestamp)
+            
+            # ...and also mark the link as free
+            self.in_use[(link := self.mapping[event.op.src.rank, event.op.dst.rank, event.op.channel])] = False
+            # self.log.info(f'Freed link {link}!')
+
+        self.trace.append((event.timestamp, event.op))
+        self.timestamp = event.timestamp
+        if self.verbose:
+            print(f'\t** TB {event.tb.rank.id}:{event.tb.tbid} executing {event.op.inst} @ t = {event.timestamp} **', file=stderr)
+
+
+    def get_congestion(self):
+        return 1 # congestion scales the bandwidth, lower = more congested
+
+
+
+    def base_cost(self, inst: Instruction, count: int = 1):
+        # really only supposed to work on chunk sizes up to 128 MB
+        breaks: dict[Instruction, tuple[float, float]] = {
+            Instruction.copy: (5390., 2337591.),
+            Instruction.reduce: (8388353., 64833826),
+            Instruction.send: (4954., 2138062.)
+        }
+
+        slopes: dict[Instruction, tuple[float, float, float]] = {
+            Instruction.copy: (5.36313E-4, 3.00438E-5, 3.14277E-5),
+            Instruction.reduce: (1.0578E-4, 1.0395E-4, 1.0622E-4),
+            Instruction.send: (3.04591E-4, 3.07056E-5, 3.28184E-5)
+        }
+        # :sweat_smile:
+        ntrcps: dict[Instruction, tuple[float, float, float]] = {
+            Instruction.copy: (2.16458, 4.89355, 1.65851),
+            Instruction.reduce: (1.35567, 16.63357, -130.21764),
+            Instruction.send: (5.29086, 6.64778, 2.13039)
+        }
+
+        if self.timing_info is not None:
+            breaks, slopes, ntrcps, _, _ = self.timing_info
+
+        def get_idx(val, cutoffs):
+            low, high = cutoffs
+            if val < low:
+                return 0
+            elif val < high:
+                return 1
+            return 2
+
+        def linterpolate(val, cutoffs, ms, bs):
+            idx = get_idx(val, cutoffs)
+            return val * ms[idx] + bs[idx]
+
+        if inst is Instruction.recv:
+            inst = Instruction.copy
+        
+        return linterpolate(self.chunksize * count, breaks[inst], slopes[inst], ntrcps[inst])
+        
+        
+    def latency(self, op: Op):
+        if op.inst in (Instruction.reduce, Instruction.recv, Instruction.copy, Instruction.send):
+            return self.base_cost(op.inst, op.cnt())
+        
+        if op.inst is Instruction.recv_copy_send:
+            return self.base_cost(Instruction.recv, op.cnt()) + self.base_cost(Instruction.copy, op.cnt()) + self.base_cost(Instruction.send, op.cnt())
+        
+        if op.inst is Instruction.recv_reduce_copy:
+            return self.base_cost(Instruction.recv, op.cnt()) + self.base_cost(Instruction.reduce, op.cnt()) + self.base_cost(Instruction.copy, op.cnt())
+
+        if op.inst is Instruction.recv_reduce_copy_send:
+            return self.base_cost(Instruction.recv, op.cnt()) + self.base_cost(Instruction.reduce, op.cnt()) + self.base_cost(Instruction.copy, op.cnt()) + self.base_cost(Instruction.send, op.cnt())
+        
+        if op.inst is Instruction.recv_reduce_send:
+            return self.base_cost(Instruction.recv, op.cnt()) + self.base_cost(Instruction.reduce, op.cnt()) + self.base_cost(Instruction.send, op.cnt())
+
+        print(f'[WARN] Unrecognized opcode: {op.inst}; assuming 0 latency')
+        return 0
+            
+
+def get_connections(prog: Program) -> set[connection_t]:
+    conns: set[connection_t] = set()
+    for gpu in prog.gpus:
+        for tb in gpu.threadblocks:
+            conns.add((tb.recv, gpu.rank, tb.channel))
+
+    conns = {c for c in conns if -1 not in c}
+
+    return conns
+
+
+def schedule(connections: set[connection_t], links: dict[tuple[rank_t, rank_t], list[link_t]]) -> dict[connection_t, link_t]:
+    channels: dict[tuple[rank_t, rank_t], list[chan_t]] = defaultdict(list)
+    for r1, r2, c in connections:
+        channels[r1, r2].append(c)
+
+    mapping: dict[connection_t, tuple[int, ...]] = {}
+    for r1, r2 in channels:
+        for i, chan in enumerate(channels[r1, r2]):
+            if (r1, r2) in links:
+                avail = links[r1, r2]
+            else:
+                avail = links[r2, r1]
+            mapping[r1, r2, chan] = tuple(avail[i % len(avail)])
+
+    return mapping
+
+    
+
+
+def build_world(prog: Program, **params) -> World:
+    ranks: dict[rank_t, Rank] = {}
+    
+    for gpu in prog.gpus:
+        tbs: list[TB] = []
+        for tb in gpu.threadblocks:
+            for op in tb.ops:
+                op.channel = tb.channel
+            tbs.append(TB(ops=tb.ops))
+            
+        ranks[gpu.rank] = Rank(rid=gpu.rank, tbs=tbs)
+
+    connections = get_connections(prog)
+    # params['num_conns'] = len(gpu.threadblocks) # len({(r1, r2 )for (r1, r2, _) in connections})
+    # params['mapping'] = schedule(connections, World.links)
+
+
+    return World(ranks, num_cons=len(gpu.threadblocks), mapping=schedule(connections, World.links), **params)
+
+    

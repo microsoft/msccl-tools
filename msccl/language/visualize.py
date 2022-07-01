@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-import igraph as ig
+import igraph as ig # type: ignore
 from msccl.language.ir import *
 from msccl.language.rank_dag import *
 

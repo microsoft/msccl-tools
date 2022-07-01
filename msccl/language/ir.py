@@ -2,12 +2,16 @@
 # Licensed under the MIT License.
 
 from __future__ import annotations
+from typing import Dict, List, NewType, Tuple
 
-from lxml import etree as ET
+from lxml import etree as ET # type: ignore
 from dataclasses import dataclass, field
 from enum import Enum
 from collections import defaultdict
 
+rank_t = NewType('rank_t', int)
+chan_t = NewType('chan_t', int)
+tbid_t = NewType('tbid_t', int)
 
 @dataclass
 class Program:
@@ -15,13 +19,13 @@ class Program:
     collective: str
     inplace: bool
     protocol: str
-    gpus: list = field(default_factory=list)
+    gpus: List[Gpu] = field(default_factory=list)
 
 
 @dataclass
 class Gpu:
-    rank: int
-    threadblocks: list = field(default_factory=list)
+    rank: rank_t
+    threadblocks: List[Threadblock] = field(default_factory=list)
 
     # From ncclize
     precopies: list = field(default_factory=list)
@@ -38,11 +42,11 @@ class Gpu:
 
 @dataclass
 class Threadblock:
-    channel: int = -1
-    send: int = -1
-    recv: int = -1
-    ops: list = field(default_factory=list)
-    rbid: int = -1 # threadblock id of the receiver
+    channel: chan_t = chan_t(-1)
+    send: rank_t = rank_t(-1)
+    recv: rank_t = rank_t(-1)
+    ops: List[Op] = field(default_factory=list)
+    rbid: tbid_t = tbid_t(-1) # threadblock id of the receiver
 
     def __eq__(self, other):
         return self is other
@@ -103,7 +107,7 @@ class Buffer(Enum):
 
 @dataclass
 class ChunkRef:
-    rank: int
+    rank: rank_t
     buffer: Buffer
     index: int
     size: int
@@ -115,20 +119,20 @@ class ChunkRef:
 @dataclass
 class Op:
     inst: Instruction
-    rank: int
+    rank: rank_t
     src: ChunkRef
     dst: ChunkRef
     depends: list = field(default_factory=list)
     step: int = -1 # Step in the TB
-    tb: int = -1 # TB this op is assigned to
-    prev: list | set = field(default_factory=list) # List of instructions that happen before
-    next: list | set = field(default_factory=list) # List of instructions that happen after
+    tb: tbid_t = tbid_t(-1) # TB this op is assigned to
+    prev: list[Op] | set[Op] = field(default_factory=list) # type: ignore # List of instructions that happen before
+    next: list[Op] | set[Op] = field(default_factory=list) # type: ignore # List of instructions that happen after
     num: int = -1
     chunk_step: int = -1
     priority: int = -1
     recv_match: Op | None =  None
     send_match: Op | None =  None
-    channel: int = -1
+    channel: chan_t = chan_t(-1)
 
     def cnt(self):
         if self.src:
@@ -210,9 +214,27 @@ _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.re
                     Instruction.recv_reduce_copy_send}
 
 
+def get_num_chunks(program: Program):
+    # Figure out sizes of buffers based on usage
+    buffer_sizes: Dict[Tuple[int, Buffer], int] = defaultdict(lambda: 0)
+    for gpu in program.gpus:
+        for tb in gpu.threadblocks:
+            for op in tb.ops:
+                if op.inst in _local_src_insts:
+                    key = (gpu.rank, op.src.buffer)
+                    buffer_sizes[key] = max(
+                        buffer_sizes[key], op.src.index + op.src.size)
+                if op.inst in _local_dst_insts:
+                    key = (gpu.rank, op.dst.buffer)
+                    buffer_sizes[key] = max(
+                        buffer_sizes[key], op.dst.index + op.dst.size)
+
+    return max(max(buffer_sizes[(gpu.rank, Buffer.input)], buffer_sizes[(gpu.rank, Buffer.output)]) for gpu in program.gpus)
+
+
 def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
     # Figure out sizes of buffers based on usage
-    buffer_sizes = defaultdict(lambda: 0)
+    buffer_sizes: Dict[Tuple[int, Buffer], int] = defaultdict(lambda: 0)
     for gpu in program.gpus:
         for tb in gpu.threadblocks:
             for op in tb.ops:
@@ -250,7 +272,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     # then op2 does not need to explicitly depend on op
     for gpu in program.gpus:
         for tb in gpu.threadblocks:
-            running_depends = []
+            running_depends: list = []
             for op in tb.ops:
                 op.depends = list(
                     filter(lambda dep: dep not in running_depends, op.depends))
@@ -266,10 +288,10 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     if dependence_nop:
         for gpu in program.gpus:
             for tb in gpu.threadblocks:
-                pre_ops = []
+                pre_ops: list[Op] = []
                 after_ops = []
-                first_re = None
-                first_dep = None
+                first_re: Op = None # type: ignore
+                first_dep: Op = None # type: ignore
                 for i, op in enumerate(tb.ops):
                     # Expand extra dependencies into nop operations
                     num_depends = len(op.depends)
@@ -279,7 +301,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                                 if first_dep is None:
                                     first_dep = dep
                                 else:    
-                                    pre_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
+                                    pre_ops.append(Op(Instruction.nop, -1, None, None, [dep])) # type: ignore
                             op.depends = []
                         if first_re is None:
                             first_re = op
@@ -305,7 +327,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                     extra_deps = op.depends[1:]
                     op.depends = op.depends[:1]
                     for i, dep in enumerate(extra_deps):
-                        new_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
+                        new_ops.append(Op(Instruction.nop, -1, None, None, [dep])) # type: ignore
                         op_idx[new_ops[-1]] = len(new_ops) - 1
                         #op_tb_id[new_ops[-1]] = op_tb_id[op]
                 new_ops.append(op)
@@ -352,7 +374,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                     if op.src.buffer == Buffer.scratch:
                         op.src.buffer = Buffer.output
                         op.src.index += buffer_sizes[(gpu.rank, Buffer.output)]
-                    if op.dst_buffer == Buffer.scratch:
+                    if op.dst.buffer == Buffer.scratch: # if op.dst_buffer == Buffer.scratch
                         op.dst.buffer = Buffer.output
                         op.dst.index += buffer_sizes[(gpu.rank, Buffer.output)]
 

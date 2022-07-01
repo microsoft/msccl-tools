@@ -11,22 +11,23 @@ from msccl.language.buffer import BufferSlice
 from msccl.language.ir import *
 from msccl.language.passes import *
 
-def remove_op(op):
+def remove_op(op: Op):
+
     for p in op.prev:
         p.next.remove(op)
-        p.next += op.next
+        p.next += op.next # type: ignore
 
     for n in op.next:
         n.prev.remove(op)
-        n.prev =  op.prev.union(n.prev)
+        n.prev =  op.prev.union(n.prev) # type: ignore
 
-def same_tb(op1, op2):
+def same_tb(op1: Op, op2: Op):
     return op1.tb == op2.tb and op1.channel == op2.channel
 
-def same_count(op1, op2):
+def same_count(op1: Op, op2: Op):
     return op1.cnt() == op2.cnt()
     
-def same_buf_dst(op1, op2):
+def same_buf_dst(op1: Op, op2: Op):
     return op1.dst.buffer == op2.dst.buffer and op1.dst.index == op2.dst.index
 
 class InstructionDAG:
@@ -41,7 +42,7 @@ class InstructionDAG:
         self.last_writer: Dict[InstructionDAG.Slot, Op] = {} # slot -> last writing op
         self.last_readers: Dict[InstructionDAG.Slot, List[Op]] = defaultdict(list) # slot -> list of last reading ops
         # State for the MSCCL-IR
-        self.tbs: List[Dict[int, Threadblock]] = [] 
+        self.tbs: List[Dict[tbid_t, Threadblock]] = [] 
         for _ in range(num_ranks):
             self.tbs.append({}) 
         self.tb_mapping: dict = {}
@@ -49,7 +50,7 @@ class InstructionDAG:
 
 
     # InstructionDAG helper - identifies the dependencies for a write-type operation (recv, copy, rrc, reduce)
-    def _write(self, rank: int, buffer: Buffer, index: int, size: int, op: Op, read=False):
+    def _write(self, rank: rank_t, buffer: Buffer, index: int, size: int, op: Op, read=False):
         prev_ops: Set[Op] = set()
         for i in range(index, index+size):
             slot = (rank, buffer, i)
@@ -78,7 +79,7 @@ class InstructionDAG:
             op.prev.add(prev_op) # type: ignore
 
     # InstructionDAG helper - identifies the dependencies for read-type operations (send, copy, reduce)
-    def _read(self, rank: int, buffer: Buffer, index: int, size: int, op: Op):
+    def _read(self, rank: rank_t, buffer: Buffer, index: int, size: int, op: Op):
         prev_ops: Set[Op] = set()
         for i in range(index, index+size):
             slot = (rank, buffer, i)
@@ -94,14 +95,14 @@ class InstructionDAG:
             op.prev.add(prev_op) # type: ignore
 
     # InstructionDAG - builds the roots of the DAG
-    def add_start(self, rank: int, buffer: Buffer, index: int, ref: ChunkRef):
+    def add_start(self, rank: rank_t, buffer: Buffer, index: int, ref: ChunkRef):
         slot = (rank, buffer, index)
         op = Op(Instruction.start, rank, ref, ref, next=set(), prev=set(), chunk_step=-1)
         self.operations[slot] = op
         self.last_writer[slot] = op
 
     # InstructionDAG - adds a copy node
-    def add_copy(self, rank: int, send_ref: ChunkRef, recv_ref: ChunkRef, tb: int, ch: int):
+    def add_copy(self, rank: rank_t, send_ref: ChunkRef, recv_ref: ChunkRef, tb: tbid_t, ch: chan_t):
         op = Op(Instruction.copy, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
@@ -115,7 +116,7 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a redduce node
-    def add_reduce(self, rank: int, send_ref: ChunkRef, recv_ref: ChunkRef, tb: int, ch: int):
+    def add_reduce(self, rank: rank_t, send_ref: ChunkRef, recv_ref: ChunkRef, tb: tbid_t, ch: chan_t):
         op = Op(Instruction.reduce, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
@@ -130,7 +131,7 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a send node
-    def add_send(self, rank: int, send_ref: ChunkRef, recv_ref: ChunkRef, tb: int, ch: int):
+    def add_send(self, rank: rank_t, send_ref: ChunkRef, recv_ref: ChunkRef, tb: tbid_t, ch: chan_t):
         op = Op(Instruction.send, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = send_ref.buffer
         index = send_ref.index
@@ -139,7 +140,7 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a recv node
-    def add_recv(self, rank: int, send_ref: ChunkRef, recv_ref: ChunkRef, tb: int, ch: int, send_op: Op):
+    def add_recv(self, rank: rank_t, send_ref: ChunkRef, recv_ref: ChunkRef, tb: tbid_t, ch: chan_t, send_op: Op):
         op = Op(Instruction.recv, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
@@ -149,7 +150,7 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a rrc node
-    def add_recv_reduce_copy(self, rank: int, send_ref: ChunkRef, recv_ref: ChunkRef, tb: int, ch: int, send_op: Op):
+    def add_recv_reduce_copy(self, rank: rank_t, send_ref: ChunkRef, recv_ref: ChunkRef, tb: tbid_t, ch: chan_t, send_op: Op):
         op = Op(Instruction.recv_reduce_copy, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
@@ -355,10 +356,10 @@ class InstructionDAG:
             for rank, rank_tbs in enumerate(self.tbs):
                 # rank_channels = self.num_channels[rank]
                 for tbid, tb in rank_tbs.items():
-                    instance_channel = max_channels * i + tb.channel
+                    instance_channel = chan_t(max_channels * i + tb.channel)
                     itb = Threadblock(instance_channel, tb.send, tb.recv)
-                    itbid = tbid * instances + i
-                    itb.ops = [None] * len(tb.ops)
+                    itbid = tbid_t(tbid * instances + i)
+                    itb.ops = [None] * len(tb.ops) # type: ignore
                     for s, op in enumerate(tb.ops):
                         isrc = get_instance_ref(op.src)
                         idst = get_instance_ref(op.dst)
@@ -372,7 +373,7 @@ class InstructionDAG:
         for rank, rank_tbs in enumerate(self.tbs):
             for tbid, tb in rank_tbs.items():
                 for i in range(instances):
-                    itbid = tbid * instances + i
+                    itbid = tbid_t(tbid * instances + i)
                     itb = self.instanced_tbs[rank][itbid]
                     for op, iop in zip(tb.ops, itb.ops):
                         iop.depends = [None] * len(op.depends)
