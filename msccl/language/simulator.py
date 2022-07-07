@@ -1,14 +1,17 @@
 from __future__ import annotations
+from chunk import Chunk
 
 from heapq import heappop, heappush
 import itertools
 from sys import stderr
 import inspect
-from typing import Type, Generator
+from typing import Optional, Type, Generator
 
 from msccl.language.ir import *
 
-import networkx as nx
+import networkx as nx # type: ignore
+
+# TODO: PollEvent should know whether it will advance the ip or not, instead of threadblocks advancing their ip manually
 
 dgx2_top = nx.Graph()
 nodes = range(8)
@@ -84,13 +87,17 @@ class ConnAvailMsg(Msg):
     def __repr__(self) -> str:
         return f'(conn {self.rank} {self.chan})'
 
+def event_priority(e: Type[Event]) -> int:
+    if e is SubscribeEvent:
+        return 0
+    return 1
 
 @dataclass
 class Event:
     timestamp: float
 
     def __lt__(self, other: Event):
-        return (self.timestamp, self.id) < (other.timestamp, other.id)
+        return (self.timestamp, event_priority(type(self)), self.id) < (other.timestamp, event_priority(type(other)), other.id)
 
     def __post_init__(self, *args, **kwargs):
         self.id = next(event_counter)
@@ -145,6 +152,15 @@ class AcquireChannel(Event):
 
     def __repr__(self) -> str:
         return f'AcquireChannel(rank={self.rank}, chan={self.chan})'
+
+
+@dataclass
+class TryAcquire(Event):
+    tb: TB
+    conn: connection_t
+    callbacks: list[Event]
+    override_dirty: bool = False
+    override_in_use: bool = False
 
 
 @dataclass
@@ -237,41 +253,56 @@ class TB:
                     timestamp=timestamp, tb=self, msg=ChunkAvailMsg(self.rank.id, op.channel)))
 
         elif op.is_send():
-            # is another send is currently using this channel?
-            if self.world.ranks[op.dst.rank].locked(op.channel):
-                self.log.debug(f'Send in progress on chunk {op.dst.rank, op.channel}; subscribing to wait')
-                self.world.schedule(SubscribeEvent(
-                    timestamp=timestamp, tb=self, msg=ConnAvailMsg(op.dst.rank, op.channel)))
-            
-            # is there unread data in the buffer? (Note: this might be a fused op, in which case we're the ones meant to read that unread data as well) 
-            elif self.world.ranks[op.dst.rank].dirty(op.channel) and not (op.is_recv() and op.src.rank == op.dst.rank):
-                self.log.debug(f'Unread send in buffer {op.dst.rank, op.channel}; subscribing to wait')
-                self.world.schedule(SubscribeEvent(
-                    timestamp=timestamp, tb=self, msg=ChunkAvailMsg(op.dst.rank, op.channel)))
 
-            elif ((op.cnt() * self.world.chunksize > send_buffering_threshold) or True) and self.world.in_use[(link := self.world.mapping[op.src.rank, op.dst.rank, op.channel])]:
-                self.log.debug('Link already in use, subscribing to wait') # TODO: maybe decide to do something more clever than this
-                # raise SystemExit() # TODO: need to track the particular channel using the link, not just whether its in use or not
-            else: # no reason to wait; full steam ahead!
-                self.log.debug(f'Initiated send to {op.dst.rank, op.channel} on link {link}')
-                
-                # acquire the channel immediately
-                self.world.schedule(AcquireChannel(timestamp=timestamp, link=link, rank=op.dst.rank, chan=op.channel))
-
-                # after the pipeline delay, mark the data as available
-                self.world.schedule(SendAvailable(
+            callbacks: list[Event] = []
+            callbacks.append(SendAvailable(
                     timestamp=timestamp + min(self.world.pipeline, self.world.latency(op)),
                     rank=op.dst.rank, chan=op.channel))
+            callbacks.append(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
+            callbacks.append(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
 
-                # once the send has finished, release the channel by firing Exec(send)
-                self.world.schedule(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
+            self.log.debug(f'Trying to acquire connection {op.src.rank, op.dst.rank, op.channel}')
 
-                # keep running this thread
-                self.world.schedule(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
-                self.ip += 1
+            self.world.schedule(TryAcquire(
+                timestamp=timestamp, tb=self, conn=(op.src.rank, op.dst.rank, op.channel), 
+                callbacks=callbacks, override_dirty=(op.is_recv() and op.src.rank == op.dst.rank),
+                override_in_use=(op.cnt() * self.world.chunksize) > send_buffering_threshold))
+
+            # # is another send is currently using this channel?
+            # if self.world.ranks[op.dst.rank].locked(op.channel):
+            #     self.log.debug(f'Send in progress on chunk {op.dst.rank, op.channel}; subscribing to wait')
+            #     self.world.schedule(SubscribeEvent(
+            #         timestamp=timestamp, tb=self, msg=ConnAvailMsg(op.dst.rank, op.channel)))
+            
+            # # is there unread data in the buffer? (Note: this might be a fused op, in which case we're the ones meant to read that unread data as well) 
+            # elif self.world.ranks[op.dst.rank].dirty(op.channel) and not (op.is_recv() and op.src.rank == op.dst.rank):
+            #     self.log.debug(f'Unread send in buffer {op.dst.rank, op.channel}; subscribing to wait')
+            #     self.world.schedule(SubscribeEvent(
+            #         timestamp=timestamp, tb=self, msg=ChunkAvailMsg(op.dst.rank, op.channel)))
+
+            # elif ((op.cnt() * self.world.chunksize > send_buffering_threshold) or True) and self.world.in_use[(link := self.world.mapping[op.src.rank, op.dst.rank, op.channel])]:
+            #     self.log.debug('Link already in use, subscribing to wait') # TODO: maybe decide to do something more clever than this
+            #     # raise SystemExit() # TODO: need to track the particular channel using the link, not just whether its in use or not
+            # else: # no reason to wait; full steam ahead!
+            #     self.log.debug(f'Initiated send to {op.dst.rank, op.channel} on link {link}')
+                
+            #     # acquire the channel immediately
+            #     self.world.schedule(AcquireChannel(timestamp=timestamp, link=link, rank=op.dst.rank, chan=op.channel))
+
+            #     # after the pipeline delay, mark the data as available
+            #     self.world.schedule(SendAvailable(
+            #         timestamp=timestamp + min(self.world.pipeline, self.world.latency(op)),
+            #         rank=op.dst.rank, chan=op.channel))
+
+            #     # once the send has finished, release the channel by firing Exec(send)
+            #     self.world.schedule(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
+
+            #     # keep running this thread
+            #     self.world.schedule(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
+            #     self.ip += 1
 
         else:
-            self.log.debug(f'Scheduling local {op}')
+            # self.log.debug(f'Scheduling local {op}')
             self.world.schedule(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
             self.world.schedule(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
             self.ip += 1
@@ -279,7 +310,7 @@ class TB:
 
 
 
-    def __str__(self):
+    def __repr__(self):
         return f'TB {self.rank.id}:{self.tbid}'
 
 
@@ -349,9 +380,10 @@ class World:
         self.subscribers: dict[Msg, set[TB]] = defaultdict(set)
 
         self.mapping = mapping
-        self.in_use: dict[link_t, bool] = defaultdict(bool)
+        self.in_use: dict[link_t, Optional[connection_t]] = defaultdict(lambda: None)
 
     def notify(self, msg: Msg, timestamp: float):
+        # print(f'Scheduling notification for {self.subscribers[msg]}')
         self.schedule(NotifyEvent(timestamp=timestamp, msg=msg))
 
 
@@ -374,10 +406,42 @@ class World:
             except Exception as e:
                 print(e)
                 
+    def is_acquireable(self, conn: connection_t, override_dirty=False):
+        _, dst, chan = conn
+        # print(f'\tTry acquire for {conn}: ', end='')
+        if self.ranks[dst].locked(chan):
+            # print('FAIL: another send in progress to dest')
+            return ConnAvailMsg(dst, chan)
+
+        if self.ranks[dst].dirty(chan) and not override_dirty:
+            # print('FAIL: unread data in buffer')
+            return ChunkAvailMsg(dst, chan)
+
+        link = self.mapping[conn]
+        # print(f'[link={link},conn={self.in_use[link]}]')
+
+        if (blocker := self.in_use[link]):
+            # print(f'FAIL: link {link} in use by {blocker}')
+            return ConnAvailMsg(blocker[1], blocker[2])
+        # print('SUCCESS')
+        return None
+
+    def acquire(self, timestamp: float, conn: connection_t):
+        _, dst, chan = conn
+        self.ranks[dst].locked.put(chan, True, timestamp)
+        # print(f'Acquiring link {self.mapping[conn]} for {conn}')
+        self.in_use[self.mapping[conn]] = conn
+
+    def release(self, timestamp: float, conn: connection_t):
+        _, dst, chan = conn
+        self.ranks[dst].locked.put(chan, False, timestamp)
+        print(f'Releasing link {self.mapping[conn]}')
+        self.in_use[self.mapping[conn]] = None
 
     def run(self) -> float:
         try:
             while len(self.queue):
+                # print(f'Subscribers: {self.subscribers}')
                 event = heappop(self.queue)
                 # self.log.info(set(filter(lambda k: self.in_use.get, self.in_use.keys())))
                 if isinstance(event, PollEvent):
@@ -398,7 +462,27 @@ class World:
 
                     # mark the link as in use
                     if event.link is not None:
-                        self.in_use[event.link] = True
+                        self.log.warn('USING DEPRECATED AcquireChannel API!!!!!')
+                        self.in_use[event.link] = (event.rank, event.rank, event.chan)
+
+                elif isinstance(event, TryAcquire):
+                    if not (blocker := self.is_acquireable(event.conn, event.override_dirty)):
+                        self.acquire(event.timestamp, event.conn)
+                        self.log.debug(f'Acquire succeeded: callbacks = {event.callbacks}')
+                        for callback in event.callbacks:
+                            self.schedule(callback)
+
+                        event.tb.ip += 1
+                    else:
+                        _, dst, chan = event.conn
+                        self.log.debug(f'Acquire failed')
+                        # if blocker == 'conn':
+                        #     msg: Msg = ConnAvailMsg(dst, chan)
+                        # elif blocker == 'chunk':
+                        #     msg = ChunkAvailMsg(dst, chan)
+                        self.schedule(SubscribeEvent(
+                            timestamp=event.timestamp, tb=event.tb, msg=blocker))
+
 
                 elif isinstance(event, SendAvailable):
                     self.log.debug(f'Data available from send on (rank, channel) {event.rank, event.chan}')
@@ -413,7 +497,8 @@ class World:
                     assert tb.ip == len(tb.ops), f'{str(tb)} did not complete!'
         except AssertionError as e:
             self.log.error(e)
-            self.debug_mode()
+            quit()
+            # self.debug_mode()
         return self.timestamp
 
     def execute(self, event: ExecEvent):
@@ -426,7 +511,7 @@ class World:
         
         if event.op.is_local():
             # local ops don't really have to be simulated
-            self.log.debug(f'Executing local {event.op} for {str(event.tb)}')
+            pass # self.log.debug(f'Executing local {event.op} for {str(event.tb)}')
 
         if event.op.is_send():
             # the action of a send is to release the channel lock...
@@ -435,7 +520,7 @@ class World:
             self.ranks[event.op.dst.rank].locked.put(event.op.channel, False, event.timestamp)
             
             # ...and also mark the link as free
-            self.in_use[(link := self.mapping[event.op.src.rank, event.op.dst.rank, event.op.channel])] = False
+            self.in_use[(link := self.mapping[event.op.src.rank, event.op.dst.rank, event.op.channel])] = None
             # self.log.info(f'Freed link {link}!')
 
         self.trace.append((event.timestamp, event.op))
