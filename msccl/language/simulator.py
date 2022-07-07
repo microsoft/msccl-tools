@@ -41,7 +41,7 @@ def get_links(topology: nx.Graph) -> dict[tuple[rank_t, rank_t], list[link_t]]:
 
 EPS = 1e-10 # some events have to be ordered, we use EPS to ensure that
 pipeline_latency: int = int(1e100)
-send_buffering_threshold: int = 0
+send_buffering_threshold: int = 4 << 20
 
 event_counter = itertools.count()
 
@@ -426,11 +426,14 @@ class World:
         # print('SUCCESS')
         return None
 
-    def acquire(self, timestamp: float, conn: connection_t):
+    def acquire(self, timestamp: float, conn: connection_t, mark_in_use=True):
         _, dst, chan = conn
         self.ranks[dst].locked.put(chan, True, timestamp)
         # print(f'Acquiring link {self.mapping[conn]} for {conn}')
-        self.in_use[self.mapping[conn]] = conn
+        if mark_in_use:
+            self.in_use[self.mapping[conn]] = conn
+        # else:
+        #     print('Skipping acquire')
 
     def release(self, timestamp: float, conn: connection_t):
         _, dst, chan = conn
@@ -467,7 +470,7 @@ class World:
 
                 elif isinstance(event, TryAcquire):
                     if not (blocker := self.is_acquireable(event.conn, event.override_dirty)):
-                        self.acquire(event.timestamp, event.conn)
+                        self.acquire(event.timestamp, event.conn, mark_in_use=event.override_in_use)
                         self.log.debug(f'Acquire succeeded: callbacks = {event.callbacks}')
                         for callback in event.callbacks:
                             self.schedule(callback)
