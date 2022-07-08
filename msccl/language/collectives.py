@@ -18,6 +18,12 @@ class Collective():
     def get_buffer_index(self, rank, buffer, index):
         return buffer, index
 
+    def get_input_buffer_size(self):
+        return self.chunk_factor
+
+    def get_output_buffer_size(self):
+        return self.chunk_factor
+
 
 class AllToAll(Collective):
 
@@ -58,6 +64,14 @@ class AllToAll(Collective):
                         print(f'Rank {r} chunk {index} is incorrect should be chunk({i},{expected_origin_index}) given {chunk}')
                         correct = False
         return correct
+
+    def get_input_buffer_size(self):
+        return self.num_ranks * self.chunk_factor
+
+    def get_output_buffer_size(self):
+        if self.inplace:
+            return 0
+        return self.get_input_buffer_size()
 
 
 class AllGather(Collective):
@@ -114,7 +128,13 @@ class AllGather(Collective):
         else:
             return buffer, index
 
+    def get_input_buffer_size(self):
+        if self.inplace:
+            return 0
+        return self.chunk_factor
 
+    def get_output_buffer_size(self):
+        return self.num_ranks * self.chunk_factor
             
 class AllReduce(Collective):
 
@@ -167,6 +187,14 @@ class AllReduce(Collective):
             return Buffer.input, index
         else:
             return buffer, index
+
+    def get_input_buffer_size(self):
+        return self.chunk_factor
+
+    def get_output_buffer_size(self):
+        if self.inplace:
+            return 0
+        return self.get_input_buffer_size()
 
 
 class ReduceScatter(Collective):
@@ -223,4 +251,13 @@ class ReduceScatter(Collective):
             return Buffer.input, index + rank * self.chunk_factor
         else:
             return buffer, index
+
+    def get_input_buffer_size(self):
+        return self.num_ranks * self.chunk_factor
+
+    def get_output_buffer_size(self):
+        if self.inplace:
+            return 0
+        return self.get_input_buffer_size()
+
 

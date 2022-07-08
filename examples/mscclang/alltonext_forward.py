@@ -23,7 +23,6 @@ class Pipeline(Collective):
                        Buffer.output : output_buffer}
             rank_buffers.append(buffers)
         return rank_buffers
-            
 
     # Final state chunks on rank(i) end up on rank(i+1)
     def check(self, prog):

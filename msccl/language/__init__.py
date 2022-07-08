@@ -117,13 +117,16 @@ class MSCCLProgram:
         else:
             auto_assign_tbs(self.instr_dag)
         self.instr_dag.lower_pt1(self.instances)
-        gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
+        gpus = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
         if self.check_xml:
             # Check generated MSCCL-IR for correctness - no circular dependencies, sends and receives are ordered
             # For very large programs, turn off check_xml when shipping 
             check_dependency_cycles(self.instr_dag.tbs)
             check_threadblock_ordering(self.instr_dag)
-        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
+        for rank, gpu in enumerate(gpus):
+            gpu.input_chunks = self.collective.get_input_buffer_size()
+            gpu.output_chunks = self.collective.get_output_buffer_size()
+        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpus)  
 
     def generate_xml(self):
         return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop)
