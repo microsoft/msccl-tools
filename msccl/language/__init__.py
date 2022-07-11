@@ -124,8 +124,8 @@ class MSCCLProgram:
             check_dependency_cycles(self.instr_dag.tbs)
             check_threadblock_ordering(self.instr_dag)
         for rank, gpu in enumerate(gpus):
-            gpu.input_chunks = self.collective.get_input_buffer_size()
-            gpu.output_chunks = self.collective.get_output_buffer_size()
+            gpu.input_chunks = self.instances * self.collective.get_input_buffer_size()
+            gpu.output_chunks = self.instances * self.collective.get_output_buffer_size()
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpus)  
 
     def generate_xml(self):
