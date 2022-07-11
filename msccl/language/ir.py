@@ -323,7 +323,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     algo_elem.set('nchannels', str(nchannels))
     if old_format:
         algo_elem.set('nchunksperloop', str(
-            max(max(buffer_sizes[(gpu.rank, Buffer.input)], buffer_sizes[(gpu.rank, Buffer.output)]) for gpu in program.gpus)))
+            max(max(program.gpus[0].input_chunks, program.gpus[0].output_chunks), max(max(buffer_sizes[(gpu.rank, Buffer.input)], buffer_sizes[(gpu.rank, Buffer.output)]) for gpu in program.gpus))))
     algo_elem.set('ngpus', str(len(program.gpus)))
     algo_elem.set('coll', program.collective)
     algo_elem.set('inplace', str(1 if program.inplace else 0))

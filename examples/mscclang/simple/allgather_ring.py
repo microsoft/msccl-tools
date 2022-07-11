@@ -46,4 +46,4 @@ def allgather_ring_inplace(size):
         Check()
 
 allgather_ring(4)
-# allgather_ring_inplace(4)
+#allgather_ring_inplace(4)
