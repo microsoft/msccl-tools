@@ -375,6 +375,7 @@ class World:
         if timing_info:
             self.timestamp = timing_info[3][0] * num_conns + timing_info[3][1]
             self.pipeline = timing_info[4]
+            self.send_buffering_threshold = timing_info[5]
             
 
         self.subscribers: dict[Msg, set[TB]] = defaultdict(set)
@@ -558,7 +559,7 @@ class World:
         }
 
         if self.timing_info is not None:
-            breaks, slopes, ntrcps, _, _ = self.timing_info
+            breaks, slopes, ntrcps, _, _, _ = self.timing_info
 
         def get_idx(val, cutoffs):
             low, high = cutoffs
