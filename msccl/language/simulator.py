@@ -90,6 +90,8 @@ class ConnAvailMsg(Msg):
 def event_priority(e: Type[Event]) -> int:
     if e is SubscribeEvent:
         return 0
+    if e is PollEvent:
+        return 2
     return 1
 
 @dataclass
@@ -161,6 +163,14 @@ class TryAcquire(Event):
     callbacks: list[Event]
     override_dirty: bool = False
     override_in_use: bool = False
+
+
+@dataclass
+class TryRecv(Event):
+    tb: TB
+    chan: chan_t
+    callbacks: list[Event]
+
 
 
 @dataclass
@@ -243,7 +253,6 @@ class TB:
                         tb=self, msg=ConnAvailMsg(self.rank.id, op.channel)))
                 else:
                     # we read everything we needed to
-                    self.log.debug(f'Finished receive, continuing execution')
                     self.world.schedule(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
 
             else:
@@ -442,6 +451,10 @@ class World:
         print(f'Releasing link {self.mapping[conn]}')
         self.in_use[self.mapping[conn]] = None
 
+
+    def clear_tb_polls(self, tb: TB):
+        self.queue = list(filter(lambda e: isinstance(e, PollEvent) and e.tb == tb, self.queue))
+
     def run(self) -> float:
         try:
             while len(self.queue):
@@ -479,7 +492,7 @@ class World:
                         event.tb.ip += 1
                     else:
                         _, dst, chan = event.conn
-                        self.log.debug(f'Acquire failed')
+                        # self.log.debug(f'Acquire failed: {blocker}')
                         # if blocker == 'conn':
                         #     msg: Msg = ConnAvailMsg(dst, chan)
                         # elif blocker == 'chunk':
@@ -511,8 +524,17 @@ class World:
         if event.op.is_recv():
             # the action of a receive is to clear the dirty bit, marking the chunk as being read
             self.log.debug(f'From {str(event.tb)}: Executing recv to {event.op.rank, event.op.channel}')
-            self.ranks[event.op.rank].dirty.put(event.op.channel, False, event.timestamp)
-        
+            if self.ranks[event.op.rank].dirty(event.op.channel):
+                self.ranks[event.op.rank].dirty.put(event.op.channel, False, event.timestamp)
+            else:
+                # # somebody else read the chunk between issuing and executing this receive
+                # # subscribe to watch the chunk again
+                # msg = ChunkAvailMsg(event.op.rank, event.op.channel)
+                # self.subscribers[msg].add(event.tb)
+                # # and uhhh the threadblock is gonna have to actually go back and re-execute it
+                # self.clear_tb_polls(event.tb)
+                self.schedule(PollEvent(timestamp=event.timestamp, tb=event.tb))
+                event.tb.ip -= 1
         if event.op.is_local():
             # local ops don't really have to be simulated
             pass # self.log.debug(f'Executing local {event.op} for {str(event.tb)}')
