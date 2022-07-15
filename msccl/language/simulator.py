@@ -387,7 +387,7 @@ class World:
             self.send_buffering_threshold = timing_info[5]
             
 
-        self.subscribers: dict[Msg, set[TB]] = defaultdict(set)
+        self.subscribers: dict[Msg, list[TB]] = defaultdict(list)
 
         self.mapping = mapping
         self.in_use: dict[link_t, Optional[connection_t]] = defaultdict(lambda: None)
@@ -467,12 +467,13 @@ class World:
                     self.execute(event)
                 elif isinstance(event, SubscribeEvent):
                     self.log.debug(f'Subscribing {str(event.tb)} to {event.msg}')
-                    self.subscribers[event.msg].add(event.tb)
+                    if event.tb not in self.subscribers[event.msg]:
+                        self.subscribers[event.msg].append(event.tb)
                 elif isinstance(event, NotifyEvent):
                     for sub in self.subscribers[event.msg]:
                         self.log.debug(f'Notifying {str(sub)} of {event.msg}')
                         heappush(self.queue, PollEvent(timestamp=event.timestamp, tb=sub))
-                    self.subscribers[event.msg] = set()
+                    self.subscribers[event.msg] = []
                 elif isinstance(event, AcquireChannel):
                     self.log.debug(f'Channel {event.rank, event.chan} locked')
                     self.ranks[event.rank].locked.put(event.chan, True, event.timestamp)
