@@ -1,5 +1,4 @@
 from __future__ import annotations
-from chunk import Chunk
 
 from heapq import heappop, heappush
 import itertools
@@ -169,7 +168,10 @@ class TryAcquire(Event):
 class TryRecv(Event):
     tb: TB
     chan: chan_t
+    rank: rank_t
     callbacks: list[Event]
+    # callbacks_1: list[Event] # callbacks to execute if the receive is successful but there's more data
+    # callbacks_2: list[Event] # callbacks to execute if the receive is successful and there's no more data
 
 
 
@@ -197,6 +199,7 @@ class buffer:
 
     def put(self, chan: chan_t, val: bool, timestamp: float):
         self.chunks[chan] = chunk(val)
+        # print(f'sending notify {self.flag(rank=self.rank, chan=chan)}')
         self.world.notify(self.flag(rank=self.rank, chan=chan), timestamp)
 
     def __call__(self, chan: chan_t):
@@ -235,35 +238,52 @@ class TB:
         # self.log.debug(f'Polled, current ip is {self.ip} and op is {pretty_print(op)}')
 
         if op.is_recv():
-            # check if data is available in the buffer
-            if self.rank.dirty(op.channel):
-                # if it is, complete the receive (this will clear the dirty bit)
-                self.log.debug(f'Initiated recv from {self.rank.id, op.channel}')
-                self.world.schedule(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
-                self.ip += 1 # don't check the recv next time we look at this thread
 
-                # is the send still in-flight (i.e. there is more data to read)
-                # (this happens when sends are pipelined)
-                if self.rank.locked(op.channel):
-                    self.log.debug('Send not finished, subscribing to buffer')
-                    # this will notify the thread as soon as that send completes
-                    # a benefit of simulating everything is we don't actually have to process the receive of each slice :)
-                    self.world.schedule(SubscribeEvent(
-                        timestamp=timestamp + self.world.latency(op), 
-                        tb=self, msg=ConnAvailMsg(self.rank.id, op.channel)))
-                else:
-                    # we read everything we needed to
-                    self.world.schedule(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
+            callbacks: list[Event] = []
+            callbacks.append(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
 
-            else:
-                self.log.debug(f'Trying to receive from {self.rank.id, op.channel}, waiting for data')
-                # notify when the send completes (thus making the connection available)
-                self.world.schedule(SubscribeEvent(
-                    timestamp=timestamp, tb=self, msg=ChunkAvailMsg(self.rank.id, op.channel)))
+            # callbacks_1: list[Event] = []
+            # callbacks_1.append(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
+            # callbacks_1.append(SubscribeEvent(
+            #             timestamp=timestamp + self.world.latency(op), 
+            #             tb=self, msg=ConnAvailMsg(self.rank.id, op.channel)))
+
+            # callbacks_2: list[Event] = []
+            # callbacks_2.append(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
+            # callbacks_2.append(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
+
+            self.log.debug(f'Trying to receive on {self.rank.id, op.channel}')
+            self.world.schedule(TryRecv(timestamp=timestamp, tb=self, chan=op.channel, rank=self.rank.id, callbacks=callbacks)) #callbacks_1=callbacks_1, callbacks_2=callbacks_2))
+
+            # # check if data is available in the buffer
+            # if self.rank.dirty(op.channel):
+            #     # if it is, complete the receive (this will clear the dirty bit)
+            #     self.log.debug(f'Initiated recv from {self.rank.id, op.channel}')
+            #     self.world.schedule(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
+            #     self.ip += 1 # don't check the recv next time we look at this thread
+
+            #     # is the send still in-flight (i.e. there is more data to read)
+            #     # (this happens when sends are pipelined)
+            #     if self.rank.locked(op.channel):
+            #         self.log.debug('Send not finished, subscribing to buffer')
+            #         # this will notify the thread as soon as that send completes
+            #         # a benefit of simulating everything is we don't actually have to process the receive of each slice :)
+            #         self.world.schedule(SubscribeEvent(
+            #             timestamp=timestamp + self.world.latency(op), 
+            #             tb=self, msg=ConnAvailMsg(self.rank.id, op.channel)))
+            #     else:
+            #         # we read everything we needed to
+            #         self.world.schedule(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
+
+            # else:
+            #     self.log.debug(f'Trying to receive from {self.rank.id, op.channel}, waiting for data')
+            #     # notify when the send completes (thus making the connection available)
+            #     self.world.schedule(SubscribeEvent(
+            #         timestamp=timestamp, tb=self, msg=ChunkAvailMsg(self.rank.id, op.channel)))
 
         elif op.is_send():
 
-            callbacks: list[Event] = []
+            callbacks = []
             callbacks.append(SendAvailable(
                     timestamp=timestamp + min(self.world.pipeline, self.world.latency(op)),
                     rank=op.dst.rank, chan=op.channel))
@@ -329,6 +349,7 @@ class Rank:
 
         self.dirty = buffer(rid, ChunkAvailMsg) # chunks with unread data
         self.locked = buffer(rid, ConnAvailMsg) # chunks actively being written to
+        self.active_read: dict[chan_t, bool] = defaultdict(bool) # chunks to which a read is in progress (cannot start a new read)
             
         self.id = rid
         self.world: World = None # type: ignore
@@ -395,6 +416,7 @@ class World:
     def notify(self, msg: Msg, timestamp: float):
         # print(f'Scheduling notification for {self.subscribers[msg]}')
         self.schedule(NotifyEvent(timestamp=timestamp, msg=msg))
+        # print(self.queue)
 
 
     def schedule(self, event: Event):
@@ -438,6 +460,7 @@ class World:
 
     def acquire(self, timestamp: float, conn: connection_t, mark_in_use=True):
         _, dst, chan = conn
+        # print(f'locking (conn {dst} {chan})')
         self.ranks[dst].locked.put(chan, True, timestamp)
         # print(f'Acquiring link {self.mapping[conn]} for {conn}')
         if mark_in_use:
@@ -447,9 +470,21 @@ class World:
 
     def release(self, timestamp: float, conn: connection_t):
         _, dst, chan = conn
+        # print(f'unlocking (conn {dst} {chan})')
         self.ranks[dst].locked.put(chan, False, timestamp)
-        print(f'Releasing link {self.mapping[conn]}')
+        # print(f'Releasing link {self.mapping[conn]}')
         self.in_use[self.mapping[conn]] = None
+
+    def recvable(self, rank: rank_t, channel: chan_t):
+        return self.ranks[rank].dirty(channel) and not self.ranks[rank].active_read[channel]
+
+    def recv_lock(self, rank: rank_t, channel: chan_t):
+        self.ranks[rank].active_read[channel] = True
+
+    def recv_unlock(self, timestamp: float, rank: rank_t, channel: chan_t):
+        assert self.ranks[rank].dirty(channel)
+        self.ranks[rank].dirty.put(channel, False, timestamp)
+        self.ranks[rank].active_read[channel] = False
 
 
     def clear_tb_polls(self, tb: TB):
@@ -466,14 +501,19 @@ class World:
                 elif isinstance(event, ExecEvent):
                     self.execute(event)
                 elif isinstance(event, SubscribeEvent):
-                    self.log.debug(f'Subscribing {str(event.tb)} to {event.msg}')
                     if event.tb not in self.subscribers[event.msg]:
+                        self.log.debug(f'Subscribing {str(event.tb)} to {event.msg}')
                         self.subscribers[event.msg].append(event.tb)
+                    else:
+                        self.log.debug(f'{str(event.tb)} is already subscribed to {event.msg}; skipping')
+                    # print(self.subscribers)
                 elif isinstance(event, NotifyEvent):
+                    # print(self.subscribers)
                     for sub in self.subscribers[event.msg]:
                         self.log.debug(f'Notifying {str(sub)} of {event.msg}')
                         heappush(self.queue, PollEvent(timestamp=event.timestamp, tb=sub))
                     self.subscribers[event.msg] = []
+                    # print(self.queue)
                 elif isinstance(event, AcquireChannel):
                     self.log.debug(f'Channel {event.rank, event.chan} locked')
                     self.ranks[event.rank].locked.put(event.chan, True, event.timestamp)
@@ -501,7 +541,33 @@ class World:
                         self.schedule(SubscribeEvent(
                             timestamp=event.timestamp, tb=event.tb, msg=blocker))
 
+                elif isinstance(event, TryRecv):
+                    if self.recvable(event.rank, event.chan):
+                        self.recv_lock(event.rank, event.chan)
+                        self.log.debug(f'Recv started, callbacks = {event.callbacks}')
+                        for callback in event.callbacks:
+                            self.schedule(callback)
+                        event.tb.ip += 1
+                    else:
+                        self.log.debug('Recv failed')
+                        self.schedule(SubscribeEvent(
+                            timestamp=event.timestamp, tb=event.tb, msg=ChunkAvailMsg(event.rank, event.chan)))
 
+                    # if evt_rank.dirty(event.chan):
+                    #     if evt_rank.locked(event.chan):
+                    #         msg = 'more data pending'
+                    #         callbacks = event.callbacks_1
+                    #     else:
+                    #         msg = 'no more data'
+                    #         callbacks = event.callbacks_2
+                    #     self.log.debug(f'Recv succeeded, {msg}: callbacks = {callbacks}')
+                    #     for callback in callbacks:
+                    #         self.schedule(callback)
+                    #     event.tb.ip += 1
+                    # else:
+                    #     self.log.debug('Recv failed, no data available')
+                    #     self.schedule(SubscribeEvent(
+                    #         timestamp=event.timestamp, tb=event.tb, msg=ChunkAvailMsg(event.rank, event.chan)))
                 elif isinstance(event, SendAvailable):
                     self.log.debug(f'Data available from send on (rank, channel) {event.rank, event.chan}')
                     self.ranks[event.rank].dirty.put(event.chan, True, event.timestamp)
@@ -525,30 +591,42 @@ class World:
         if event.op.is_recv():
             # the action of a receive is to clear the dirty bit, marking the chunk as being read
             self.log.debug(f'From {str(event.tb)}: Executing recv to {event.op.rank, event.op.channel}')
-            if self.ranks[event.op.rank].dirty(event.op.channel):
-                self.ranks[event.op.rank].dirty.put(event.op.channel, False, event.timestamp)
+            self.recv_unlock(event.timestamp, event.op.rank, event.op.channel)
+
+            # manually schedule the next callback here
+            if self.ranks[event.op.rank].locked(event.op.channel):
+                self.log.debug('More data pending')
+                self.schedule(SubscribeEvent(timestamp=event.timestamp, tb=event.tb, msg=ConnAvailMsg(rank=event.op.rank, chan=event.op.channel)))
             else:
-                # # somebody else read the chunk between issuing and executing this receive
-                # # subscribe to watch the chunk again
-                # msg = ChunkAvailMsg(event.op.rank, event.op.channel)
-                # self.subscribers[msg].add(event.tb)
-                # # and uhhh the threadblock is gonna have to actually go back and re-execute it
-                # self.clear_tb_polls(event.tb)
+                self.log.debug('All data read')
                 self.schedule(PollEvent(timestamp=event.timestamp, tb=event.tb))
-                event.tb.ip -= 1
+            # if self.ranks[event.op.rank].dirty(event.op.channel):
+            #     self.ranks[event.op.rank].dirty.put(event.op.channel, False, event.timestamp)
+            # else:
+            #     # # somebody else read the chunk between issuing and executing this receive
+            #     # # subscribe to watch the chunk again
+            #     # msg = ChunkAvailMsg(event.op.rank, event.op.channel)
+            #     # self.subscribers[msg].add(event.tb)
+            #     # # and uhhh the threadblock is gonna have to actually go back and re-execute it
+            #     # self.clear_tb_polls(event.tb)
+            #     # raise SystemExit()
+            #     self.schedule(PollEvent(timestamp=event.timestamp, tb=event.tb))
+            #     event.tb.ip -= 1
         if event.op.is_local():
             # local ops don't really have to be simulated
             pass # self.log.debug(f'Executing local {event.op} for {str(event.tb)}')
 
         if event.op.is_send():
-            # the action of a send is to release the channel lock...
             self.log.debug(f'From {str(event.tb)}: Executing send to {event.op.dst.rank, event.op.channel}')
-            assert self.ranks[event.op.dst.rank].locked(event.op.channel)
-            self.ranks[event.op.dst.rank].locked.put(event.op.channel, False, event.timestamp)
+            self.release(event.timestamp, (event.op.src.rank, event.op.dst.rank, event.op.channel))
+            # # the action of a send is to release the channel lock...
             
-            # ...and also mark the link as free
-            self.in_use[(link := self.mapping[event.op.src.rank, event.op.dst.rank, event.op.channel])] = None
-            # self.log.info(f'Freed link {link}!')
+            # assert self.ranks[event.op.dst.rank].locked(event.op.channel)
+            # self.ranks[event.op.dst.rank].locked.put(event.op.channel, False, event.timestamp)
+            
+            # # ...and also mark the link as free
+            # self.in_use[(link := self.mapping[event.op.src.rank, event.op.dst.rank, event.op.channel])] = None
+            # # self.log.info(f'Freed link {link}!')
 
         self.trace.append((event.timestamp, event.op))
         self.timestamp = event.timestamp
