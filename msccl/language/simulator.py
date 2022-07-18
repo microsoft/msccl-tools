@@ -295,7 +295,7 @@ class TB:
             self.world.schedule(TryAcquire(
                 timestamp=timestamp, tb=self, conn=(op.src.rank, op.dst.rank, op.channel), 
                 callbacks=callbacks, override_dirty=(op.is_recv() and op.src.rank == op.dst.rank),
-                override_in_use=(op.cnt() * self.world.chunksize) > send_buffering_threshold))
+                override_in_use=(op.cnt() * self.world.chunksize) > self.world.send_buffering_threshold))
 
             # # is another send is currently using this channel?
             # if self.world.ranks[op.dst.rank].locked(op.channel):
@@ -401,6 +401,7 @@ class World:
 
         self.timestamp = 0.
         self.pipeline = int(1e100)
+        self.send_buffering_threshold = 4 << 20
 
         if timing_info:
             self.timestamp = timing_info[3][0] * num_conns + timing_info[3][1]
@@ -679,7 +680,7 @@ class World:
         
         return linterpolate(self.chunksize * count, breaks[inst], slopes[inst], ntrcps[inst])
         
-        
+
     def latency(self, op: Op):
         if op.inst in (Instruction.reduce, Instruction.recv, Instruction.copy, Instruction.send):
             return self.base_cost(op.inst, op.cnt())
@@ -697,8 +698,7 @@ class World:
             return self.base_cost(Instruction.recv, op.cnt()) + self.base_cost(Instruction.reduce, op.cnt()) + self.base_cost(Instruction.send, op.cnt())
 
         print(f'[WARN] Unrecognized opcode: {op.inst}; assuming 0 latency')
-        return 0
-            
+        return 0 
 
 def get_connections(prog: Program) -> set[connection_t]:
     conns: set[connection_t] = set()
