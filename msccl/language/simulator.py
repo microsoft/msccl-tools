@@ -399,7 +399,8 @@ class World:
         for _, rank in ranks.items():
             rank.set_world(self)
 
-        self.timestamp = 0.
+        # print(num_conns)
+        self.timestamp = 4. * num_conns + 4
         self.pipeline = int(1e100)
         self.send_buffering_threshold = 4 << 20
 
@@ -408,7 +409,7 @@ class World:
             self.pipeline = timing_info[4]
             self.send_buffering_threshold = timing_info[5]
             
-
+        # print(f'Starting timestamp of {self.timestamp}')
         self.subscribers: dict[Msg, list[TB]] = defaultdict(list)
 
         self.mapping = mapping
@@ -426,7 +427,7 @@ class World:
     def initialize(self):
         for _, rank in self.ranks.items():
             for tb in rank.tbs:
-                self.queue.append(PollEvent(0, tb))
+                self.queue.append(PollEvent(self.timestamp, tb))
 
     def debug_mode(self):
         print('Simulator paused; entering debug mode. Type "res" to resume or "quit" to quit')
@@ -747,6 +748,6 @@ def build_world(prog: Program, **params) -> World:
     # params['mapping'] = schedule(connections, World.links)
 
 
-    return World(ranks, num_cons=len(gpu.threadblocks), mapping=schedule(connections, World.links), **params)
+    return World(ranks, num_conns=len(gpu.threadblocks), mapping=schedule(connections, World.links), **params)
 
     
