@@ -17,6 +17,8 @@ from msccl.language.rank_dag import *
 import msccl.collectives as collectives
 
 from msccl.language.simulator import build_world
+
+from exploration_scheduling import apply_manual_schedule, assign_balanced_channels, merge_threadblocks, powerset
 # from msccl.language.visualize import *
 
 _current_program: MSCCLProgram = None # type: ignore
@@ -149,16 +151,24 @@ class MSCCLProgram:
         return programs
         
 
-    def parameterized_schedule(self, num_inst: int, num_channels: int):
+    def parameterized_schedule(self, num_inst: int, num_channels: int, blocked: bool, tb_merges: set[chan_t]):
         self.instances = num_inst
 
         self.instr_dag.convert_set_list() # convert sets to lists
 
         self.instr_dag._complete_metadata()
-        if self.threadblock_policy == ThreadblockPolicy.manual:
-            manual_assign_tbs(self.instr_dag)
-        else:
-            auto_assign_tbs(self.instr_dag)
+
+        channels = assign_balanced_channels(self.instr_dag, num_channels, blocked)
+        if channels is None:
+            return None
+        threadblocks = merge_threadblocks(self.instr_dag, channels, tb_merges)
+        apply_manual_schedule(self.instr_dag, channels, threadblocks)
+        manual_assign_tbs(self.instr_dag)
+
+        # if self.threadblock_policy == ThreadblockPolicy.manual:
+        #     manual_assign_tbs(self.instr_dag)
+        # else:
+        #     auto_assign_tbs(self.instr_dag)
 
         # moving fusion to after channel/threadblock assignment
         if self.instr_fusion:
@@ -239,28 +249,34 @@ def SearchBestSchedule(size: int):
 
     possible_instances = [1, 2, 4, 6, 8, 12, 16, 20]
 
-    best_inst = None
+    best_sched = None
     best_time = float('inf')
     best_prog = None
 
     for inst in possible_instances:
-        # print(f'Running with {inst} instances...')
-        prog = deepcopy(_curr()).parameterized_schedule(inst)
-        chunks = get_num_chunks(prog)
+        for num_channels in range(1, 32 // inst + 1):
+            for blocking in (True, False):
+                for tb_merges in powerset(set(range(num_channels))):
+                    if (prog := deepcopy(_curr()).parameterized_schedule(inst, num_channels, blocking, tb_merges)) is None:
+                        break
+                    
+                    # print(f'Running with {inst} instances...')
+                    # prog = deepcopy(_curr()).parameterized_schedule(inst)
+                    chunks = get_num_chunks(prog)
 
-        world = build_world(prog, chunksize=size / chunks)
-        world.initialize()
-        
-        timing = world.run()
-        # print(f'Predicted time = {timing}us')
+                    world = build_world(prog, chunksize=size / chunks)
+                    world.initialize()
+                    
+                    timing = world.run()
+                    # print(f'Predicted time = {timing}us')
 
-        if timing < best_time:
-            best_prog = prog
-            best_time = timing
-            best_inst = inst
+                    if timing < best_time:
+                        best_prog = prog
+                        best_time = timing
+                        best_sched = inst, num_channels, blocking, tb_merges
 
-    print(f'The best schedule uses {best_inst} instances and is predicted to take {best_time:.2f}us')
-    return best_prog
+                print(f'The best schedule uses {best_sched[0]} instances and {best_sched[1]} channels, and is predicted to take {best_time:.2f}us')
+                return best_prog
 
 
 def Simulate(csv=False, fout=stdout, noprint=False, **opts):

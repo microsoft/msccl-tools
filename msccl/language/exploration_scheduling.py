@@ -1,11 +1,16 @@
 from collections import defaultdict
+from itertools import chain, combinations
 from math import ceil
+from typing import Generator, TypeVar
 from rank_dag import InstructionDAG
 from tb_assignment import topo_sort_instrs
 from ir import Op, chan_t, rank_t, tbid_t
 
+T = TypeVar('T')
+def powerset(x: set[T]) -> Generator[set[T], None, None]:
+    return map(set, chain.from_iterable(combinations(x, r) for r in range(len(x) + 1)))
 
-def assign_balanced_channels(instr_dag: InstructionDAG, num_channels: int, blocked: bool) -> dict[Op, chan_t]:
+def assign_balanced_channels(instr_dag: InstructionDAG, num_channels: int, blocked: bool) -> dict[Op, chan_t] | None:
     toposorted = topo_sort_instrs(instr_dag)
     rank_sends: dict[rank_t, list[Op]] = defaultdict(list)
     for inst in toposorted:
@@ -21,8 +26,10 @@ def assign_balanced_channels(instr_dag: InstructionDAG, num_channels: int, block
     # assign channels to all the connections leaving rank 0
     channel_assignment: dict[Op, chan_t] = {}
     for sends in connections.values():
+        num_sends = len(sends)
+        if num_channels > num_sends:
+            return None
         if blocked:
-            num_sends = len(sends)
             each_channel = ceil(num_sends / num_channels)
             for i in range(num_sends, step=each_channel):
                 block = sends[i:i+each_channel]
