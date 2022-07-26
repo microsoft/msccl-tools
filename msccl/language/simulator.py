@@ -6,7 +6,6 @@ from math import ceil
 from sys import stderr
 import inspect
 from typing import Optional, Type, Generator
-from typing_extensions import Self
 
 from msccl.language.ir import *
 
