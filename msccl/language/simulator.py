@@ -410,13 +410,13 @@ class World:
         self.trace: list[tuple[float, Op]] = []
 
         tiling_max = 4 << 20 # 4 MB
-        num_tiles = ceil(chunksize / tiling_max)
+        self.num_tiles = ceil(chunksize / tiling_max)
         # num_tiles = 1
-        self.chunksize = chunksize // num_tiles
+        self.chunksize = chunksize // self.num_tiles
 
         for rid in self.ranks:
             for tb in self.ranks[rid].tbs:
-                tb.iterations = num_tiles
+                tb.iterations = 1 # self.num_tiles
 
         self.timing_info = timing_info
 
@@ -614,7 +614,7 @@ class World:
             self.log.error(e)
             quit()
             # self.debug_mode()
-        return self.timestamp
+        return self.timestamp * self.num_tiles
 
     def execute(self, event: ExecEvent):
 
