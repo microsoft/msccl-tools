@@ -55,9 +55,10 @@ class Logger:
     def __show_prefix(pfx: str):
         return lambda self, msg: print(f'[{pfx}] {self.fmt.format(**inspect.currentframe().f_back.f_locals)}: {msg}') # type: ignore
 
-    debug = __show_prefix('DEBUG') # 
+    debug = __show_prefix('DEBUG')
     debug = lambda *args: None
     info = __show_prefix('INFO')
+    info = lambda *args: None
     warn = __show_prefix('WARN')
     error = __show_prefix('ERROR')
 
@@ -243,7 +244,7 @@ class TB:
 
         timestamp = -1
 
-        self.log.debug(' ; '.join(map(pretty_print, self.ops)))
+        self.log.info(' ; '.join(map(pretty_print, self.ops)))
 
 
     def get_events(self, timestamp: float):
@@ -410,6 +411,7 @@ class World:
 
         tiling_max = 4 << 20 # 4 MB
         num_tiles = ceil(chunksize / tiling_max)
+        # num_tiles = 1
         self.chunksize = chunksize // num_tiles
 
         for rid in self.ranks:

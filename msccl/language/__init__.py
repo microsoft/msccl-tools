@@ -18,7 +18,7 @@ import msccl.collectives as collectives
 
 from msccl.language.simulator import build_world
 
-from exploration_scheduling import apply_manual_schedule, assign_balanced_channels, merge_threadblocks, powerset
+from .exploration_scheduling import apply_manual_schedule, assign_balanced_channels, merge_threadblocks, powerset
 # from msccl.language.visualize import *
 
 _current_program: MSCCLProgram = None # type: ignore
@@ -162,6 +162,7 @@ class MSCCLProgram:
         if channels is None:
             return None
         threadblocks = merge_threadblocks(self.instr_dag, channels, tb_merges)
+        # print(f'Schedule: {channels}, {threadblocks}')
         apply_manual_schedule(self.instr_dag, channels, threadblocks)
         manual_assign_tbs(self.instr_dag)
 
@@ -253,10 +254,12 @@ def SearchBestSchedule(size: int):
     best_time = float('inf')
     best_prog = None
 
+    trying = 0
+
     for inst in possible_instances:
         for num_channels in range(1, 32 // inst + 1):
             for blocking in (True, False):
-                for tb_merges in powerset(set(range(num_channels))):
+                for tb_merges in powerset(set(map(chan_t, range(num_channels)))):
                     if (prog := deepcopy(_curr()).parameterized_schedule(inst, num_channels, blocking, tb_merges)) is None:
                         break
                     
@@ -266,8 +269,11 @@ def SearchBestSchedule(size: int):
 
                     world = build_world(prog, chunksize=size / chunks)
                     world.initialize()
-                    
+                    # print(f'Running with {inst} instances and {num_channels} channels (tb_merge={tb_merges}),', end=' ')
+                    trying += 1
                     timing = world.run()
+                    # print(f'time = {timing}us')
+                    
                     # print(f'Predicted time = {timing}us')
 
                     if timing < best_time:
@@ -275,8 +281,9 @@ def SearchBestSchedule(size: int):
                         best_time = timing
                         best_sched = inst, num_channels, blocking, tb_merges
 
-                print(f'The best schedule uses {best_sched[0]} instances and {best_sched[1]} channels, and is predicted to take {best_time:.2f}us')
-                return best_prog
+    print(f'The best schedule uses {best_sched[0]} instances and {best_sched[1]} channels ({"blocked" if best_sched[2] else "interleaved"}), and is predicted to take {best_time:.2f}us')
+    print(f'[Tried {trying} different schedules]')
+    return best_prog
 
 
 def Simulate(csv=False, fout=stdout, noprint=False, **opts):
