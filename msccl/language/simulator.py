@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from heapq import heappop, heappush
 import itertools
+from math import ceil
 from sys import stderr
 import inspect
 from typing import Optional, Type, Generator
+from typing_extensions import Self
 
 from msccl.language.ir import *
 
@@ -185,37 +187,51 @@ class SendAvailable(Event):
         return f'SendAvailable(rank={self.rank}, chan={self.chan})'
 
 
-chunk = NewType('chunk', bool)
+slot = NewType('slot', int)
 
 class buffer:
-    def __init__(self, rank: rank_t, flag: Type[Msg]):
-        self.chunks: Dict[chan_t, chunk] = defaultdict(lambda: chunk(False))
+    def __init__(self, rank: rank_t, flag: Type[Msg], limit=1):
+        self.slots: Dict[chan_t, slot] = defaultdict(lambda: slot(0))
         self.rank = rank
         self.flag = flag
+        self.limit = limit
         self.world: World = None # type: ignore
 
     def set_world(self, world: World):
         self.world = world
 
     def put(self, chan: chan_t, val: bool, timestamp: float):
-        self.chunks[chan] = chunk(val)
+        if val:
+            assert self.slots[chan] < self.limit
+            self.slots[chan] = slot(self.slots[chan] + 1)
+        else:
+            assert self.slots[chan] > 0
+            self.slots[chan] = slot(self.slots[chan] - 1)
+
+        # print(f'Put set buffer[{self.rank}]@{chan} to {self.slots[chan]}')
+        
         # print(f'sending notify {self.flag(rank=self.rank, chan=chan)}')
         self.world.notify(self.flag(rank=self.rank, chan=chan), timestamp)
 
     def __call__(self, chan: chan_t):
-        return self.chunks[chan]
+        return self.slots[chan]
+
+    def full(self, chan: chan_t):
+        return self.slots[chan] >= self.limit
 
 def pretty_print(op: Op) -> str:
     return f'{op.channel}@{op.inst}:{op.src.rank, op.src.index}->{op.dst.rank, op.dst.index}'
 
 class TB:
-    def __init__(self, ops: list[Op]) -> None:
+    def __init__(self, ops: list[Op], iterations=1) -> None:
         self.ops = ops
         self.rank: Rank = None # type: ignore
         self.world: World = None # type: ignore
 
         self.ip: int = 0
         self.tbid: tbid_t = tbid_t(-1)
+        self.iterations = iterations
+        self.cur_iter = 0
 
         self.log = Logger(self, '<TB {self.rank.id}:{self.tbid}|{timestamp}>')
     
@@ -232,7 +248,10 @@ class TB:
 
     def get_events(self, timestamp: float):
         if self.ip >= len(self.ops):
-            return
+            if self.cur_iter >= self.iterations:
+                return
+            self.cur_iter += 1
+            self.ip = 0
 
         op = self.ops[self.ip]
         # self.log.debug(f'Polled, current ip is {self.ip} and op is {pretty_print(op)}')
@@ -347,8 +366,8 @@ class Rank:
     def __init__(self, rid: rank_t, tbs: list[TB]):
         self.tbs = tbs
 
-        self.dirty = buffer(rid, ChunkAvailMsg) # chunks with unread data
-        self.locked = buffer(rid, ConnAvailMsg) # chunks actively being written to
+        self.dirty = buffer(rid, ChunkAvailMsg, limit=1) # chunks with unread data
+        self.locked = buffer(rid, ConnAvailMsg, limit=1) # chunks actively being written to
         self.active_read: dict[chan_t, bool] = defaultdict(bool) # chunks to which a read is in progress (cannot start a new read)
             
         self.id = rid
@@ -389,7 +408,14 @@ class World:
         self.queue: list[Event] = []
         self.trace: list[tuple[float, Op]] = []
 
-        self.chunksize = chunksize
+        tiling_max = 4 << 20 # 4 MB
+        num_tiles = ceil(chunksize / tiling_max)
+        self.chunksize = chunksize // num_tiles
+
+        for rid in self.ranks:
+            for tb in self.ranks[rid].tbs:
+                tb.iterations = num_tiles
+
         self.timing_info = timing_info
 
         self.verbose = verbose
@@ -414,6 +440,7 @@ class World:
 
         self.mapping = mapping
         self.in_use: dict[link_t, Optional[connection_t]] = defaultdict(lambda: None)
+
 
     def notify(self, msg: Msg, timestamp: float):
         # print(f'Scheduling notification for {self.subscribers[msg]}')
@@ -447,7 +474,7 @@ class World:
             # print('FAIL: another send in progress to dest')
             return ConnAvailMsg(dst, chan)
 
-        if self.ranks[dst].dirty(chan) and not override_dirty:
+        if self.ranks[dst].dirty.full(chan) and not override_dirty:
             # print('FAIL: unread data in buffer')
             return ChunkAvailMsg(dst, chan)
 
@@ -484,7 +511,7 @@ class World:
         self.ranks[rank].active_read[channel] = True
 
     def recv_unlock(self, timestamp: float, rank: rank_t, channel: chan_t):
-        assert self.ranks[rank].dirty(channel)
+        # assert self.ranks[rank].dirty(channel)
         self.ranks[rank].dirty.put(channel, False, timestamp)
         self.ranks[rank].active_read[channel] = False
 

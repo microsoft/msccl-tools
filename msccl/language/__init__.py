@@ -1,5 +1,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
+from __future__ import annotations
 
 from math import log
 from dataclasses import dataclass
@@ -18,8 +19,8 @@ import msccl.collectives as collectives
 from msccl.language.simulator import build_world
 # from msccl.language.visualize import *
 
-_current_program: Program = None # type: ignore
-def _curr():
+_current_program: MSCCLProgram = None # type: ignore
+def _curr() -> MSCCLProgram:
     global _current_program
     if _current_program == None:
         raise RuntimeError("No Program in context")
@@ -148,6 +149,32 @@ class MSCCLProgram:
         return programs
         
 
+    def parameterized_schedule(self, num_inst: int, num_channels: int):
+        self.instances = num_inst
+
+        self.instr_dag.convert_set_list() # convert sets to lists
+
+        self.instr_dag._complete_metadata()
+        if self.threadblock_policy == ThreadblockPolicy.manual:
+            manual_assign_tbs(self.instr_dag)
+        else:
+            auto_assign_tbs(self.instr_dag)
+
+        # moving fusion to after channel/threadblock assignment
+        if self.instr_fusion:
+            self.instr_dag.optimize()
+
+        reorder_sends_and_recvs(self.instr_dag)
+        self.instr_dag.lower_pt1(self.instances)
+        gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
+        if self.check_xml:
+            # Check generated MSCCL-IR for correctness - no circular dependencies, sends and receives are ordered
+            # For very large programs, turn off check_xml when shipping 
+            check_dependency_cycles(self.instr_dag.tbs)
+            check_threadblock_ordering(self.instr_dag)
+
+        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
+
     # Lower program to XML
     def lower(self, _enumerate=False):
         # self.chunk_dag._complete_metadata()
@@ -206,6 +233,36 @@ def XML(fout=None):
    print(_curr().generate_xml()[0], file=fout)
 
 
+def SearchBestSchedule(size: int):
+
+    from copy import deepcopy
+
+    possible_instances = [1, 2, 4, 6, 8, 12, 16, 20]
+
+    best_inst = None
+    best_time = float('inf')
+    best_prog = None
+
+    for inst in possible_instances:
+        # print(f'Running with {inst} instances...')
+        prog = deepcopy(_curr()).parameterized_schedule(inst)
+        chunks = get_num_chunks(prog)
+
+        world = build_world(prog, chunksize=size / chunks)
+        world.initialize()
+        
+        timing = world.run()
+        # print(f'Predicted time = {timing}us')
+
+        if timing < best_time:
+            best_prog = prog
+            best_time = timing
+            best_inst = inst
+
+    print(f'The best schedule uses {best_inst} instances and is predicted to take {best_time:.2f}us')
+    return best_prog
+
+
 def Simulate(csv=False, fout=stdout, noprint=False, **opts):
 
     def print_sz(sz):
@@ -228,6 +285,8 @@ def Simulate(csv=False, fout=stdout, noprint=False, **opts):
         sizes = [3 << p for p in range(10, 31)] # add a factor of 3 to allow for 6 and 12 instances
     times = []
 
+    # sizes = sizes[:12]
+
     # input(sizes)
 
     for sz in sizes:
@@ -244,7 +303,7 @@ def Simulate(csv=False, fout=stdout, noprint=False, **opts):
         for sz, time in zip(sizes, times):
             print(f'{sz},{time}', file=fout)
     else:
-        import tabulate
+        import tabulate # type: ignore
         print(tabulate.tabulate(list(zip(map(print_sz, sizes), map(lambda t: f'{t:.2f} us', times))), headers=["Size", "Time"]))
         # print('\n\n  Size    Time  ', file=fout)
         # print('----------------', file=fout)

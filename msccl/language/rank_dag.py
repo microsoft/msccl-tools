@@ -32,7 +32,7 @@ def same_buf_dst(op1: Op, op2: Op):
 
 class InstructionDAG:
 
-    Slot = Tuple[int, Buffer, int]
+    Slot = Tuple[rank_t, Buffer, int]
 
     def __init__(self, num_ranks: int, buffers: List[Dict[Buffer, BufferSlice]]):
         self.num_ranks = num_ranks
@@ -82,7 +82,7 @@ class InstructionDAG:
     def _read(self, rank: rank_t, buffer: Buffer, index: int, size: int, op: Op):
         prev_ops: Set[Op] = set()
         for i in range(index, index+size):
-            slot = (rank, buffer, i)
+            slot: InstructionDAG.Slot = (rank, buffer, i)
             assert slot in self.last_writer, f"Slot has never been written before a read-type {op}"
             # The previous operation for a reader is the last write to the slot
             writer = self.last_writer[slot]

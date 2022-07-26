@@ -225,13 +225,6 @@ def all_partitions(s: set[T], maxlen=32, random_seed=-1):
 
 instr_t = NewType('instr_t', int)
 
-a : instr_t = instr_t(3)
-b : chan_t = chan_t(1)
-b = a
-
-Thing = tuple[list[list[int]], list[bool]]
-x : Thing = ([[1, 2], [3, 4]], [5, 6])
-
 def manual_channel_enumeration(instrs: list[Op], maxchannels=32, seed=-1):
     sr_pairs: set[tuple[instr_t, instr_t]] = set()
 
