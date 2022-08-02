@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 from __future__ import annotations
+from argparse import Namespace
 
 from math import log
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from enum import Enum
 import functools
 from multiprocessing import dummy
 from sys import stderr, stdin, stdout
+from typing import Any
 from msccl.language.ir import *
 from msccl.language.passes import *
 from msccl.language.tb_assignment import *
@@ -16,7 +18,10 @@ from msccl.language.buffer import *
 from msccl.language.rank_dag import *
 import msccl.collectives as collectives
 
-from msccl.language.simulator import build_world
+import opentuner as ot # type: ignore
+from msccl.language.schedule_autotuner import ScheduleTuner
+
+from msccl.language.simulator import build_world, pretty_print
 
 from .exploration_scheduling import apply_manual_schedule, assign_balanced_channels, merge_threadblocks, powerset
 # from msccl.language.visualize import *
@@ -250,9 +255,9 @@ def SearchBestSchedule(size: int):
 
     possible_instances = [1, 2, 4, 6, 8, 12, 16, 20]
 
-    best_sched = None
+    # best_sched = None
     best_time = float('inf')
-    best_prog = None
+    # best_prog = None
 
     trying = 0
 
@@ -263,16 +268,20 @@ def SearchBestSchedule(size: int):
                     if (prog := deepcopy(_curr()).parameterized_schedule(inst, num_channels, blocking, tb_merges)) is None:
                         break
                     
-                    # print(f'Running with {inst} instances...')
                     # prog = deepcopy(_curr()).parameterized_schedule(inst)
                     chunks = get_num_chunks(prog)
+                    
+
+                    # print(ir_to_xml(prog))
 
                     world = build_world(prog, chunksize=size / chunks)
                     world.initialize()
-                    # print(f'Running with {inst} instances and {num_channels} channels (tb_merge={tb_merges}),', end=' ')
+                    
                     trying += 1
                     timing = world.run()
-                    # print(f'time = {timing}us')
+                    # input(f'time = {timing}us')
+                    # print(ir_to_xml(prog))
+                    # input(f'Running with {inst} instances and {num_channels} channels (tb_merge={tb_merges})')
                     
                     # print(f'Predicted time = {timing}us')
 
@@ -281,10 +290,48 @@ def SearchBestSchedule(size: int):
                         best_time = timing
                         best_sched = inst, num_channels, blocking, tb_merges
 
+                    # raise SystemExit()
+
     print(f'The best schedule uses {best_sched[0]} instances and {best_sched[1]} channels ({"blocked" if best_sched[2] else "interleaved"}), and is predicted to take {best_time:.2f}us')
+    print(f'The following send/recv threadblocks are merged: {best_sched[3]}')
     print(f'[Tried {trying} different schedules]')
+    # print(ir_to_xml(best_prog))
     return best_prog
 
+
+def AutotuneBestSchedule(size: int, iterations: int = 500):
+    parser = ot.default_argparser()
+    args = parser.parse_args([])
+    args.test_limit = iterations
+    args.no_dups = True
+
+    cfg: dict[str, Any] = {}
+
+    trm = ot.tuningrunmain.TuningRunMain(ScheduleTuner(_curr(), size, cfg, args), args)
+    trm.main()
+
+    num_instances = cfg['num_instances']
+    num_channels = max(1, cfg['total_connections'] // cfg['num_instances'])
+    blocked = cfg['channels_blocked']
+    tb_merges = {chan_t(c) for c in range(num_channels) if cfg['merged_threadblocks'][0][c]}
+
+    print(f'The best schedule uses {num_instances} instances and {num_channels} channels ({"blocked" if blocked else "interleaved"})')
+    print(f'The following send/recv threadblocks are merged: {tb_merges}')
+
+
+
+def SpecificSchedule(num_inst: int, num_chan: int, blocked: bool, tb_merge: set[chan_t], size: int):
+    prog = _curr().parameterized_schedule(num_inst, num_chan, blocked, tb_merge)
+    chunks = get_num_chunks(prog)
+    world = build_world(prog, chunksize=size / chunks)
+    world.initialize()
+    timing = world.run()
+    
+    print(f'Time: {timing}')
+    print(f'Rank 0 trace:')
+    for t, op in world.trace:
+        if op.rank == rank_t(0):
+            print(f'{t:.3f} -- {pretty_print(op)}')
 
 def Simulate(csv=False, fout=stdout, noprint=False, **opts):
 
