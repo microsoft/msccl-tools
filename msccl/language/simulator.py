@@ -266,8 +266,8 @@ class TB:
 
 
     def get_events(self, timestamp: float):
-        self.cur_iter += 1
         if self.ip >= len(self.ops):
+            self.cur_iter += 1
             if self.cur_iter >= self.iterations:
                 return
             self.ip = 0
