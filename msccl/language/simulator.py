@@ -220,7 +220,7 @@ class buffer:
         return self.slots[chan] >= self.limit
 
 def pretty_print(op: Op) -> str:
-    return f'{op.channel}@{op.inst}:{op.src.rank, op.src.index}->{op.dst.rank, op.dst.index}'
+    return f'{op.channel}@{op.inst}:{op.src.rank, op.src.index}->{op.dst.rank, op.dst.index}{[(d.tb, d.step) for d in op.depends]}'
 
 class TB:
     def __init__(self, ops: list[Op], iterations=1) -> None:
@@ -243,17 +243,34 @@ class TB:
 
         timestamp = -1
 
+        
+        def pretty_print_2(op: Op) -> str:
+            return str((op.tb, op.step))
+
         self.log.info(' ; '.join(map(pretty_print, self.ops)))
+
+        
 
 
     def get_events(self, timestamp: float):
+        self.cur_iter += 1
         if self.ip >= len(self.ops):
             if self.cur_iter >= self.iterations:
                 return
-            self.cur_iter += 1
             self.ip = 0
 
         op = self.ops[self.ip]
+
+        # make sure the dependences are met
+        for dep in op.depends:
+            if dep not in self.world.already_run:
+                self.world.dependences[dep].add(self)
+                return
+            # if self.rank.tbs[dep.tb].ip <= dep.step:
+            #     self.world.dependences[self.rank.id, dep.tb].add((self, dep.step))
+            #     # print(f'{self} depends on TB {self.rank.id}:{dep.tb} op {dep.step}, but current op is {self.rank.tbs[dep.tb].ip}')
+            #     return
+
         # self.log.debug(f'Polled, current ip is {self.ip} and op is {pretty_print(op)}')
 
         if op.is_recv():
@@ -415,12 +432,16 @@ class World:
 
         for rid in self.ranks:
             for tb in self.ranks[rid].tbs:
-                tb.iterations = 1 # self.num_tiles
+                tb.iterations = min(self.num_tiles, 3)
+                # tb.iterations = 1 # self.num_tiles
 
         self.timing_info = timing_info
 
         self.verbose = verbose
         self.log = Logger(self, '<world|{event.timestamp}>')
+
+        self.already_run: set[Op] = set()
+        self.dependences: dict[Op, set[TB]] = defaultdict(set)
         
 
         for _, rank in ranks.items():
@@ -428,7 +449,7 @@ class World:
 
         # print(num_conns)
         self.timestamp = 4. * num_conns + 4
-        self.pipeline = int(1e100)
+        self.pipeline = self.base_cost(Instruction.send) / 2# int(1e100)
         self.send_buffering_threshold = 4 << 20
 
         if timing_info:
@@ -613,9 +634,15 @@ class World:
             self.log.error(e)
             quit()
             # self.debug_mode()
-        return self.timestamp * self.num_tiles
+        return self.timestamp * self.num_tiles / min(self.num_tiles, 3)
 
     def execute(self, event: ExecEvent):
+
+        # if event.tb.rank.id == 0 and event.tb.tbid == 3:
+        #     print(f'** {self.ranks[rank_t(0)].tbs[3].ip} **')
+        # else:
+        #     print(self.ranks[rank_t(0)].tbs[3].ip)
+
 
         # all fused ops follow the pattern `[recv]?[local]*[send]?`
         if event.op.is_recv():
@@ -659,6 +686,16 @@ class World:
             # # self.log.info(f'Freed link {link}!')
 
         self.trace.append((event.timestamp, event.op))
+        self.already_run.add(event.op)
+        
+        # print(f'{event.tb} @ {event.tb.ip} : {pretty_print(event.op)} vs {pretty_print(event.tb.ops[event.tb.ip - 1])}')
+        # print(f'{event.tb} executed op {event.tb.ip}')
+        new_listeners: set[tuple[TB, int]] = set()
+        for tb in self.dependences[event.op]:
+            self.schedule(PollEvent(event.timestamp, tb))
+        
+        self.dependences[event.op] = set()
+
         self.timestamp = event.timestamp
         if self.verbose:
             print(f'\t** TB {event.tb.rank.id}:{event.tb.tbid} executing {event.op.inst} @ t = {event.timestamp} **', file=stderr)
@@ -774,7 +811,6 @@ def build_world(prog: Program, **params) -> World:
     connections = get_connections(prog)
     # params['num_conns'] = len(gpu.threadblocks) # len({(r1, r2 )for (r1, r2, _) in connections})
     # params['mapping'] = schedule(connections, World.links)
-
 
     return World(ranks, num_conns=len(gpu.threadblocks), mapping=schedule(connections, World.links), **params)
 
