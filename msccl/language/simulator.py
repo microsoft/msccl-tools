@@ -644,6 +644,8 @@ class World:
                     assert tb.ip == len(tb.ops), f'{str(tb)} did not complete!'
         except AssertionError as e:
             self.log.error(e)
+            for t, op in self.trace:
+                print(f'\t{t:.2f} ~ {pretty_print(op)}')
             quit()
             # self.debug_mode()
         return self.timestamp * self.num_tiles / min(self.num_tiles, 3)
