@@ -3,15 +3,18 @@ from __future__ import annotations
 from heapq import heappop, heappush
 import itertools
 from math import ceil
+from multiprocessing import connection
 from sys import stderr
 import inspect
-from typing import Optional, Type, Generator
+from typing import NamedTuple, Optional, Type, Generator
 
 from msccl.language.ir import *
 
 import networkx as nx # type: ignore
 
 # TODO: PollEvent should know whether it will advance the ip or not, instead of threadblocks advancing their ip manually
+
+
 
 dgx2_top = nx.Graph()
 nodes = range(8)
@@ -61,6 +64,17 @@ class Logger:
     warn = __show_prefix('WARN')
     error = __show_prefix('ERROR')
 
+@dataclass
+class connection_t:
+    src: rank_t
+    dst: rank_t
+    chan: chan_t
+
+    def __repr__(self):
+        return f'{self.chan}@{self.src}->{self.dst}'
+
+    def __hash__(self):
+        return hash((self.src, self.dst, self.chan))
 
 @dataclass 
 class Msg:
@@ -151,6 +165,7 @@ class AcquireChannel(Event):
     """Fires when a send has *just started*"""
     link: link_t | None
     rank: rank_t
+    src: rank_t
     chan: chan_t
 
     def __repr__(self) -> str:
@@ -169,8 +184,7 @@ class TryAcquire(Event):
 @dataclass
 class TryRecv(Event):
     tb: TB
-    chan: chan_t
-    rank: rank_t
+    conn: connection_t
     callbacks: list[Event]
     # callbacks_1: list[Event] # callbacks to execute if the receive is successful but there's more data
     # callbacks_2: list[Event] # callbacks to execute if the receive is successful and there's no more data
@@ -180,18 +194,17 @@ class TryRecv(Event):
 @dataclass
 class SendAvailable(Event):
     """Fires when the first pipelined slice has finished sending"""
-    rank: rank_t
-    chan: chan_t
+    conn: connection_t
 
     def __repr__(self) -> str:
-        return f'SendAvailable(rank={self.rank}, chan={self.chan})'
+        return f'SendAvailable(conn={self.conn})'
 
 
 slot = NewType('slot', int)
 
 class buffer:
     def __init__(self, rank: rank_t, flag: Type[Msg], limit=1):
-        self.slots: Dict[chan_t, slot] = defaultdict(lambda: slot(0))
+        self.slots: Dict[connection_t, slot] = defaultdict(lambda: slot(0))
         self.rank = rank
         self.flag = flag
         self.limit = limit
@@ -200,24 +213,24 @@ class buffer:
     def set_world(self, world: World):
         self.world = world
 
-    def put(self, chan: chan_t, val: bool, timestamp: float):
+    def put(self, conn: connection_t, val: bool, timestamp: float):
         if val:
-            assert self.slots[chan] < self.limit
-            self.slots[chan] = slot(self.slots[chan] + 1)
+            assert self.slots[conn] < self.limit
+            self.slots[conn] = slot(self.slots[conn] + 1)
         else:
-            assert self.slots[chan] > 0
-            self.slots[chan] = slot(self.slots[chan] - 1)
+            assert self.slots[conn] > 0
+            self.slots[conn] = slot(self.slots[conn] - 1)
 
         # print(f'Put set buffer[{self.rank}]@{chan} to {self.slots[chan]}')
         
         # print(f'sending notify {self.flag(rank=self.rank, chan=chan)}')
-        self.world.notify(self.flag(rank=self.rank, chan=chan), timestamp)
+        self.world.notify(self.flag(rank=self.rank, chan=conn.chan), timestamp)
 
-    def __call__(self, chan: chan_t):
-        return self.slots[chan]
+    def __call__(self, conn: connection_t):
+        return self.slots[conn]
 
-    def full(self, chan: chan_t):
-        return self.slots[chan] >= self.limit
+    def full(self, conn: connection_t):
+        return self.slots[conn] >= self.limit
 
 def pretty_print(op: Op) -> str:
     return f'{op.channel}@{op.inst}:{op.src.rank, op.src.index}->{op.dst.rank, op.dst.index}{[(d.tb, d.step) for d in op.depends]}'
@@ -289,7 +302,7 @@ class TB:
             # callbacks_2.append(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
 
             self.log.debug(f'Trying to receive on {self.rank.id, op.channel}')
-            self.world.schedule(TryRecv(timestamp=timestamp, tb=self, chan=op.channel, rank=self.rank.id, callbacks=callbacks)) #callbacks_1=callbacks_1, callbacks_2=callbacks_2))
+            self.world.schedule(TryRecv(timestamp=timestamp, tb=self, conn=connection_t(src=op.src.rank, dst=self.rank.id, chan=op.channel), callbacks=callbacks)) #callbacks_1=callbacks_1, callbacks_2=callbacks_2))
 
             # # check if data is available in the buffer
             # if self.rank.dirty(op.channel):
@@ -322,14 +335,14 @@ class TB:
             callbacks = []
             callbacks.append(SendAvailable(
                     timestamp=timestamp + min(self.world.pipeline, self.world.latency(op)),
-                    rank=op.dst.rank, chan=op.channel))
+                    conn=connection_t(src=op.rank, dst=op.dst.rank, chan=op.channel)))
             callbacks.append(ExecEvent(timestamp=timestamp + self.world.latency(op), op=op, tb=self))
             callbacks.append(PollEvent(timestamp=timestamp + self.world.latency(op), tb=self))
 
             self.log.debug(f'Trying to acquire connection {op.src.rank, op.dst.rank, op.channel}')
 
             self.world.schedule(TryAcquire(
-                timestamp=timestamp, tb=self, conn=(op.src.rank, op.dst.rank, op.channel), 
+                timestamp=timestamp, tb=self, conn=connection_t(src=op.src.rank, dst=op.dst.rank, chan=op.channel), 
                 callbacks=callbacks, override_dirty=(op.is_recv() and op.src.rank == op.dst.rank),
                 override_in_use=(op.cnt() * self.world.chunksize) > self.world.send_buffering_threshold))
 
@@ -385,8 +398,7 @@ class Rank:
 
         self.dirty = buffer(rid, ChunkAvailMsg, limit=1) # chunks with unread data
         self.locked = buffer(rid, ConnAvailMsg, limit=1) # chunks actively being written to
-        self.active_read: dict[chan_t, bool] = defaultdict(bool) # chunks to which a read is in progress (cannot start a new read)
-            
+        self.active_read: dict[connection_t, bool] = defaultdict(bool) # chunks to which a read is in progress (cannot start a new read)
         self.id = rid
         self.world: World = None # type: ignore
 
@@ -400,7 +412,7 @@ class Rank:
         self.world = world
 
 
-connection_t = tuple[rank_t, rank_t, chan_t]
+# connection_t = tuple[rank_t, rank_t, chan_t]
 
 class World:
 
@@ -490,29 +502,29 @@ class World:
                 print(e)
                 
     def is_acquireable(self, conn: connection_t, override_dirty=False):
-        _, dst, chan = conn
+        # src, dst, chan = conn
         # print(f'\tTry acquire for {conn}: ', end='')
-        if self.ranks[dst].locked(chan):
+        if self.ranks[conn.dst].locked(conn):
             # print('FAIL: another send in progress to dest')
-            return ConnAvailMsg(dst, chan)
+            return ConnAvailMsg(conn.dst, conn.chan)
 
-        if self.ranks[dst].dirty.full(chan) and not override_dirty:
+        if self.ranks[conn.dst].dirty.full(conn) and not override_dirty:
             # print('FAIL: unread data in buffer')
-            return ChunkAvailMsg(dst, chan)
+            return ChunkAvailMsg(conn.dst, conn.chan)
 
         link = self.mapping[conn]
         # print(f'[link={link},conn={self.in_use[link]}]')
 
         if (blocker := self.in_use[link]):
             # print(f'FAIL: link {link} in use by {blocker}')
-            return ConnAvailMsg(blocker[1], blocker[2])
+            return ConnAvailMsg(blocker.dst, blocker.chan)
         # print('SUCCESS')
         return None
 
     def acquire(self, timestamp: float, conn: connection_t, mark_in_use=True):
-        _, dst, chan = conn
+        # src, dst, chan = conn
         # print(f'locking (conn {dst} {chan})')
-        self.ranks[dst].locked.put(chan, True, timestamp)
+        self.ranks[conn.dst].locked.put(conn, True, timestamp)
         # print(f'Acquiring link {self.mapping[conn]} for {conn}')
         if mark_in_use:
             self.in_use[self.mapping[conn]] = conn
@@ -520,22 +532,22 @@ class World:
         #     print('Skipping acquire')
 
     def release(self, timestamp: float, conn: connection_t):
-        _, dst, chan = conn
+        # src, dst, chan = conn
         # print(f'unlocking (conn {dst} {chan})')
-        self.ranks[dst].locked.put(chan, False, timestamp)
+        self.ranks[conn.dst].locked.put(conn, False, timestamp)
         # print(f'Releasing link {self.mapping[conn]}')
         self.in_use[self.mapping[conn]] = None
 
-    def recvable(self, rank: rank_t, channel: chan_t):
-        return self.ranks[rank].dirty(channel) and not self.ranks[rank].active_read[channel]
+    def recvable(self, conn: connection_t):
+        return self.ranks[conn.dst].dirty(conn) and not self.ranks[conn.dst].active_read[conn]
 
-    def recv_lock(self, rank: rank_t, channel: chan_t):
-        self.ranks[rank].active_read[channel] = True
+    def recv_lock(self, conn: connection_t):
+        self.ranks[conn.dst].active_read[conn] = True
 
-    def recv_unlock(self, timestamp: float, rank: rank_t, channel: chan_t):
+    def recv_unlock(self, timestamp: float, conn: connection_t):
         # assert self.ranks[rank].dirty(channel)
-        self.ranks[rank].dirty.put(channel, False, timestamp)
-        self.ranks[rank].active_read[channel] = False
+        self.ranks[conn.dst].dirty.put(conn, False, timestamp)
+        self.ranks[conn.dst].active_read[conn] = False
 
 
     def clear_tb_polls(self, tb: TB):
@@ -565,14 +577,14 @@ class World:
                         heappush(self.queue, PollEvent(timestamp=event.timestamp, tb=sub))
                     self.subscribers[event.msg] = []
                     # print(self.queue)
-                elif isinstance(event, AcquireChannel):
-                    self.log.debug(f'Channel {event.rank, event.chan} locked')
-                    self.ranks[event.rank].locked.put(event.chan, True, event.timestamp)
+                # elif isinstance(event, AcquireChannel):
+                #     self.log.debug(f'Channel {event.rank, event.chan} locked')
+                #     self.ranks[event.rank].locked.put(event.chan, event.src, True, event.timestamp)
 
-                    # mark the link as in use
-                    if event.link is not None:
-                        self.log.warn('USING DEPRECATED AcquireChannel API!!!!!')
-                        self.in_use[event.link] = (event.rank, event.rank, event.chan)
+                #     # mark the link as in use
+                #     if event.link is not None:
+                #         self.log.warn('USING DEPRECATED AcquireChannel API!!!!!')
+                #         self.in_use[event.link] = (event.rank, event.rank, event.chan)
 
                 elif isinstance(event, TryAcquire):
                     if not (blocker := self.is_acquireable(event.conn, event.override_dirty)):
@@ -583,7 +595,7 @@ class World:
 
                         event.tb.ip += 1
                     else:
-                        _, dst, chan = event.conn
+                        # _, dst, chan = event.conn
                         # self.log.debug(f'Acquire failed: {blocker}')
                         # if blocker == 'conn':
                         #     msg: Msg = ConnAvailMsg(dst, chan)
@@ -593,8 +605,8 @@ class World:
                             timestamp=event.timestamp, tb=event.tb, msg=blocker))
 
                 elif isinstance(event, TryRecv):
-                    if self.recvable(event.rank, event.chan):
-                        self.recv_lock(event.rank, event.chan)
+                    if self.recvable(event.conn):
+                        self.recv_lock(event.conn)
                         self.log.debug(f'Recv started, callbacks = {event.callbacks}')
                         for callback in event.callbacks:
                             self.schedule(callback)
@@ -602,7 +614,7 @@ class World:
                     else:
                         self.log.debug('Recv failed')
                         self.schedule(SubscribeEvent(
-                            timestamp=event.timestamp, tb=event.tb, msg=ChunkAvailMsg(event.rank, event.chan)))
+                            timestamp=event.timestamp, tb=event.tb, msg=ChunkAvailMsg(event.conn.dst, event.conn.chan)))
 
                     # if evt_rank.dirty(event.chan):
                     #     if evt_rank.locked(event.chan):
@@ -620,8 +632,8 @@ class World:
                     #     self.schedule(SubscribeEvent(
                     #         timestamp=event.timestamp, tb=event.tb, msg=ChunkAvailMsg(event.rank, event.chan)))
                 elif isinstance(event, SendAvailable):
-                    self.log.debug(f'Data available from send on (rank, channel) {event.rank, event.chan}')
-                    self.ranks[event.rank].dirty.put(event.chan, True, event.timestamp)
+                    self.log.debug(f'Data available from send on (rank, channel) {event.conn.dst, event.conn.chan}')
+                    self.ranks[event.conn.dst].dirty.put(event.conn, True, event.timestamp)
 
         except KeyboardInterrupt:
             self.debug_mode()
@@ -646,12 +658,13 @@ class World:
 
         # all fused ops follow the pattern `[recv]?[local]*[send]?`
         if event.op.is_recv():
+            conn = connection_t(src=event.op.src.rank, dst=event.op.rank, chan=event.op.channel)
             # the action of a receive is to clear the dirty bit, marking the chunk as being read
             self.log.debug(f'From {str(event.tb)}: Executing recv to {event.op.rank, event.op.channel}')
-            self.recv_unlock(event.timestamp, event.op.rank, event.op.channel)
+            self.recv_unlock(event.timestamp, conn)
 
             # manually schedule the next callback here
-            if self.ranks[event.op.rank].locked(event.op.channel):
+            if self.ranks[event.op.rank].locked(conn):
                 self.log.debug('More data pending')
                 self.schedule(SubscribeEvent(timestamp=event.timestamp, tb=event.tb, msg=ConnAvailMsg(rank=event.op.rank, chan=event.op.channel)))
             else:
@@ -675,7 +688,7 @@ class World:
 
         if event.op.is_send():
             self.log.debug(f'From {str(event.tb)}: Executing send to {event.op.dst.rank, event.op.channel}')
-            self.release(event.timestamp, (event.op.src.rank, event.op.dst.rank, event.op.channel))
+            self.release(event.timestamp, connection_t(src=event.op.src.rank, dst=event.op.dst.rank, chan=event.op.channel))
             # # the action of a send is to release the channel lock...
             
             # assert self.ranks[event.op.dst.rank].locked(event.op.channel)
@@ -770,17 +783,17 @@ def get_connections(prog: Program) -> set[connection_t]:
     conns: set[connection_t] = set()
     for gpu in prog.gpus:
         for tb in gpu.threadblocks:
-            conns.add((tb.recv, gpu.rank, tb.channel))
+            conns.add(connection_t(src=tb.recv, dst=gpu.rank, chan=tb.channel))
 
-    conns = {c for c in conns if -1 not in c}
+    conns = {c for c in conns if -1 not in (c.src, c.dst, c.chan)}
 
     return conns
 
 
 def schedule(connections: set[connection_t], links: dict[tuple[rank_t, rank_t], list[link_t]]) -> dict[connection_t, link_t]:
     channels: dict[tuple[rank_t, rank_t], list[chan_t]] = defaultdict(list)
-    for r1, r2, c in connections:
-        channels[r1, r2].append(c)
+    for c in connections:
+        channels[c.src, c.dst].append(c.chan)
 
     mapping: dict[connection_t, tuple[int, ...]] = {}
     for r1, r2 in channels:
@@ -789,7 +802,7 @@ def schedule(connections: set[connection_t], links: dict[tuple[rank_t, rank_t], 
                 avail = links[r1, r2]
             else:
                 avail = links[r2, r1]
-            mapping[r1, r2, chan] = tuple(avail[i % len(avail)])
+            mapping[connection_t(src=r1, dst=r2, chan=chan)] = tuple(avail[i % len(avail)])
 
     return mapping
 
