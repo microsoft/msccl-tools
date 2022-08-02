@@ -21,8 +21,10 @@ def assign_balanced_channels(instr_dag: InstructionDAG, num_channels: int, block
     connections: dict[rank_t, list[Op]] = defaultdict(list)
 
     for send in rank_sends[rank_t(0)]:
-        dest = send.recv_peer()
+        dest = send.send_peer()
         connections[dest].append(send)
+
+    # input(dict(connections))
 
     # assign channels to all the connections leaving rank 0
     channel_assignment: dict[Op, chan_t] = {}
