@@ -122,7 +122,7 @@ class Op:
     rank: rank_t
     src: ChunkRef
     dst: ChunkRef
-    depends: list = field(default_factory=list)
+    depends: list[Op] = field(default_factory=list)
     step: int = -1 # Step in the TB
     tb: tbid_t = tbid_t(-1) # TB this op is assigned to
     prev: list[Op] | set[Op] = field(default_factory=list) # type: ignore # List of instructions that happen before
@@ -247,17 +247,17 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                     buffer_sizes[key] = max(
                         buffer_sizes[key], op.dst.index + op.dst.size)
 
-    tb_id = {}
+    tb_id: dict[Threadblock, tbid_t] = {}
     # Sort threadblocks in each GPU by peers and then the channel
     # This is important as in NCCL threadblocks using the same NVLink concurrently should be close together
     for gpu in program.gpus:
         gpu.threadblocks = sorted(gpu.threadblocks,
                                   key=lambda tb: (tb.send, tb.recv, tb.channel))
         for i, tb in enumerate(gpu.threadblocks):
-            tb_id[tb] = i
+            tb_id[tb] = tbid_t(i)
 
     # Filter out dependencies within the same threadblock
-    op_tb_id = {}
+    op_tb_id: dict[Op, tbid_t] = {}
     for gpu in program.gpus:
         for tb in gpu.threadblocks:
             for op in tb.ops:
@@ -317,10 +317,10 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     # Do some additional postprocessing of operations:
     # - Expand operations with extra dependencies with no-ops
     # - Mark the index of each operation taking any extra no-ops into account
-    op_idx = {}
+    op_idx: dict[Op, int] = {}
     for gpu in program.gpus:
         for tb in gpu.threadblocks:
-            new_ops = []
+            new_ops: list[Op] = []
             for op in tb.ops:
                 # Expand extra dependencies into nop operations
                 if len(op.depends) > 1:
