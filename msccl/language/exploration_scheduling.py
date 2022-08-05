@@ -69,13 +69,39 @@ def merge_threadblocks(instr_dag: InstructionDAG, channel_assignment: dict[Op, c
     # this only works because we've assumed all ranks are isomorphic
     tb_groups: dict[str, set[Op]] = defaultdict(set)
 
+    peers: dict[str, tuple[rank_t, rank_t]] = defaultdict(lambda: (rank_t(-1), rank_t(-1))) # tb name -> (send peer, receive peer)
+    merged_tbs: dict[chan_t, list[str]] = defaultdict(list)
+
+    def available_tbs(op: Op):
+        if op.is_send():
+            peer_idx = 0
+            peer = op.dst.rank
+        else:
+            assert op.is_recv()
+            peer_idx = 1
+            peer = op.src.rank
+        for tb in merged_tbs[channel_assignment[op]]:
+            if peers[tb][peer_idx] in (peer, -1):
+                return tb
+        return False
+
+
     for op in channel_assignment:
         if (chan := channel_assignment[op]) in merges:
-            tb_groups[f'sr{chan}'].add(op)
+            if not (tb := available_tbs(op)):
+                tb = f'merged{len(merged_tbs[chan])}'
+                merged_tbs[chan].append(tb)
+            tb_groups[tb].add(op)
+            
+            if op.is_send():
+                peers[tb] = (op.dst.rank, peers[tb][1])
+            else:
+                peers[tb] = (peers[tb][0], op.src.rank)
+            
         elif op.is_send():
-            tb_groups[f's{chan}'].add(op)
+            tb_groups[f's{chan}{op.dst.rank}'].add(op)
         elif op.is_recv():
-            tb_groups[f'r{chan}'].add(op)
+            tb_groups[f'r{chan}{op.src.rank}'].add(op)
         else:
             assert chan == -1, "unsorted op somehow made it into the channel assignment??"
             tb_groups['local'].add(op)
