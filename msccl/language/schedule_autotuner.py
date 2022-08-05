@@ -19,10 +19,11 @@ class MyBooleanArray(BooleanArray):
 
 class ScheduleTuner(ot.MeasurementInterface):
 
-    def __init__(self, program: MSCCLProgram, size: int, dest: dict, *args):
+    def __init__(self, program: MSCCLProgram, size: int, dest: dict, timing_info: dict, *args):
         self.program = program
         self.size = size
         self.dest = dest
+        self.timing_info = timing_info
         super(ScheduleTuner, self).__init__(*args)
 
     def manipulator(self):
@@ -50,7 +51,7 @@ class ScheduleTuner(ot.MeasurementInterface):
         
         chunks = get_num_chunks(prog)
 
-        world = build_world(prog, chunksize=self.size / chunks)
+        world = build_world(prog, chunksize=self.size / chunks, timing_info=self.timing_info)
         world.initialize()
         
         return ot.Result(time=world.run())

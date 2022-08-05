@@ -333,7 +333,7 @@ def timing_from_pickle(size: int, file: IO):
 
 
 
-def AutotuneBestSchedule(size: int, iterations: int = 500, xml=False):
+def AutotuneBestSchedule(size: int, iterations: int = 500, xml=False, timing_info=None):
     parser = ot.default_argparser()
     args = parser.parse_args([])
     args.test_limit = iterations
