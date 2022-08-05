@@ -9,7 +9,8 @@ from enum import Enum
 import functools
 from multiprocessing import dummy
 from sys import stderr, stdin, stdout
-from typing import Any
+from time import time
+from typing import IO, Any
 from msccl.language.ir import *
 from msccl.language.passes import *
 from msccl.language.tb_assignment import *
@@ -249,7 +250,8 @@ def XML(fout=None):
    print(_curr().generate_xml()[0], file=fout)
 
 
-def SearchBestSchedule(size: int):
+def SearchBestSchedule(size: int, timing_info=None, xml=False):
+    # print(timing)
 
     from copy import deepcopy
 
@@ -261,10 +263,12 @@ def SearchBestSchedule(size: int):
 
     trying = 0
 
+    start = time()
     for inst in possible_instances:
         for num_channels in range(1, 32 // inst + 1):
             for blocking in (True, False):
                 for tb_merges in powerset(set(map(chan_t, range(num_channels)))):
+                    # TODO: explore different bipartite matchings between threadblock merges (if there are many connections on the same channel)
                     if (prog := deepcopy(_curr()).parameterized_schedule(inst, num_channels, blocking, tb_merges)) is None:
                         break
                     
@@ -273,8 +277,7 @@ def SearchBestSchedule(size: int):
                     
 
                     # print(ir_to_xml(prog))
-
-                    world = build_world(prog, chunksize=size / chunks)
+                    world = build_world(prog, chunksize=size / chunks, timing_info=timing_info)
                     world.initialize()
                     
                     trying += 1
@@ -292,14 +295,45 @@ def SearchBestSchedule(size: int):
 
                     # raise SystemExit()
 
-    print(f'The best schedule uses {best_sched[0]} instances and {best_sched[1]} channels ({"blocked" if best_sched[2] else "interleaved"}), and is predicted to take {best_time:.2f}us')
-    print(f'The following send/recv threadblocks are merged: {best_sched[3]}')
-    print(f'[Tried {trying} different schedules]')
+    if xml:
+        print(ir_to_xml(best_prog))
+    else:
+        print(f'The best schedule uses {best_sched[0]} instances and {best_sched[1]} channels ({"blocked" if best_sched[2] else "interleaved"}), and is predicted to take {best_time:.2f}us')
+        print(f'The following send/recv threadblocks are merged: {best_sched[3]}')
+        print(f'[Tried {trying} different schedules in {time() - start:.2f}s]')
     # print(ir_to_xml(best_prog))
     return best_prog
 
 
-def AutotuneBestSchedule(size: int, iterations: int = 500):
+def timing_from_pickle(size: int, file: IO):
+    from pickle import load
+    data = load(file)
+    json = None
+    for low, high in data:
+        if 2 ** low <= size and size < 2 ** high:
+            json = data[low, high]
+            break
+    if json is None:
+        json = data[max(data.keys())]
+
+    instrs = {Instruction.copy: 'copy', Instruction.reduce: 'reduce', Instruction.send: 'send'}
+    bks = {i : (1 << 40, 1 << 50) for i in instrs}
+    ms = {i : (json[f'{instrs[i]}-ms-bot'] * 1e-5, 0, 0) for i in instrs}
+    xs = {i : (json[f'{instrs[i]}-xs-bot'], 0, 0) for i in instrs}
+
+
+    spawn = json['warmup-m'], json['warmup-x']
+    pipeline = json['pipeline']
+
+    send_buffer = json['send-buffer'] # 4 << 20
+
+    return (bks, ms, xs, spawn, pipeline, send_buffer)
+    
+
+
+
+
+def AutotuneBestSchedule(size: int, iterations: int = 500, xml=False):
     parser = ot.default_argparser()
     args = parser.parse_args([])
     args.test_limit = iterations
@@ -315,9 +349,16 @@ def AutotuneBestSchedule(size: int, iterations: int = 500):
     blocked = cfg['channels_blocked']
     tb_merges = {chan_t(c) for c in range(num_channels) if cfg['merged_threadblocks'][0][c]}
 
-    print(f'The best schedule uses {num_instances} instances and {num_channels} channels ({"blocked" if blocked else "interleaved"})')
-    print(f'The following send/recv threadblocks are merged: {tb_merges}')
+    best_prog = _curr().parameterized_schedule(num_instances, num_channels, blocked, tb_merges)
+    
+    if xml:
+        print(ir_to_xml(best_prog))
+    else:
 
+        print(f'The best schedule uses {num_instances} instances and {num_channels} channels ({"blocked" if blocked else "interleaved"})')
+        print(f'The following send/recv threadblocks are merged: {tb_merges}')
+
+    return best_prog
 
 
 def SpecificSchedule(num_inst: int, num_chan: int, blocked: bool, tb_merge: set[chan_t], size: int):
