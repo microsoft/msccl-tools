@@ -1,17 +1,20 @@
 import argparse
+import humanfriendly
 
 from msccl.language import *
 from msccl.topologies import *
 from msccl.language.collectives import AllToAll
+from msccl.language.simulator import World, dgx2_top
 
 
-def alltoall_hierarchical(num_nodes, gpus_per_node, protocol):
+def alltoall_hierarchical(num_nodes, gpus_per_node, size, protocol):
+    World.set_top(dgx2_top)
     num_ranks = num_nodes * gpus_per_node
     topology = fully_connected(num_ranks)
     collective = AllToAll(num_ranks, 1, inplace=False)
 
         
-    with MSCCLProgram("hierarchical_all_to_all", topology, collective, 1, protocol=protocol):
+    with MSCCLProgram("hierarchical_all_to_all", topology, collective, instances=-1, protocol=protocol):
         for n1 in range(num_nodes):
             for r in range(1,num_nodes):
                 n2 = (n1 + r) % num_nodes
@@ -45,15 +48,18 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, protocol):
                 c = chunk(rank, Buffer.input, index)
                 c.copy(c.get_dst_rank(), Buffer.output, c.get_dst_index())
 
-        XML() # Prints the XML
+        # XML() # Simulate() # Prints the XML
+        SearchBestSchedule(size)
         Check()
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
+# parser.add_argument('instances', type=int, help='number of instances')
+parser.add_argument('size', type=str, help='size at which to simulate')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: Simple')
 args = parser.parse_args()
 
 
-alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.protocol)
+alltoall_hierarchical(args.num_nodes, args.gpus_per_node, humanfriendly.parse_size(args.size), args.protocol)

@@ -12,7 +12,7 @@ def allgather_ring(size):
     World.set_top(dgx2_top)
     topology = fully_connected(size)
     collective = AllGather(size, 1, False)
-    with MSCCLProgram("allgather_ring", topology, collective, 12, instr_fusion=False):
+    with MSCCLProgram("allgather_ring", topology, collective, 1, instr_fusion=False):
         # Loop over each chunk's root
         for r in range(size):
             # Get the chunk at rank r, input[r]
@@ -27,11 +27,11 @@ def allgather_ring(size):
                 # same rank can be merged into a receive-copy-send
                 c = c.copy(next, buffer=Buffer.output, index=r)
                 next = (next + 1) % size
-        XML()
-        # Simulate(csv=False)
-        Check()
+        # XML()
+        Simulate(csv=False)
+        # Check()
 
-def allgather_ring_search(num_gpus, size):
+def allgather_ring_search(num_gpus, size, blocked=True):
     World.set_top(dgx2_top)
     topology = fully_connected(num_gpus)
     collective = AllGather(num_gpus, 1, False)
@@ -51,6 +51,8 @@ def allgather_ring_search(num_gpus, size):
                 c = c.copy(next, buffer=Buffer.output, index=r)
                 next = (next + 1) % num_gpus
         SearchBestSchedule(size)
+        # SpecificSchedule(1, 2, blocked, {0, 1}, size)
+        # AutotuneBestSchedule(size, iterations=100)
 
 def allgather_ring_inplace(size):
     topology = fully_connected(size)
@@ -74,6 +76,7 @@ def allgather_ring_inplace(size):
 parser = ArgumentParser()
 parser.add_argument('num_gpus', type=int, help='number of gpus')
 parser.add_argument('size', type=str, help='buffer size at which to simulate')
+# parser.add_argument('blocked', type=eval)
 args = parser.parse_args()
 
 allgather_ring_search(args.num_gpus, humanfriendly.parse_size(args.size))
