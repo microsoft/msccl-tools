@@ -21,6 +21,7 @@ def main():
 
     handlers = []
     handlers.append(make_solvers(cmd_parsers))
+    handlers.append(make_composers(cmd_parsers))
     handlers.append(make_distributors(cmd_parsers))
     handlers.append(make_analyses(cmd_parsers))
     handlers.append(make_handle_ncclize(cmd_parsers))
