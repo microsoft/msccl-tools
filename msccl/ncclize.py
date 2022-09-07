@@ -334,6 +334,8 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         # Analyze liveness of indices in buffers and remap scratch into input/output as possible
         liveness = _analyze_liveness(gpus, algorithm)
         _remap_scratch_into_input_output(liveness, gpus, logging)
+        if algorithm.collective.is_combining:
+            raise RuntimeError('Combining collectives are not supported yet with scratch remapping.')
     elif greedy_scratch_sorting:
         _greedy_scratch_sort(algorithm, gpus)
     else:
@@ -392,15 +394,10 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             sends_by_dest[(dst, dstbuf, dstoff)].add((src, addr))
         for key in sends_by_dest:
             dst, dstbuf, dstoff = key
-            concurrency = len(sends_by_dest[key])
-            if concurrency > 1:
-                raise RuntimeError(f'Found {concurrency} concurrent sends to the same destination buffer and offset.')
-            else:
-                src, addr = next(iter(sends_by_dest[key]))
-                if (dstbuf, dstoff) in initialized[dst]:
-                    yield (addr, src, dst, 'rrc')
-                else:
-                    yield (addr, src, dst, 'r')
+            for idx, (src, addr) in enumerate(sends_by_dest[key]):
+                # Receives into initialized buffer indices turn into reductions
+                op_type = 'r' if idx == 0 and not (dstbuf, dstoff) in initialized[dst] else 'rrc'
+                yield (addr, src, dst, op_type, idx)
 
     def make_intervals(src, dst, addrs_set):
         if len(addrs_set) == 0:
@@ -455,101 +452,111 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
                 readers[(rank,op.src_buffer,op.src_offset+i)].append(op)
                 writers[(rank,op.dst_buffer,op.dst_offset+i)].append(op)
 
-    for step_idx, step in enumerate(algorithm.steps):
-        new_writers = defaultdict(list)
-        new_readers = defaultdict(list)
+    step_idx = 0
+    for algo_step in algorithm.steps:
+        # Categorize and serialize sends
+        serialized_steps = []
+        for addr, src, dst, dst_op_type, idx in categorize_ops(algo_step.sends, initialized):
+            if idx >= len(serialized_steps):
+                serialized_steps.extend([] for _ in range(idx - len(serialized_steps) + 1))
+            serialized_steps[idx].append((addr, src, dst, dst_op_type))
+        
+        for categorized_sends in serialized_steps:
+            new_writers = defaultdict(list)
+            new_readers = defaultdict(list)
 
-        # Group sent addresses by edge
-        grouped_sends = defaultdict(set)
-        for addr, src, dst, dst_op_type in categorize_ops(step.sends, initialized):
-            grouped_sends[(src,dst)].add((addr, dst_op_type))
+            # Group sent addresses by edge
+            grouped_sends = defaultdict(set)
+            for addr, src, dst, dst_op_type in categorized_sends:
+                grouped_sends[(src,dst)].add((addr, dst_op_type))
 
-        # Combine sends into intervals and create multiple instances if necessary
-        sends = []
-        for (src, dst), addrs in grouped_sends.items():
-            intervals = list(make_intervals(src, dst, addrs))
-            if channel_policy == ChannelPolicy.One:
-                num_chans = 1
-                channeled_intervals = [ (src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, 0) for src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt in intervals ]
-            elif channel_policy == ChannelPolicy.MatchTopology:
-                # Divide sends onto channels matching the topology (assume bw is ideal concurrency)
-                # Sends are split to balance channels if necessary
-                num_chans = algorithm.topology.link(src,dst)
-                channeled_intervals = []
+            # Combine sends into intervals and create multiple instances if necessary
+            sends = []
+            for (src, dst), addrs in grouped_sends.items():
+                intervals = list(make_intervals(src, dst, addrs))
+                if channel_policy == ChannelPolicy.One:
+                    num_chans = 1
+                    channeled_intervals = [ (src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, 0) for src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt in intervals ]
+                elif channel_policy == ChannelPolicy.MatchTopology:
+                    # Divide sends onto channels matching the topology (assume bw is ideal concurrency)
+                    # Sends are split to balance channels if necessary
+                    num_chans = algorithm.topology.link(src,dst)
+                    channeled_intervals = []
 
-                intervals.sort(key=lambda x: x[-1])
-                counts = [x[-1] for x in intervals]
-                total = sum(counts)
-                targets = [(total//num_chans) + (1 if i < (total%num_chans) else 0) for i in range(num_chans)]
+                    intervals.sort(key=lambda x: x[-1])
+                    counts = [x[-1] for x in intervals]
+                    total = sum(counts)
+                    targets = [(total//num_chans) + (1 if i < (total%num_chans) else 0) for i in range(num_chans)]
 
-                chan = 0
-                while len(intervals) > 0:
-                    if targets[chan] >= counts[-1]:
-                        i = -1
-                    else:
-                        i = bisect.bisect_left(counts, targets[chan])
-                        if i == len(counts) or counts[i] != targets[chan]:
+                    chan = 0
+                    while len(intervals) > 0:
+                        if targets[chan] >= counts[-1]:
                             i = -1
-                    src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt = intervals[i]
-                    del intervals[i]
-                    del counts[i]
-                    if cnt > targets[chan]:
-                        rem = cnt - targets[chan]
-                        cnt = targets[chan]
-                        j = bisect.bisect_left(counts, rem)
-                        intervals.insert(j, (src_buf, src_off + cnt, dst_buf, dst_off + cnt, dst_op_type, rem))
-                        counts.insert(j, rem)
+                        else:
+                            i = bisect.bisect_left(counts, targets[chan])
+                            if i == len(counts) or counts[i] != targets[chan]:
+                                i = -1
+                        src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt = intervals[i]
+                        del intervals[i]
+                        del counts[i]
+                        if cnt > targets[chan]:
+                            rem = cnt - targets[chan]
+                            cnt = targets[chan]
+                            j = bisect.bisect_left(counts, rem)
+                            intervals.insert(j, (src_buf, src_off + cnt, dst_buf, dst_off + cnt, dst_op_type, rem))
+                            counts.insert(j, rem)
 
-                    channeled_intervals.append((src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, chan))
-                    targets[chan] -= cnt
-                    assert targets[chan] >= 0
-                    if targets[chan] == 0:
-                        chan += 1
-            else:
-                assert False, 'Unhandled channel policy'
+                        channeled_intervals.append((src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, chan))
+                        targets[chan] -= cnt
+                        assert targets[chan] >= 0
+                        if targets[chan] == 0:
+                            chan += 1
+                else:
+                    assert False, 'Unhandled channel policy'
 
-            for src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, chan in channeled_intervals:
-                for i in range(instances):
-                    new_src_off = src_off * instances + i * cnt
-                    new_dst_off = dst_off * instances + i * cnt
-                    send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, dst_op_type, cnt, chan * instances + i)
-                    sends.append(send)
+                for src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, chan in channeled_intervals:
+                    for i in range(instances):
+                        new_src_off = src_off * instances + i * cnt
+                        new_dst_off = dst_off * instances + i * cnt
+                        send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, dst_op_type, cnt, chan * instances + i)
+                        sends.append(send)
 
-        # Perform dependency tracking and create _Op instances
-        for src, dst, src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, chan in sends:
-            read_keys = [(src,src_buf,src_off+i) for i in range(cnt)]
-            # A send must wait for the previous recv (if any) to finish
-            send_depends = list(set(d for k in read_keys for d in writers[k]))
+            # Perform dependency tracking and create _Op instances
+            for src, dst, src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, chan in sends:
+                read_keys = [(src,src_buf,src_off+i) for i in range(cnt)]
+                # A send must wait for the previous recv (if any) to finish
+                send_depends = list(set(d for k in read_keys for d in writers[k]))
 
-            write_keys = [(dst,dst_buf,dst_off+i) for i in range(cnt)]
-            # A receive must wait for both the previous recv and any previous sends to finish
-            recv_depends = list(set(d for deps in (readers, writers) for k in write_keys for d in deps[k]))
+                write_keys = [(dst,dst_buf,dst_off+i) for i in range(cnt)]
+                # A receive must wait for both the previous recv and any previous sends to finish
+                recv_depends = list(set(d for deps in (readers, writers) for k in write_keys for d in deps[k]))
 
-            send_op = _Op(src, dst, step_idx, True, 's', src_buf, src_off, dst_buf, dst_off, cnt, send_depends)
-            recv_op = _Op(dst, src, step_idx, False, dst_op_type, src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
-            # Record the send and receive as a set of operations that must happen on the same channel
-            ops_by_channel[chan].extend([send_op, recv_op])
+                send_op = _Op(src, dst, step_idx, True, 's', src_buf, src_off, dst_buf, dst_off, cnt, send_depends)
+                recv_op = _Op(dst, src, step_idx, False, dst_op_type, src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
+                # Record the send and receive as a set of operations that must happen on the same channel
+                ops_by_channel[chan].extend([send_op, recv_op])
 
-            # Mark writers and readers to be added for the next step
-            for k in write_keys:
-                new_writers[k].append(recv_op)
-            for k in read_keys:
-                new_readers[k].append(send_op)
-        # Writes cut the dependency to both previous writes and reads
-        for key, deps in new_writers.items():
-            if key in new_readers:
-                gpu, buf, off = key
-                raise RuntimeError(f'Encountered receive and send on the same buffer index on step {step_idx + 1} (gpu={gpu}, buf={buf}, off={off})')
-            writers[key] = deps
-            readers[key] = []
-        # Reads get added to any previous reads
-        for key, deps in new_readers.items():
-            readers[key].extend(deps)
-        # Update initialized sets
-        for ops in ops_by_channel.values():
-            for op in ops:
-                if not op.is_send:
-                    initialized[op.gpu].add((op.dst_buffer, op.dst_offset))
+                # Mark writers and readers to be added for the next step
+                for k in write_keys:
+                    new_writers[k].append(recv_op)
+                for k in read_keys:
+                    new_readers[k].append(send_op)
+            # Writes cut the dependency to both previous writes and reads
+            for key, deps in new_writers.items():
+                if key in new_readers:
+                    gpu, buf, off = key
+                    raise RuntimeError(f'Encountered receive and send on the same buffer index on step {step_idx + 1} (gpu={gpu}, buf={buf}, off={off})')
+                writers[key] = deps
+                readers[key] = []
+            # Reads get added to any previous reads
+            for key, deps in new_readers.items():
+                readers[key].extend(deps)
+            # Update initialized sets
+            for ops in ops_by_channel.values():
+                for op in ops:
+                    if not op.is_send:
+                        initialized[op.gpu].add((op.dst_buffer, op.dst_offset))
+            step_idx += 1
 
     # Add dependencies for postcopies
     for rank, gpu in gpus.items():
