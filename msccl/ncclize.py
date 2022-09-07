@@ -392,9 +392,11 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             sends_by_dest[(dst, dstbuf, dstoff)].add((src, addr))
         for key in sends_by_dest:
             dst, dstbuf, dstoff = key
-            if len(sends_by_dest[key]) > 1:
-                raise RuntimeError('Multiple concurrent sends to the same destination buffer and offset.')
+            concurrency = len(sends_by_dest[key])
+            if concurrency > 1:
+                raise RuntimeError(f'Found {concurrency} concurrent sends to the same destination buffer and offset.')
             else:
+                src, addr = next(iter(sends_by_dest[key]))
                 if (dstbuf, dstoff) in initialized[dst]:
                     yield (addr, src, dst, 'rrc')
                 else:
