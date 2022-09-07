@@ -385,15 +385,30 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         else:
             raise RuntimeError('Address is not mapped to a buffer')
 
+    def categorize_ops(sends, initialized):
+        sends_by_dest = defaultdict(set)
+        for addr, src, dst in sends:
+            dstbuf, dstoff = get_buffer_and_offset(gpus[dst], addr)
+            sends_by_dest[(dst, dstbuf, dstoff)].add((src, addr))
+        for key in sends_by_dest:
+            dst, dstbuf, dstoff = key
+            if len(sends_by_dest[key]) > 1:
+                raise RuntimeError('Multiple concurrent sends to the same destination buffer and offset.')
+            else:
+                if (dstbuf, dstoff) in initialized[dst]:
+                    yield (addr, src, dst, 'rrc')
+                else:
+                    yield (addr, src, dst, 'r')
+
     def make_intervals(src, dst, addrs_set):
         if len(addrs_set) == 0:
             return
 
         buffs_and_offs = []
-        for addr in addrs_set:
+        for addr, dst_op_type in addrs_set:
             srcbuff, srcoff = get_buffer_and_offset(gpus[src], addr)
             dstbuff, dstoff = get_buffer_and_offset(gpus[dst], addr)
-            buffs_and_offs.append((srcbuff, srcoff, dstbuff, dstoff))
+            buffs_and_offs.append((srcbuff, srcoff, dstbuff, dstoff, dst_op_type))
         
         if merge_contiguous:
             # Sort sends by both buffers and offsets and merge sends into larger intervals when both the source and
@@ -404,10 +419,10 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             def make_interval(a,b):
                 cnt = b[1] - a[1] + 1
                 assert cnt == b[3] - a[3] + 1, 'Source and destination count mismatch'
-                return (a[0], a[1], a[2], a[3], cnt)
+                return (a[0], a[1], a[2], a[3], a[4], cnt)
         
             for x in buffs_and_offs[1:]:
-                if x[0] == prev[0] and x[1] == prev[1] + 1 and x[2] == prev[2] and x[3] == prev[3] + 1:
+                if x[0] == prev[0] and x[1] == prev[1] + 1 and x[2] == prev[2] and x[3] == prev[3] + 1 and x[4] == prev[4]:
                     # Merge into previous interval if buffers match and the new offsets are at the end of the interval
                     prev = x
                 else:
@@ -418,8 +433,8 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             yield make_interval(start, prev)
         else:
             # Just yield size 1 intervals if merging is disabled
-            for srcbuff, srcoff, dstbuff, dstoff in buffs_and_offs:
-                yield (srcbuff, srcoff, dstbuff, dstoff, 1)    
+            for srcbuff, srcoff, dstbuff, dstoff, dst_op_type in buffs_and_offs:
+                yield (srcbuff, srcoff, dstbuff, dstoff, dst_op_type, 1)    
 
     # Turn all steps of the algorithm into operations
     ops_by_channel = defaultdict(list)
@@ -427,6 +442,9 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     writers = defaultdict(list)
     # Track all the reads since the last write to each buffer index
     readers = defaultdict(list)
+    # Track which addresses are initialized on each rank
+    initialized = [set(itertools.chain((('i', offset) for offset in gpu.inputs.values()),
+        ((copy.dst_buffer, copy.dst_offset) for copy in gpu.precopies))) for gpu in gpus.values()]
 
     # Initialize readers and writers for precopies
     for rank, gpu in gpus.items():
@@ -441,8 +459,8 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
 
         # Group sent addresses by edge
         grouped_sends = defaultdict(set)
-        for addr, src, dst in step.sends:
-            grouped_sends[(src,dst)].add(addr)
+        for addr, src, dst, dst_op_type in categorize_ops(step.sends, initialized):
+            grouped_sends[(src,dst)].add((addr, dst_op_type))
 
         # Combine sends into intervals and create multiple instances if necessary
         sends = []
@@ -450,15 +468,15 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             intervals = list(make_intervals(src, dst, addrs))
             if channel_policy == ChannelPolicy.One:
                 num_chans = 1
-                channeled_intervals = [ (src_buf, src_off, dst_buf, dst_off, cnt, 0) for src_buf, src_off, dst_buf, dst_off, cnt in intervals ]
+                channeled_intervals = [ (src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, 0) for src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt in intervals ]
             elif channel_policy == ChannelPolicy.MatchTopology:
                 # Divide sends onto channels matching the topology (assume bw is ideal concurrency)
                 # Sends are split to balance channels if necessary
                 num_chans = algorithm.topology.link(src,dst)
                 channeled_intervals = []
 
-                intervals.sort(key=lambda x: x[4])
-                counts = [x[4] for x in intervals]
+                intervals.sort(key=lambda x: x[-1])
+                counts = [x[-1] for x in intervals]
                 total = sum(counts)
                 targets = [(total//num_chans) + (1 if i < (total%num_chans) else 0) for i in range(num_chans)]
 
@@ -470,17 +488,17 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
                         i = bisect.bisect_left(counts, targets[chan])
                         if i == len(counts) or counts[i] != targets[chan]:
                             i = -1
-                    src_buf, src_off, dst_buf, dst_off, cnt = intervals[i]
+                    src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt = intervals[i]
                     del intervals[i]
                     del counts[i]
                     if cnt > targets[chan]:
                         rem = cnt - targets[chan]
                         cnt = targets[chan]
                         j = bisect.bisect_left(counts, rem)
-                        intervals.insert(j, (src_buf, src_off + cnt, dst_buf, dst_off + cnt, rem))
+                        intervals.insert(j, (src_buf, src_off + cnt, dst_buf, dst_off + cnt, dst_op_type, rem))
                         counts.insert(j, rem)
 
-                    channeled_intervals.append((src_buf, src_off, dst_buf, dst_off, cnt, chan))
+                    channeled_intervals.append((src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, chan))
                     targets[chan] -= cnt
                     assert targets[chan] >= 0
                     if targets[chan] == 0:
@@ -488,15 +506,15 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             else:
                 assert False, 'Unhandled channel policy'
 
-            for src_buf, src_off, dst_buf, dst_off, cnt, chan in channeled_intervals:
+            for src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, chan in channeled_intervals:
                 for i in range(instances):
                     new_src_off = src_off * instances + i * cnt
                     new_dst_off = dst_off * instances + i * cnt
-                    send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, cnt, chan * instances + i)
+                    send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, dst_op_type, cnt, chan * instances + i)
                     sends.append(send)
 
         # Perform dependency tracking and create _Op instances
-        for src, dst, src_buf, src_off, dst_buf, dst_off, cnt, chan in sends:
+        for src, dst, src_buf, src_off, dst_buf, dst_off, dst_op_type, cnt, chan in sends:
             read_keys = [(src,src_buf,src_off+i) for i in range(cnt)]
             # A send must wait for the previous recv (if any) to finish
             send_depends = list(set(d for k in read_keys for d in writers[k]))
@@ -506,7 +524,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             recv_depends = list(set(d for deps in (readers, writers) for k in write_keys for d in deps[k]))
 
             send_op = _Op(src, dst, step_idx, True, 's', src_buf, src_off, dst_buf, dst_off, cnt, send_depends)
-            recv_op = _Op(dst, src, step_idx, False, 'r', src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
+            recv_op = _Op(dst, src, step_idx, False, dst_op_type, src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
             # Record the send and receive as a set of operations that must happen on the same channel
             ops_by_channel[chan].extend([send_op, recv_op])
 
@@ -525,6 +543,11 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         # Reads get added to any previous reads
         for key, deps in new_readers.items():
             readers[key].extend(deps)
+        # Update initialized sets
+        for ops in ops_by_channel.values():
+            for op in ops:
+                if not op.is_send:
+                    initialized[op.gpu].add((op.dst_buffer, op.dst_offset))
 
     # Add dependencies for postcopies
     for rank, gpu in gpus.items():
