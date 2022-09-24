@@ -142,6 +142,8 @@ def Print():
     _curr().print_chunk_dag()
 
 def chunk(rank, buffer, index, size=1):
+    if _curr().buffers[rank][buffer][index] is None:
+        return None
     return _curr().get_ref(rank, buffer, index, size)
 
 def create_scratch(rank, name):
