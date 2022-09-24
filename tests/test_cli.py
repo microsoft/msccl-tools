@@ -126,3 +126,11 @@ def test_distribute_alltoall_subproblem():
         assert 0 == os.system('msccl distribute alltoall-stitch-subproblem subalgo.json --copies 2 -o stitched.json')
         assert os.path.exists('stitched.json')
         _check_ncclizes('stitched.json')
+
+def test_compose_allreduce():
+    with in_tempdir():
+        assert 0 == os.system('msccl solve instance DGX1 ReduceScatter -s 2 -r 3 -c 2 -o reducescatter.json')
+        assert 0 == os.system('msccl solve instance DGX1 Allgather -s 2 -r 3 -c 2 -o allgather.json')
+        assert 0 == os.system('msccl compose allreduce reducescatter.json allgather.json -o allreduce.json')
+        assert os.path.exists('allreduce.json')
+        _check_ncclizes('allreduce.json')
