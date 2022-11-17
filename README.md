@@ -79,7 +79,7 @@ on-going research project. See [this readme](SYNTHESIS.md) for using MSCCL as a 
 
 To install either clone this repo and run "`pip install .`" or run:
 ```
-pip install git+https://github.com/microsoft/msccl.git
+pip install git+https://github.com/microsoft/msccl-tools.git
 ```
 
 Installing the MSCCL Python package also installs the `msccl` command line tool. To enable Bash completion for the
