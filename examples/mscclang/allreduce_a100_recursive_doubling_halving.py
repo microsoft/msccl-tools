@@ -11,7 +11,7 @@ from msccl.language.collectives import AllReduce
 
 
 def allreduce(ways, instances, protocol):
-    topology = fully_connected(8)
+    topology = fully_connected(4)
     size = topology.num_nodes() #  Number of gpus
     logical_chunk = 8 * ways
     collective = AllReduce(size, logical_chunk, True)
@@ -29,7 +29,7 @@ def allreduce(ways, instances, protocol):
                     index = current_index[r] + offset + lc*8 + x
                     c1 = chunk(r, Buffer.input, index)
                     c = chunk(next, Buffer.input, index)
-                    c.reduce(c1 ch=lc, sendtb=sendtb, recvtb=recvtb)
+                    c.reduce(c1, sendtb=sendtb, recvtb=recvtb)
 
 
         # Propagates reduced chunks in reverse order 
