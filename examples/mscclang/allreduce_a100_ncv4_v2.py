@@ -11,12 +11,12 @@ def tree_algo(tree, chnk, size):
         nextNghr = tree[i+1]
         curNode = tree[i]
         c = chunk(nextNghr, Buffer.input, chnk)
-        c.reduce(chunk(curNode, Buffer.input, chnk), sendtb=2*chnk, recvtb=2*chnk)
+        c.reduce(chunk(curNode, Buffer.input, chnk), sendtb=2*chnk, recvtb=2*chnk, ch=chnk)
     for i in range(size-1):
         curNode = tree[size-1-i]
         nextNghr = tree[size-1-i-1]
         c = chunk(curNode, Buffer.input, chnk)
-        c.copy(nextNghr, Buffer.input, chnk, sendtb=2*chnk+1, recvtb=2*chnk+1)
+        c.copy(nextNghr, Buffer.input, chnk, sendtb=2*chnk+1, recvtb=2*chnk+1, ch=chnk)
 
 def allreduce_allpairs(gpus, instances, protocol):
     size = gpus
