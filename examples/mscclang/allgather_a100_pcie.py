@@ -6,8 +6,8 @@ from msccl.language import *
 from msccl.topologies import *
 from msccl.language.collectives import AllGather
 
-# Allpairs allgather for A100 
-def allgather_allpairs(gpus, instances, protocol):
+# Hierarchical allgather for A100 
+def allgather_hier(gpus, instances, protocol):
     size = gpus
     chunksperloop = 1
     topology = fully_connected(gpus)
@@ -39,4 +39,4 @@ parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--protocol', type=str, default='LL128', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: Simple')
 args = parser.parse_args()
 
-allgather_allpairs(args.num_gpus, args.instances, args.protocol)
+allgather_hier(args.num_gpus, args.instances, args.protocol)

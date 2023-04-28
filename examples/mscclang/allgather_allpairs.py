@@ -10,7 +10,7 @@ from msccl.language.collectives import AllGather
 def allgather_allpairs(gpus, instances, protocol):
     size = gpus
     topology = fully_connected(gpus)
-    collective = AllGather(size, size, True)
+    collective = AllGather(size, 1, True)
 
     with MSCCLProgram(f"allgather_allpairs", topology, collective, instances,
          protocol=protocol, threadblock_policy=ThreadblockPolicy.manual):
@@ -20,7 +20,7 @@ def allgather_allpairs(gpus, instances, protocol):
             for r2 in range(gpus):
                 if r1 != r2:
                     index = 0
-                    c = chunk(r1, Buffer.input, index, size)
+                    c = chunk(r1, Buffer.input, index, 1)
                     c.copy(r2, Buffer.input, index, sendtb=r2, recvtb=r1)
         XML()
         Check()
