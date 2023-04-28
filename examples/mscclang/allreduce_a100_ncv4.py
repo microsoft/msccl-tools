@@ -12,27 +12,27 @@ def allreduce_allpairs(gpus, instances, protocol):
     topology = fully_connected(size)
     collective = AllReduce(size, chunksperloop, True)
     with MSCCLProgram("allreduce_ncv4", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=False, dependence_nop=True):
+        interleaved_replication=False, threadblock_policy=ThreadblockPolicy.manual, dependence_nop=True):
         for chnk in range(chunksperloop):
             for r in range(size):
                 if ((r % 2) == chnk):
                     c = chunk(r, Buffer.input, chnk)
-                    c.reduce(chunk(r + 1 - 2 * chnk, Buffer.input, chnk))
+                    c.reduce(chunk(r + 1 - 2 * chnk, Buffer.input, chnk), sendtb=0, recvtb=0, ch=0)
 
             for r in range(size):
                 if ((r % 2) == chnk):
                     c = chunk(r, Buffer.input, chnk)
-                    c.copy((r+2) % size, 'scratch', chnk)
+                    c.copy((r+2) % size, 'scratch', chnk, sendtb=1, recvtb=1, ch=0)
                     
             for r in range(size):
                 if ((r % 2) == chnk):
                     c = chunk(r, Buffer.input, chnk)
-                    c.reduce(chunk(r, 'scratch', chnk))
+                    c.reduce(chunk(r, 'scratch', chnk), sendtb=1, recvtb=1, ch=0)
             
             for r in range(size):
                 if ((r % 2) == chnk):
                     c = chunk(r, Buffer.input, chnk)
-                    c.copy(r + 1 - 2 * chnk, Buffer.input, chnk)
+                    c.copy(r + 1 - 2 * chnk, Buffer.input, chnk, sendtb=2, recvtb=2, ch=1)
 
         XML()
         Check()
