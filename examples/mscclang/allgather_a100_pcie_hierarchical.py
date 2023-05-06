@@ -13,12 +13,13 @@ def allpairs_all_gather(gpuIds, size, offset):
                 index = offset
                 for r in range(size):   # one chunk per copy command, so they can be overlapped by the runtime
                     c = chunk(gpuIds[r1], Buffer.input, index, 1)
-                    c.copy(gpuIds[r2], Buffer.input, index, sendtb=r2, recvtb=r1)
+                    c.copy(gpuIds[r2], Buffer.input, index, sendtb=gpuIds[r2], recvtb=gpuIds[r1])
                     index += 1
 
 
 # Performs two levels of allGather
 def hierarchical_allgather(gpus, instances, protocol):
+    ileaved = False
     ncols = 2
     nrows = gpus // ncols
     chunks_per_gpu = 1
@@ -26,20 +27,24 @@ def hierarchical_allgather(gpus, instances, protocol):
     topology = fully_connected(gpus)
 
     collective = AllGather(gpus, chunks_per_gpu, True)
+    # Note: If chunks_per_gpu > 1, then interleaved_replication needs to be set True
+    if (chunks_per_gpu > 1):
+        ileaved = True
 
     with MSCCLProgram("hierarchical_allgather", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=False, dependence_nop=True):
+        interleaved_replication=ileaved, threadblock_policy=ThreadblockPolicy.manual, dependence_nop=True):
         
         # A100-PCIe arrangemment:
-        # 0     1
-        # 2     3
+        #       0     1
+        #       2     3
         #
         # A 4 x 3 GPU arranagement: 4 local GPUs, 3 instances, GPU Ids are numbered as such
-        # 0  1   2
-        # 3  4   5
-        # 6  7   8
-        # 9  10  11
-        # AllGather: AllGather phase goes in reverse order, first gather across rows of GPU
+        #       0   1   2
+        #       3   4   5
+        #       6   7   8
+        #       9   10  11
+        # 
+        # AllGather: AllGather goes in following fashion, first gather across rows of GPU
         # Each GPU sends  1/(nrows * ncols) of data to all other GPUs in the row
         # After this step, Each GPU in a rows have 1/ncols of data
         size = nchunks // (nrows * ncols)        
