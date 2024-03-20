@@ -26,7 +26,7 @@ class MSCCLProgram:
             instr_fusion=True, check_xml=True, dependence_nop=False):
         self.name = name
         self.topo = topo
-        self.collective = collective       
+        self.collective = collective
         self.num_ranks = topo.num_nodes()
         self.instances = instances
         self.protocol = protocol
@@ -54,7 +54,7 @@ class MSCCLProgram:
         if _current_program != None:
             raise RuntimeError("There is already a MSCCL Program in context")
         _current_program = self
-    
+
     def __exit__(self, exc_type, exc_value, exc_traceback):
         global _current_program
         if _current_program != self:
@@ -120,14 +120,14 @@ class MSCCLProgram:
         gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
         if self.check_xml:
             # Check generated MSCCL-IR for correctness - no circular dependencies, sends and receives are ordered
-            # For very large programs, turn off check_xml when shipping 
+            # For very large programs, turn off check_xml when shipping
             check_dependency_cycles(self.instr_dag.tbs)
             check_threadblock_ordering(self.instr_dag)
-        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
+        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
 
     def generate_xml(self):
         return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop)
-    
+
     def print_chunk_dag(self):
         visualize_chunk_dag(self.chunk_dag.chunk_paths)
 
@@ -189,7 +189,13 @@ class Ref(ChunkRef):
 
         end = max(first._end(), second._end())
         return Ref(self.rank, self.buffer, first.index, end - first.index, self.prog)
-        
+
+    def put(self, dst, buffer=None, index=-1, sendtb=-1):
+        self.prog.check_buffer_exists(dst, buffer)
+
+    def get(self, src, buffer=None, index=-1, recvtb=-1):
+        self.prog.check_buffer_exists(src, buffer)
+
     # Copies the chunk(s) referenced by this chunkref onto Rank dst at location (buffer, index)
     def copy(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=-1):
         self.prog.check_buffer_exists(dst, buffer)
@@ -214,7 +220,7 @@ class Ref(ChunkRef):
 
         # chunks = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
         # overwritten_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
-        
+
         self.prog.apply_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
         # self.prog.chunk_dag.add_send(chunks, overwritten_chunks, self, dst_chunkref, sendtb, recvtb, ch)
@@ -266,7 +272,7 @@ class Ref(ChunkRef):
         return self._get_chunk(index + self.index).dst_rank
 
     def print_chunk_info(self, index=0):
-        print(self._get_chunk(index + self.index)) 
+        print(self._get_chunk(index + self.index))
 
 
 # @dataclass
@@ -278,7 +284,7 @@ class Ref(ChunkRef):
 #     recvtb: int = -1#  For lowering to RankInstructions
 #     ch: int = -1 # For lowering to RankInstructions
 #     steps_from_start:int  = -1
-#     steps_to_end: int = -1 
+#     steps_to_end: int = -1
 #     prev: list = field(default_factory=list) # Previous ChunkOps
 #     next: list = field(default_factory=list) # Next ChunkOps
 #     visited = False
@@ -291,7 +297,7 @@ class Ref(ChunkRef):
 #         return self.steps_from_start < other.steps_from_start
 
 #     def __hash__(self):
-#         return hash((self.inst, self.dst.rank, self.dst.index, self.dst.buffer)) # TODO 
+#         return hash((self.inst, self.dst.rank, self.dst.index, self.dst.buffer)) # TODO
 
 # def same_slot(ref1, ref2):
 #     return ref1.rank == ref2.rank and ref1.buffer == ref2.buffer and ref1.index == ref2.index
@@ -348,7 +354,7 @@ class Ref(ChunkRef):
 #             # steps_from_start = max(steps_from_start, prev_op.steps_from_start)
 #             # prev_ops.append(prev_op)
 #         op = ChunkOp(ChunkInstruction.send, src, dst, sendtb, recvtb, ch, steps_from_start+1)
-        
+
 #         for prev_op in prev_ops:
 #             prev_op.next.append(op)
 #         op.prev = prev_ops
@@ -364,7 +370,7 @@ class Ref(ChunkRef):
 #             steps_from_start = max(prev_op_src.steps_from_start, prev_op_dst.steps_from_start, steps_from_start)
 #             prev_ops.append(prev_op_src)
 #             prev_ops.append(prev_op_dst)
-            
+
 #         op = ChunkOp(ChunkInstruction.reduce, src, dst, sendtb, recvtb, ch, steps_from_start+1)
 
 #         for prev_op in prev_ops:
@@ -387,14 +393,14 @@ class Ref(ChunkRef):
 #         for chunk, op in self.chunk_paths.items():
 #             if op.inst == ChunkInstruction.start:
 #                 dfs(op)
-            
+
 
 #     # Assigns each send and a reduce a channel for communication based of policies
 #     def channel_assignment(self, channel_policy='zero'):
 #         frontier = []
 #         visited = set()
 #         for chunk, op in self.chunk_paths.items():
-#             if len(op.prev) == 0: 
+#             if len(op.prev) == 0:
 #                 heapq.heappush(frontier, op)
 
 #         # If an op isn't annotated with a channel set it to 0
@@ -412,7 +418,7 @@ class Ref(ChunkRef):
 #         visited = set()
 
 #         for chunk, op in self.chunk_paths.items():
-#             if len(op.prev) == 0: 
+#             if len(op.prev) == 0:
 #                 heapq.heappush(frontier, ((op.steps_from_start, op.steps_to_end), op))
 
 #         while len(frontier) > 0:
