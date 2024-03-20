@@ -23,7 +23,7 @@ def same_tb(op1, op2):
 
 def same_count(op1, op2):
     return op1.cnt() == op2.cnt()
-    
+
 def same_buf_dst(op1, op2):
     return op1.dst.buffer == op2.dst.buffer and op1.dst.index == op2.dst.index
 
@@ -36,9 +36,9 @@ class InstructionDAG:
         self.last_writer = {} # slot -> last writing op
         self.last_readers = defaultdict(list) # slot -> list of last reading ops
         # State for the MSCCL-IR
-        self.tbs = [] 
+        self.tbs = []
         for _ in range(num_ranks):
-            self.tbs.append({}) 
+            self.tbs.append({})
         self.tb_mapping = {}
         self.num_channels = [1] * num_ranks
 
@@ -62,7 +62,7 @@ class InstructionDAG:
                 prev_ops.update(readers)
             elif slot in self.last_writer:
                 prev_ops.add(self.last_writer[slot])
-  
+
             # Set the last_writer to this op, and clear all readers
             self.last_writer[slot] = op
             self.last_readers[slot] = []
@@ -82,7 +82,7 @@ class InstructionDAG:
             writer = self.last_writer[slot]
             prev_ops.add(writer)
             self.last_readers[slot].append(op)
-            
+
         # Update the next pointer of the previous ops
         for prev_op in prev_ops:
             prev_op.next.add(op)
@@ -133,6 +133,15 @@ class InstructionDAG:
         self._read(rank, buffer, index, size, op)
         return op
 
+    # InstructionDAG - adds a put node
+    def add_put(self, rank, send_ref, recv_ref, tb, ch):
+        op = Op(Instruction.put, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
+        buffer = send_ref.buffer
+        index = send_ref.index
+        size = send_ref.size
+        self._read(rank, buffer, index, size, op)
+        return op
+
     # InstructionDAG - adds a recv node
     def add_recv(self, rank, send_ref, recv_ref, tb, ch, send_op):
         op = Op(Instruction.recv, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
@@ -172,7 +181,7 @@ class InstructionDAG:
                     ops = ops[1:] + op.next
                 else:
                     ops = ops[1:]
-                    
+
     def optimize(self):
         self._optimize_rrcs_rrs()
         self._optimize_rcs()
@@ -198,13 +207,13 @@ class InstructionDAG:
         for chunk, op in self.operations.items():
             if op.inst == Instruction.start:
                 dfs(op,-2) # Start instructions should start at -1
-            
-        
+
+
     # Given the set of operations that operate over a particular slot (rank, buffer, idx) fixed
     # Try and replace operations with pipelined ops like receive copy send (rcs)
     # or receive reduce send (rrs) and receive reduce copy send (rrcs)
     # Rules:
-    # recv-copy-send 
+    # recv-copy-send
     # recv(src, sbuf, si, _, _, _ ) send(_, _, _, dst, dbuf, di) -> recv_copy_send(src, sbuf, si, dst, dbuf, di)
     def _optimize_rcs(self):
         for slot, ops in self.operations.items():
@@ -222,7 +231,7 @@ class InstructionDAG:
                         break
                 frontier = frontier[1:] + op.next
     # recv-reduce-send - A rrc followed by a send that gets overwritten
-    # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di) recv(_, _, _, dst, dbuf, di) 
+    # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di) recv(_, _, _, dst, dbuf, di)
     # recv-reduce-copy-send - A rrc followed by a send that does not get overwritten
     # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di)
     def _optimize_rrcs_rrs(self):
@@ -241,7 +250,7 @@ class InstructionDAG:
                             next_op.recv_match.send_match = op
                             op.recv_match = next_op.recv_match
                             remove_op(next_op)
-                    
+
                     if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
                         op.inst = Instruction.recv_reduce_copy_send
                         op.dst = next_op.dst
@@ -253,7 +262,7 @@ class InstructionDAG:
     def lower_pt1(self, instances):
         self.infer_dependencies()
         self.lower_buffers(instances)
-    
+
     def lower_pt2(self, instances, interleaved):
         self.replicate(instances, interleaved)
         return self.lower_tbs()
@@ -311,14 +320,14 @@ class InstructionDAG:
     # interleaved sets the replication policy
     # if True chunks are split as: ChunkA ChunkB -> ChunkA0 ChunkA1 .. ChunkB0 ChunkB1 ...
     # if false chunks are divided as ChunkA0 ChunkB0 ChunkA1 ChunkB1 ...
-    # For collectives were chunks are designated for a particular GPU (e.g. AllToAll) 
+    # For collectives were chunks are designated for a particular GPU (e.g. AllToAll)
     # only interleaved replication will be correct
     # Interleaved policy only supports single count sends/receives from the input/output buffer
     # (multicount ops are fine between scratch)
     def replicate(self, instances, interleaved):
         if instances == 1:
             self.instanced_tbs = self.tbs
-            return 
+            return
 
         self.instanced_tbs = []
         for _ in range(self.num_ranks):
@@ -357,12 +366,12 @@ class InstructionDAG:
                     for s, op in enumerate(tb.ops):
                         isrc = get_instance_ref(op.src)
                         idst = get_instance_ref(op.dst)
-                        idepends = [] 
+                        idepends = []
                         # Note: We don't need the fill out the rest of the metadata since replication is the last optimization
-                        iop = Op(op.inst, op.rank, isrc, idst, idepends, op.step, itbid) 
+                        iop = Op(op.inst, op.rank, isrc, idst, idepends, op.step, itbid)
                         itb.ops[s] = iop
                     self.instanced_tbs[op.rank][itbid] = itb
-        
+
         # Redo dependency analysis
         for rank, rank_tbs in enumerate(self.tbs):
             for tbid, tb in rank_tbs.items():
@@ -375,5 +384,5 @@ class InstructionDAG:
                             dep_tbid = dep.tb
                             dep_itbid = dep_tbid * instances + i
                             dep_step = dep.step
-                            iop.depends[s] = self.instanced_tbs[op.rank][dep_itbid].ops[dep_step] 
+                            iop.depends[s] = self.instanced_tbs[op.rank][dep_itbid].ops[dep_step]
 

@@ -138,6 +138,9 @@ class MSCCLProgram:
         else:
             visualize_instr_dag(self.instr_dags[rank].operations)
 
+class MSCCLPPProgram:
+    pass
+
 def Print():
     _curr().print_chunk_dag()
 
@@ -190,8 +193,40 @@ class Ref(ChunkRef):
         end = max(first._end(), second._end())
         return Ref(self.rank, self.buffer, first.index, end - first.index, self.prog)
 
-    def put(self, dst, buffer=None, index=-1, sendtb=-1):
+    def put(self, dst, buffer=None, index=-1, sendtb=-1, channel_type="SM"):
         self.prog.check_buffer_exists(dst, buffer)
+        # If index is not specified assume it is going to the same place in the next gpu
+        if index == -1 and buffer == None:
+            index = self.index
+            buffer = self.buffer
+        elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
+            index = self.prog.buffers[dst][buffer].instance_size()
+
+        # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
+        buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
+
+        # Direct put
+        assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
+        dst_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
+
+        # Check if we are copying the chunk to the same index (easy mistake when we are using inplace)
+        if dst_chunkref == self:
+            return
+
+        # chunks = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
+        # overwritten_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
+
+        self.prog.apply_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
+
+        # self.prog.chunk_dag.add_send(chunks, overwritten_chunks, self, dst_chunkref, sendtb, recvtb, ch)
+        sender = self.rank
+        receiver = dst
+        if sender != receiver:
+            sop = self.prog.instr_dag.add_send(sender, self, dst_chunkref, sendtb)
+        else:
+            self.prog.instr_dag.add_copy(sender, self, dst_chunkref, sendtb)
+
+        return dst_chunkref
 
     def get(self, src, buffer=None, index=-1, recvtb=-1):
         self.prog.check_buffer_exists(src, buffer)

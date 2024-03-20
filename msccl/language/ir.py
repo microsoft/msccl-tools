@@ -76,8 +76,13 @@ class Instruction(Enum):
     recv_reduce_copy_send = 'rrcs'
     copy = 'cpy'
     reduce = 're'
-    delete = 'd' 
+    delete = 'd'
     start = 'st'
+    put = 'put'
+    get = 'get'
+    wait = 'wait'
+    signal = 'signal'
+    flush = 'flush'
 
     def __str__(self):
         return self.value
@@ -93,7 +98,7 @@ class Buffer(Enum):
 
     def __lt__(self, other):
         return self.value < other.value
-    
+
     def __gt__(self, other):
         return self.value < other.value
 
@@ -172,7 +177,7 @@ class Op:
         if self.is_send():
             return self.dst.rank
         return -1
-    
+
     def recv_peer(self):
         if self.is_recv():
             return self.src.rank
@@ -244,7 +249,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                 op.depends = list(
                     filter(lambda dep: op_tb_id[dep] != tb_id[tb], op.depends))
     # Filter out redundant dependencies
-    # e.g. if op1 and op2 depend on op, and op1 happends before op2 
+    # e.g. if op1 and op2 depend on op, and op1 happends before op2
     # then op2 does not need to explicitly depend on op
     for gpu in program.gpus:
         for tb in gpu.threadblocks:
@@ -276,7 +281,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                             for dep in op.depends:
                                 if first_dep is None:
                                     first_dep = dep
-                                else:    
+                                else:
                                     pre_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
                             op.depends = []
                         if first_re is None:
