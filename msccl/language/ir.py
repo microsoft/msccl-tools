@@ -103,6 +103,13 @@ class Buffer(Enum):
         return self.value < other.value
 
 
+class ChannelType(Enum):
+    proxy = 'proxy'
+    sm = 'sm'
+
+    def __str__(self):
+        return self.value
+
 
 @dataclass
 class ChunkRef:
@@ -132,6 +139,9 @@ class Op:
     recv_match =  None
     send_match =  None
     channel: int = -1
+    channel_type: ChannelType = ChannelType.sm
+    dst_ranks: list = field(default_factory=list)
+    src_ranks: list = field(default_factory=list)
 
     def cnt(self):
         if self.src:
@@ -398,3 +408,6 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     if pretty_print:
         ET.indent(algo_elem, space='  ')
     return ET.tostring(algo_elem, encoding='unicode')
+
+def ir_to_json(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
+    pass

@@ -125,8 +125,20 @@ class MSCCLProgram:
             check_threadblock_ordering(self.instr_dag)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
 
+    # Lower program to MSCCLPP
+    def lower_mscclpp(self):
+        convert_to_exectuion_plan(self.instr_dag)
+        if self.instr_fusion:
+            self.instr_dag.optimize_mscclpp()
+        self.instr_dag.lower_pt1(self.instances)
+        gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
+        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
+
     def generate_xml(self):
         return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop)
+
+    def generate_json(self):
+        return ir_to_xml(self.lower_mscclpp(), dependence_nop=self.dependence_nop)
 
     def print_chunk_dag(self):
         visualize_chunk_dag(self.chunk_dag.chunk_paths)
@@ -154,6 +166,9 @@ def create_scratch(rank, name):
 
 def XML():
    print(_curr().generate_xml())
+
+def Json():
+    print(_curr().generate_json())
 
 def Check():
     return _curr().check()
@@ -193,8 +208,12 @@ class Ref(ChunkRef):
         end = max(first._end(), second._end())
         return Ref(self.rank, self.buffer, first.index, end - first.index, self.prog)
 
-    def put(self, dst, buffer=None, index=-1, sendtb=-1, channel_type="SM"):
+    def put(self, dst, buffer=None, index=-1, sendtb=-1, chan_type=ChannelType.sm):
         self.prog.check_buffer_exists(dst, buffer)
+        sender = self.rank
+        receiver = dst
+        assert sender != receiver, 'Cannot put to the same rank'
+
         # If index is not specified assume it is going to the same place in the next gpu
         if index == -1 and buffer == None:
             index = self.index
@@ -209,27 +228,28 @@ class Ref(ChunkRef):
         assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
         dst_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
 
-        # Check if we are copying the chunk to the same index (easy mistake when we are using inplace)
-        if dst_chunkref == self:
-            return
-
-        # chunks = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
-        # overwritten_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
-
         self.prog.apply_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
-
-        # self.prog.chunk_dag.add_send(chunks, overwritten_chunks, self, dst_chunkref, sendtb, recvtb, ch)
-        sender = self.rank
-        receiver = dst
-        if sender != receiver:
-            sop = self.prog.instr_dag.add_send(sender, self, dst_chunkref, sendtb)
-        else:
-            self.prog.instr_dag.add_copy(sender, self, dst_chunkref, sendtb)
+        self.prog.instr_dag.add_put(sender, self, dst_chunkref, sendtb, chan_type)
 
         return dst_chunkref
 
+
     def get(self, src, buffer=None, index=-1, recvtb=-1):
         self.prog.check_buffer_exists(src, buffer)
+
+    def signal(self, dst, sendtb=-1, chan_type=ChannelType.sm):
+        sender = self.rank
+        receiver = dst
+        assert sender != receiver, 'Cannot signal to the same rank'
+
+        self.prog.instr_dag.add_signal(sender, self, dst, sendtb, chan_type)
+
+    def wait(self, src, recvtb=-1, chan_type=ChannelType.sm):
+        sender = src
+        receiver = self.rank
+        assert sender != receiver, 'Cannot wait on the same rank'
+
+        self.prog.instr_dag.add_wait(receiver, self, src, recvtb, chan_type)
 
     # Copies the chunk(s) referenced by this chunkref onto Rank dst at location (buffer, index)
     def copy(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=-1):

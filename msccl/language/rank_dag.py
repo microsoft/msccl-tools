@@ -41,7 +41,7 @@ class InstructionDAG:
             self.tbs.append({})
         self.tb_mapping = {}
         self.num_channels = [1] * num_ranks
-
+        self.tb_steps = [{} for _ in range(num_ranks)]
 
     # InstructionDAG helper - identifies the dependencies for a write-type operation (recv, copy, rrc, reduce)
     def _write(self, rank, buffer, index, size, op, read=False):
@@ -134,12 +134,33 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a put node
-    def add_put(self, rank, send_ref, recv_ref, tb, ch):
-        op = Op(Instruction.put, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_put(self, rank, send_ref, recv_ref, tb, ch_type):
+        tb_step = self._get_tb_step(rank, tb)
+        op = Op(Instruction.put, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel_type=ch_type, step=tb_step)
         buffer = send_ref.buffer
         index = send_ref.index
         size = send_ref.size
         self._read(rank, buffer, index, size, op)
+        return op
+
+    # InstructionDAG - adds a signal node.
+    def add_signal(self, rank, send_ref, dst, tb, ch_type):
+        tb_step = self._get_tb_step(rank, tb)
+        op = Op(Instruction.signal, rank, send_ref, None, next=set(), prev=set(), tb=tb, channel_type=ch_type, dst_ranks=[dst], step=tb_step)
+        buffer = send_ref.buffer
+        index = send_ref.index
+        size = send_ref.size
+        # treat signal as a write since it can not be executed parallelly with read operations
+        self._write(rank, buffer, index, size, op)
+        return op
+
+    def add_wait(self, rank, send_ref, src, tb, ch_type):
+        tb_step = self._get_tb_step(rank, tb)
+        op = Op(Instruction.wait, rank, send_ref, send_ref, next=set(), prev=set(), tb=tb, channel_type=ch_type, src_ranks=[src], step=tb_step)
+        buffer = send_ref.buffer
+        index = send_ref.index
+        size = send_ref.size
+        self._write(rank, buffer, index, size, op)
         return op
 
     # InstructionDAG - adds a recv node
@@ -164,6 +185,7 @@ class InstructionDAG:
 
     def convert_set_list(self):
         ops = []
+        visited = set()
         for slot, op in self.operations.items():
             if op.inst == Instruction.start:
                 op.next = list(op.next)
@@ -172,7 +194,6 @@ class InstructionDAG:
             elif op.inst != Instruction.copy:
                 ops.append(op)
 
-            visited = set()
             while len(ops) > 0:
                 op = ops[0]
                 if op not in visited:
@@ -181,10 +202,14 @@ class InstructionDAG:
                     ops = ops[1:] + op.next
                 else:
                     ops = ops[1:]
+        return visited
 
     def optimize(self):
         self._optimize_rrcs_rrs()
         self._optimize_rcs()
+
+    def optimize_mscclpp(self):
+        pass
 
     # Completes metadata for chunk_steps (number of steps from a start op) and priority (number of steps to the last op)
     def _complete_metadata(self):
@@ -259,6 +284,14 @@ class InstructionDAG:
                         remove_op(next_op)
                 frontier = frontier[1:] + op.next
 
+    def _get_tb_step(self, rank, tb):
+        if tb in self.tb_steps[rank]:
+            self.tb_steps[rank][tb] += 1
+            return self.tb_steps[rank][tb]
+        else:
+            self.tb_steps[rank][tb] = 0
+            return 0
+
     def lower_pt1(self, instances):
         self.infer_dependencies()
         self.lower_buffers(instances)
@@ -287,7 +320,7 @@ class InstructionDAG:
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
-        if chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
+        if chunk is not None and chunk.buffer is not Buffer.input and chunk.buffer is not Buffer.output:
             buffer = self.buffers[chunk.rank][chunk.buffer].get_buffer()
             index = self.buffers[chunk.rank][chunk.buffer].get_global_index(chunk.index)
             return ChunkRef(chunk.rank, buffer, index, chunk.size)
