@@ -58,9 +58,8 @@ class Buffer(Enum):
     def __gt__(self, other):
         return self.value < other.value
 
-@dataclass
+@dataclass(frozen=True)
 class Channel:
-    name: str
     srcBuffer: Buffer
     dstBuffer: Buffer
     type: ChannelType
@@ -74,7 +73,7 @@ class Threadblock:
     recv: int = -1
     ops: list = field(default_factory=list)
     rbid: int = -1 # threadblock id of the receiver
-    chan: dict = field(default_factory=dict)
+    channels: list = field(default_factory=list)
 
     def __eq__(self, other):
         return self is other
@@ -438,6 +437,19 @@ def ir_to_json(program: Program, dependence_nop=False):
         gpu.scratch_chunks = max(buffer_sizes[(gpu.rank, Buffer.scratch)], gpu.scratch_chunks)
 
     # get channel info for each GPU and threadblock
+    for gpu in program.gpus:
+        chan_dict = {}
+        # the channel key is the tuple (srcBuffer, dstBuffer, type)
+        for tid, tb in enumerate(gpu.threadblocks):
+            for ch in tb.channels:
+                key = (ch.srcBuffer, ch.dstBuffer, ch.type)
+                if key not in chan_dict:
+                    chan_dict[key] = [(tid, ch.connected_to)]
+                else:
+                    chan_dict[key].append((tid, ch.connected_to))
+        for key, value in chan_dict.items():
+            chan_dict[key] = sorted(value)
+        gpu.channels = chan_dict
 
     # Filter out dependencies within the same threadblock
     op_tb_id = {}
@@ -534,16 +546,28 @@ def dump_to_json(program: Program):
             'input_chunks': gpu.input_chunks,
             'output_chunks': gpu.output_chunks,
             'scratch_size': gpu.scratch_chunks,
-            'threadblocks': []
+            'threadblocks': [],
+            "channels": []
         }
+        for (srcBuffer, dstBuffer, type), channels in gpu.channels.items():
+            obj = {
+                "srcBuffer": srcBuffer.name,
+                "dstBuffer": dstBuffer.name,
+                "type": type.name,
+                "connectedTo": [eles[1] for eles in channels],
+                "threadblockMap": [eles[0] for eles in channels]
+            }
+            gpu_instance["channels"].append(obj)
         for id, tb in enumerate(gpu.threadblocks):
             ops = []
             for op in tb.ops:
                 instr = {
                     "name": op.inst.name,
-                    "srcbuff": op.src.buffer.name if op.src else None,
+                    "src": op.src.rank if op.src else None,
+                    "srcbuff": op.src.buffer.name if op.src.buffer else None,
                     "srcoff": op.src.index if op.src else None,
-                    "dstbuff": op.dst.buffer.name if op.dst else None,
+                    "dst": op.dst.rank if op.dst else None,
+                    "dstbuff": op.dst.buffer.name if op.dst.buffer else None,
                     "dstoff": op.dst.index if op.dst else None,
                     "channel_type": op.channel_type.name,
                 }

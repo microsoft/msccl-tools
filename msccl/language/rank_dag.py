@@ -208,6 +208,22 @@ class InstructionDAG:
         self._optimize_rrcs_rrs()
         self._optimize_rcs()
 
+    def complete_channels(self):
+        send_op = [Instruction.put, Instruction.signal]
+        recv_op = [Instruction.wait]
+        for rank, rank_tbs in enumerate(self.tbs):
+            for tbid, tb in rank_tbs.items():
+                chans = set()
+                for op in tb.ops:
+                    if op.inst in send_op:
+                        chan = Channel(op.src.buffer, op.dst.buffer, op.channel_type, op.dst.rank)
+                        chans.add(chan)
+                    elif op.inst in recv_op:
+                        chan = Channel(op.dst.buffer, op.src.buffer, op.channel_type, op.src.rank)
+                        chans.add(chan)
+                tb.channels = list(chans)
+        pass
+
     def optimize_mscclpp(self):
         pass
 

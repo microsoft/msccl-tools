@@ -128,6 +128,7 @@ class MSCCLProgram:
     # Lower program to MSCCLPP
     def lower_mscclpp(self):
         convert_to_exectuion_plan(self.instr_dag)
+        self.instr_dag.complete_channels()
         if self.instr_fusion:
             self.instr_dag.optimize_mscclpp()
         self.instr_dag.lower_pt1(self.instances)
@@ -233,10 +234,12 @@ class Ref(ChunkRef):
 
         return dst_chunkref
 
-
     def get(self, src, buffer=None, index=-1, recvtb=-1):
         self.prog.check_buffer_exists(src, buffer)
 
+    # for signal and wait, currently we assuem the pair will use the same tb index. In future we need
+    # to infer the tb index from the instruction DAG Add a channel is define as (send_tb, src_buffer, recv_tb, dst_buffer, type).
+    # Then we can use DAG info to reduce the number of channels.
     def signal(self, dst, buffer=None, index=-1, sendtb=-1, chan_type=ChannelType.sm):
         sender = self.rank
         receiver = dst
