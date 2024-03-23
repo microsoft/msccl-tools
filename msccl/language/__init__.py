@@ -138,7 +138,7 @@ class MSCCLProgram:
         return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop)
 
     def generate_json(self):
-        return ir_to_xml(self.lower_mscclpp(), dependence_nop=self.dependence_nop)
+        return ir_to_json(self.lower_mscclpp(), dependence_nop=self.dependence_nop)
 
     def print_chunk_dag(self):
         visualize_chunk_dag(self.chunk_dag.chunk_paths)
@@ -237,19 +237,39 @@ class Ref(ChunkRef):
     def get(self, src, buffer=None, index=-1, recvtb=-1):
         self.prog.check_buffer_exists(src, buffer)
 
-    def signal(self, dst, sendtb=-1, chan_type=ChannelType.sm):
+    def signal(self, dst, buffer=None, index=-1, sendtb=-1, chan_type=ChannelType.sm):
         sender = self.rank
         receiver = dst
         assert sender != receiver, 'Cannot signal to the same rank'
 
-        self.prog.instr_dag.add_signal(sender, self, dst, sendtb, chan_type)
+        if index == -1 and buffer == None:
+            index = self.index
+            buffer = self.buffer
+        elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
+            index = self.prog.buffers[dst][buffer].instance_size()
 
-    def wait(self, src, recvtb=-1, chan_type=ChannelType.sm):
+        # Direct signal
+        assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
+        dst_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
+
+        self.prog.instr_dag.add_signal(sender, self, dst_chunkref, sendtb, chan_type)
+
+    def wait(self, src, buffer=None, index=-1, recvtb=-1, chan_type=ChannelType.sm):
         sender = src
         receiver = self.rank
         assert sender != receiver, 'Cannot wait on the same rank'
 
-        self.prog.instr_dag.add_wait(receiver, self, src, recvtb, chan_type)
+        if index == -1 and buffer == None:
+            index = self.index
+            buffer = self.buffer
+        elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
+            index = self.prog.buffers[src][buffer].instance_size()
+
+        # Direct signal
+        assert (self.prog.topo.link(self.rank, src) or src == self.rank), f'No link from {self.rank} to {src}'
+        src_chunkref = self.prog.get_ref(src, buffer, index, self.size)
+
+        self.prog.instr_dag.add_wait(receiver, self, src_chunkref, recvtb, chan_type)
 
     # Copies the chunk(s) referenced by this chunkref onto Rank dst at location (buffer, index)
     def copy(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=-1):

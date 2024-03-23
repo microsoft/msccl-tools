@@ -144,9 +144,9 @@ class InstructionDAG:
         return op
 
     # InstructionDAG - adds a signal node.
-    def add_signal(self, rank, send_ref, dst, tb, ch_type):
+    def add_signal(self, rank, send_ref, recv_ref, tb, ch_type):
         tb_step = self._get_tb_step(rank, tb)
-        op = Op(Instruction.signal, rank, send_ref, None, next=set(), prev=set(), tb=tb, channel_type=ch_type, dst_ranks=[dst], step=tb_step)
+        op = Op(Instruction.signal, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel_type=ch_type, step=tb_step)
         buffer = send_ref.buffer
         index = send_ref.index
         size = send_ref.size
@@ -154,12 +154,12 @@ class InstructionDAG:
         self._write(rank, buffer, index, size, op)
         return op
 
-    def add_wait(self, rank, send_ref, src, tb, ch_type):
+    def add_wait(self, rank, dst_ref, src_ref, tb, ch_type):
         tb_step = self._get_tb_step(rank, tb)
-        op = Op(Instruction.wait, rank, send_ref, send_ref, next=set(), prev=set(), tb=tb, channel_type=ch_type, src_ranks=[src], step=tb_step)
-        buffer = send_ref.buffer
-        index = send_ref.index
-        size = send_ref.size
+        op = Op(Instruction.wait, rank, src_ref, dst_ref, next=set(), prev=set(), tb=tb, channel_type=ch_type, step=tb_step)
+        buffer = dst_ref.buffer
+        index = dst_ref.index
+        size = dst_ref.size
         self._write(rank, buffer, index, size, op)
         return op
 

@@ -15,14 +15,15 @@ def allreduce_allpairs(gpus, instances, protocol):
         interleaved_replication=False, threadblock_policy=ThreadblockPolicy.manual, dependence_nop=True):
 
         c = chunk(0, Buffer.input, 0, size=1)
-        c.put(1, Buffer.input, index = 0, sendtb=0)
-        c.put(1, Buffer.input, index = 1, sendtb=0)
-        c.signal(1, sendtb=0)
+        c.put(1, Buffer.input, index=0, sendtb=0)
+        c.put(1, Buffer.input, index=1, sendtb=0)
+        c.signal(1, Buffer.input, index=0, sendtb=0)
+        c.signal(1, Buffer.input, index=1, sendtb=0)
 
         dc0 = chunk(1, Buffer.input, 1, size=1)
         dc1 = chunk(1, Buffer.input, 0, size=1)
-        dc0.wait(0, recvtb=1)
-        dc1.wait(0, recvtb=1)
+        dc0.wait(0, Buffer.input, index=0, recvtb=1)
+        dc1.wait(0, Buffer.input, index=1, recvtb=1)
 
         Json()
         #Check()

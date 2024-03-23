@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import json
 from lxml import etree as ET
 from dataclasses import dataclass, field
 from enum import Enum
@@ -28,10 +29,42 @@ class Gpu:
     outputs: dict = field(default_factory=dict)
     input_chunks: int = 0
     output_chunks: int = 0
+    scratch_chunks: int = 0
     scratch: dict = field(default_factory=dict)
+    channels: dict = field(default_factory=dict)
 
     def scratch_size(self):
         return max((idx for addr, idx in self.scratch.items()), default=-1) + 1
+
+class ChannelType(Enum):
+    proxy = 'proxy'
+    sm = 'sm'
+    none = 'none'
+
+    def __str__(self):
+        return self.value
+
+class Buffer(Enum):
+    input = 'i'
+    output = 'o'
+    scratch = 's'
+
+    def __str__(self):
+        return self.value
+
+    def __lt__(self, other):
+        return self.value < other.value
+
+    def __gt__(self, other):
+        return self.value < other.value
+
+@dataclass
+class Channel:
+    name: str
+    srcBuffer: Buffer
+    dstBuffer: Buffer
+    type: ChannelType
+    connected_to: int
 
 
 @dataclass
@@ -41,6 +74,7 @@ class Threadblock:
     recv: int = -1
     ops: list = field(default_factory=list)
     rbid: int = -1 # threadblock id of the receiver
+    chan: dict = field(default_factory=dict)
 
     def __eq__(self, other):
         return self is other
@@ -88,28 +122,6 @@ class Instruction(Enum):
         return self.value
 
 
-class Buffer(Enum):
-    input = 'i'
-    output = 'o'
-    scratch = 's'
-
-    def __str__(self):
-        return self.value
-
-    def __lt__(self, other):
-        return self.value < other.value
-
-    def __gt__(self, other):
-        return self.value < other.value
-
-
-class ChannelType(Enum):
-    proxy = 'proxy'
-    sm = 'sm'
-
-    def __str__(self):
-        return self.value
-
 
 @dataclass
 class ChunkRef:
@@ -139,9 +151,7 @@ class Op:
     recv_match =  None
     send_match =  None
     channel: int = -1
-    channel_type: ChannelType = ChannelType.sm
-    dst_ranks: list = field(default_factory=list)
-    src_ranks: list = field(default_factory=list)
+    channel_type: ChannelType = ChannelType.none
 
     def cnt(self):
         if self.src:
@@ -216,11 +226,11 @@ class Op:
 
 
 # Instructions where src is on local GPU
-_local_src_insts = {Instruction.send, Instruction.copy, Instruction.reduce}
+_local_src_insts = {Instruction.send, Instruction.copy, Instruction.reduce, Instruction.put, Instruction.signal}
 # Instructions where dst is on local GPU
 _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.recv_reduce_send,
                     Instruction.recv_reduce_copy, Instruction.copy, Instruction.reduce,
-                    Instruction.recv_reduce_copy_send}
+                    Instruction.recv_reduce_copy_send, Instruction.wait}
 
 
 def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
@@ -409,5 +419,146 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
         ET.indent(algo_elem, space='  ')
     return ET.tostring(algo_elem, encoding='unicode')
 
-def ir_to_json(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
-    pass
+def ir_to_json(program: Program, dependence_nop=False):
+    # Figure out sizes of buffers based on usage
+    buffer_sizes = defaultdict(lambda: 0)
+    for gpu in program.gpus:
+        for tb in gpu.threadblocks:
+            for op in tb.ops:
+                if op.inst in _local_src_insts:
+                    key = (gpu.rank, op.src.buffer)
+                    buffer_sizes[key] = max(
+                        buffer_sizes[key], op.src.index + op.src.size)
+                if op.inst in _local_dst_insts:
+                    key = (gpu.rank, op.dst.buffer)
+                    buffer_sizes[key] = max(
+                        buffer_sizes[key], op.dst.index + op.dst.size)
+        gpu.input_chunks = max(buffer_sizes[(gpu.rank, Buffer.input)], gpu.input_chunks)
+        gpu.output_chunks = max(buffer_sizes[(gpu.rank, Buffer.output)], gpu.output_chunks)
+        gpu.scratch_chunks = max(buffer_sizes[(gpu.rank, Buffer.scratch)], gpu.scratch_chunks)
+
+    # get channel info for each GPU and threadblock
+
+    # Filter out dependencies within the same threadblock
+    op_tb_id = {}
+    for gpu in program.gpus:
+        for tb in gpu.threadblocks:
+            for op in tb.ops:
+                op_tb_id[op] = op.tb
+    for gpu in program.gpus:
+        for tb in gpu.threadblocks:
+            for op in tb.ops:
+                op.depends = list(
+                    filter(lambda dep: op_tb_id[dep] != op.tb, op.depends))
+    # Filter out redundant dependencies
+    # e.g. if op1 and op2 depend on op, and op1 happends before op2
+    # then op2 does not need to explicitly depend on op
+    for gpu in program.gpus:
+        for tb in gpu.threadblocks:
+            running_depends = []
+            for op in tb.ops:
+                op.depends = list(
+                    filter(lambda dep: dep not in running_depends, op.depends))
+                running_depends = running_depends + op.depends
+
+    # Mark all ops that have a dependence on them
+    has_dependence = set()
+    for gpu in program.gpus:
+        for tb in gpu.threadblocks:
+            for op in tb.ops:
+                has_dependence.update(op.depends)
+
+    if dependence_nop:
+        for gpu in program.gpus:
+            for tb in gpu.threadblocks:
+                pre_ops = []
+                after_ops = []
+                first_re = None
+                first_dep = None
+                for i, op in enumerate(tb.ops):
+                    # Expand extra dependencies into nop operations
+                    num_depends = len(op.depends)
+                    if op.inst is Instruction.reduce:
+                        if num_depends > 0:
+                            for dep in op.depends:
+                                if first_dep is None:
+                                    first_dep = dep
+                                else:
+                                    pre_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
+                            op.depends = []
+                        if first_re is None:
+                            first_re = op
+
+                    if first_re is not None:
+                        after_ops.append(op)
+                    else:
+                        pre_ops.append(op)
+                if first_dep is not None:
+                    first_re.depends = [first_dep]
+                tb.ops = pre_ops + after_ops
+
+    # Do some additional postprocessing of operations:
+    # - Expand operations with extra dependencies with no-ops
+    # - Mark the index of each operation taking any extra no-ops into account
+    op_idx = {}
+    for gpu in program.gpus:
+        for tb in gpu.threadblocks:
+            new_ops = []
+            for op in tb.ops:
+                # Expand extra dependencies into nop operations
+                if len(op.depends) > 1:
+                    extra_deps = op.depends[1:]
+                    op.depends = op.depends[:1]
+                    for i, dep in enumerate(extra_deps):
+                        new_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
+                        op_idx[new_ops[-1]] = len(new_ops) - 1
+                        #op_tb_id[new_ops[-1]] = op_tb_id[op]
+                new_ops.append(op)
+                op_idx[new_ops[-1]] = len(new_ops) - 1
+            tb.ops = new_ops
+
+    # Need to calculate channel info for each GPU
+    nchannels = 0
+    for gpu in program.gpus:
+        max_tb_channels = 0
+        if len(gpu.threadblocks) > 0:
+            max_tb_channels = max(tb.channel+1 for tb in gpu.threadblocks)
+        nchannels = max(nchannels, max_tb_channels)
+    return dump_to_json(program)
+
+def dump_to_json(program: Program):
+    gpus = []
+    for id, gpu in enumerate(program.gpus):
+        gpu_instance = {
+            'id': id,
+            'input_chunks': gpu.input_chunks,
+            'output_chunks': gpu.output_chunks,
+            'scratch_size': gpu.scratch_chunks,
+            'threadblocks': []
+        }
+        for id, tb in enumerate(gpu.threadblocks):
+            ops = []
+            for op in tb.ops:
+                instr = {
+                    "name": op.inst.name,
+                    "srcbuff": op.src.buffer.name if op.src else None,
+                    "srcoff": op.src.index if op.src else None,
+                    "dstbuff": op.dst.buffer.name if op.dst else None,
+                    "dstoff": op.dst.index if op.dst else None,
+                    "channel_type": op.channel_type.name,
+                }
+                ops.append(instr)
+            threadblock = {
+                'id': id,
+                'ops': ops
+            }
+            gpu_instance['threadblocks'].append(threadblock)
+        gpus.append(gpu_instance)
+    obj = {
+        'name': program.name,
+        'colletive': program.collective,
+        'protocol': program.protocol,
+        'inplace': program.inplace,
+        'gpus': gpus
+    }
+    return json.dumps(obj, indent=2)
