@@ -113,6 +113,7 @@ class Instruction(Enum):
     delete = 'd'
     start = 'st'
     put = 'put'
+    packet_recv = 'packet_recv'
     get = 'get'
     wait = 'wait'
     signal = 'signal'
@@ -567,8 +568,12 @@ def dump_to_json(program: Program):
             }
             gpu_instance["channels"].append(obj)
         for tb in gpu.threadblocks:
+            if tb.id == -1:
+                continue
             ops = []
             for op in tb.ops:
+                if op.tb == -1:
+                    continue
                 instr = {
                     "name": op.inst.name,
                     "src": op.src.rank if op.src else None,

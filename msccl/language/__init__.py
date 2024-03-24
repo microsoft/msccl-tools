@@ -230,7 +230,9 @@ class Ref(ChunkRef):
         dst_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
 
         self.prog.apply_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
-        self.prog.instr_dag.add_put(sender, self, dst_chunkref, sendtb, chan_type)
+        sop = self.prog.instr_dag.add_put(sender, self, dst_chunkref, sendtb, chan_type)
+        if self.prog.protocol == 'LL':
+            self.prog.instr_dag.add_packet_recv(receiver, self, dst_chunkref, chan_type, sop)
 
         return dst_chunkref
 

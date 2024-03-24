@@ -22,12 +22,14 @@ def allreduce_allpairs(gpus, instances):
                     c = chunk(r1, Buffer.input, index, size=size)
                     c.put(r2, 'scratch', index=r1*size, sendtb=r2)
 
-        # # Each rank performs a local reduction on the nth chunk
-        # # Utilize 8 threadblocks for this reduction for better parallelism
-        # for r in range(size):
-        #     for index in range(0, size * (size-1)):
-        #         c = chunk(r, Buffer.input, r*size + (index % size))
-        #         c.reduce(chunk(r, 'scratch', index), sendtb=(index % size))
+        # Each rank performs a local reduction on the nth chunk
+        # Utilize 8 threadblocks for this reduction for better parallelism
+        for r in range(size):
+            for index in range(size):
+                c = chunk(r, Buffer.input, r*size + index)
+                for peer in range(size):
+                    if peer != r:
+                        c.reduce(chunk(r, 'scratch', peer*size+index), sendtb=index)
 
         # # Each rank sends the fully reduced nth chunk to all other gpus
         # for r1 in range(size):

@@ -111,7 +111,8 @@ class InstructionDAG:
 
     # InstructionDAG - adds a redduce node
     def add_reduce(self, rank, send_ref, recv_ref, tb, ch):
-        op = Op(Instruction.reduce, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
+        tb_step = self._get_tb_step(rank, tb)
+        op = Op(Instruction.reduce, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch, step=tb_step)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
         srcbuffer = send_ref.buffer
@@ -141,6 +142,16 @@ class InstructionDAG:
         index = send_ref.index
         size = send_ref.size
         self._read(rank, buffer, index, size, op)
+        return op
+
+    def add_packet_recv(self, rank, send_ref, recv_ref, ch_type, send_op):
+        # This is mock instruction for packet recv
+        op = Op(Instruction.packet_recv, rank, send_ref, recv_ref, next=set(), prev=set(), channel_type=ch_type)
+        buffer = recv_ref.buffer
+        index = recv_ref.index
+        size = recv_ref.size
+        self._write(rank, buffer, index, size, op)
+        op.send_match = send_op
         return op
 
     # InstructionDAG - adds a signal node.
