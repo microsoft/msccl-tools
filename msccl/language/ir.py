@@ -113,7 +113,6 @@ class Instruction(Enum):
     delete = 'd'
     start = 'st'
     put = 'put'
-    packet_recv = 'packet_recv'
     get = 'get'
     wait = 'wait'
     signal = 'signal'

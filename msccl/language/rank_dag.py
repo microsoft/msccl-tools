@@ -145,16 +145,6 @@ class InstructionDAG:
         self._read(rank, buffer, index, size, op)
         return op
 
-    def add_packet_recv(self, rank, send_ref, recv_ref, ch_type, send_op):
-        # This is mock instruction for packet recv
-        op = Op(Instruction.packet_recv, rank, send_ref, recv_ref, next=set(), prev=set(), channel_type=ch_type)
-        buffer = recv_ref.buffer
-        index = recv_ref.index
-        size = recv_ref.size
-        self._write(rank, buffer, index, size, op)
-        op.send_match = send_op
-        return op
-
     # InstructionDAG - adds a signal node.
     def add_signal(self, rank, send_ref, recv_ref, tb, ch_type):
         tb_step = self._get_tb_step(rank, tb)

@@ -21,7 +21,7 @@ def allreduce_allpairs(gpus, instances, protocol):
                 c = chunk(rank, Buffer.input, index + tb)
                 for nghr in range(size):
                     if rank != nghr:
-                        c.reduce(chunk(nghr, 'input', index + tb), recvtb==tb)
+                        c.reduce(chunk(nghr, 'input', index + tb), recvtb=tb)
 
         # Each rank sends the fully reduced nth chunk to all other gpus
         for rank in range(size):
@@ -32,13 +32,13 @@ def allreduce_allpairs(gpus, instances, protocol):
                     if rank != nghr:
                         c.put(nghr, Buffer.input, index, sendtb=tb)
 
-        XML()
+        Json()
         Check()
 
 parser = argparse.ArgumentParser()
 parser.add_argument('num_gpus', type=int, help ='number of gpus')
 parser.add_argument('instances', type=int, help='number of instances')
-parser.add_argument('--protocol', type=str, default='LL', choices=['Simple', 'LL'], help='Protocol')
+parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple'], help='Protocol')
 
 args = parser.parse_args()
 
