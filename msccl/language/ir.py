@@ -68,6 +68,7 @@ class Channel:
 
 @dataclass
 class Threadblock:
+    id: int = -1
     channel: int = -1
     send: int = -1
     recv: int = -1
@@ -230,6 +231,7 @@ _local_src_insts = {Instruction.send, Instruction.copy, Instruction.reduce, Inst
 _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.recv_reduce_send,
                     Instruction.recv_reduce_copy, Instruction.copy, Instruction.reduce,
                     Instruction.recv_reduce_copy_send, Instruction.wait}
+_send_insts = {Instruction.put}
 
 
 def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
@@ -428,25 +430,31 @@ def ir_to_json(program: Program, dependence_nop=False):
                     key = (gpu.rank, op.src.buffer)
                     buffer_sizes[key] = max(
                         buffer_sizes[key], op.src.index + op.src.size)
+                if op.inst in _send_insts:
+                    key = (op.dst.rank, op.dst.buffer)
+                    buffer_sizes[key] = max(
+                        buffer_sizes[key], op.dst.index + op.dst.size)
                 if op.inst in _local_dst_insts:
                     key = (gpu.rank, op.dst.buffer)
                     buffer_sizes[key] = max(
                         buffer_sizes[key], op.dst.index + op.dst.size)
+    for gpu in program.gpus:
         gpu.input_chunks = max(buffer_sizes[(gpu.rank, Buffer.input)], gpu.input_chunks)
         gpu.output_chunks = max(buffer_sizes[(gpu.rank, Buffer.output)], gpu.output_chunks)
         gpu.scratch_chunks = max(buffer_sizes[(gpu.rank, Buffer.scratch)], gpu.scratch_chunks)
 
     # get channel info for each GPU and threadblock
     for gpu in program.gpus:
+        gpu.threadblocks = sorted(gpu.threadblocks, key=lambda tb: tb.id)
         chan_dict = {}
         # the channel key is the tuple (srcBuffer, dstBuffer, type)
-        for tid, tb in enumerate(gpu.threadblocks):
+        for tb in gpu.threadblocks:
             for ch in tb.channels:
                 key = (ch.srcBuffer, ch.dstBuffer, ch.type)
                 if key not in chan_dict:
-                    chan_dict[key] = [(tid, ch.connected_to)]
+                    chan_dict[key] = [(tb.id, ch.connected_to)]
                 else:
-                    chan_dict[key].append((tid, ch.connected_to))
+                    chan_dict[key].append((tb.id, ch.connected_to))
         for key, value in chan_dict.items():
             chan_dict[key] = sorted(value)
         gpu.channels = chan_dict
@@ -545,20 +553,20 @@ def dump_to_json(program: Program):
             'id': id,
             'input_chunks': gpu.input_chunks,
             'output_chunks': gpu.output_chunks,
-            'scratch_size': gpu.scratch_chunks,
+            'scratch_chunks': gpu.scratch_chunks,
             'threadblocks': [],
             "channels": []
         }
         for (srcBuffer, dstBuffer, type), channels in gpu.channels.items():
             obj = {
-                "srcBuffer": srcBuffer.name,
-                "dstBuffer": dstBuffer.name,
+                "srcBuffer": srcBuffer.name if hasattr(srcBuffer, 'name') else srcBuffer,
+                "dstBuffer": dstBuffer.name if hasattr(dstBuffer, 'name') else dstBuffer,
                 "type": type.name,
                 "connectedTo": [eles[1] for eles in channels],
                 "threadblockMap": [eles[0] for eles in channels]
             }
             gpu_instance["channels"].append(obj)
-        for id, tb in enumerate(gpu.threadblocks):
+        for tb in gpu.threadblocks:
             ops = []
             for op in tb.ops:
                 instr = {
@@ -570,10 +578,11 @@ def dump_to_json(program: Program):
                     "dstbuff": op.dst.buffer.name if op.dst.buffer else None,
                     "dstoff": op.dst.index if op.dst else None,
                     "channel_type": op.channel_type.name,
+                    "cnt": op.cnt(),
                 }
                 ops.append(instr)
             threadblock = {
-                'id': id,
+                'id': tb.id,
                 'ops': ops
             }
             gpu_instance['threadblocks'].append(threadblock)

@@ -47,7 +47,7 @@ def convert_to_exectuion_plan(instr_dag):
         rank = op.rank
         tbid = op.tb
         if tbid not in instr_dag.tbs[rank]:
-            instr_dag.tbs[rank][tbid] = Threadblock()
+            instr_dag.tbs[rank][tbid] = Threadblock(id=tbid)
         tb = instr_dag.tbs[rank][tbid]
         tb.ops.append(op)
 
