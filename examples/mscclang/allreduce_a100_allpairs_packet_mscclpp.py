@@ -30,15 +30,17 @@ def allreduce_allpairs(gpus, instances):
                 for peer in range(size):
                     if peer != r:
                         c.reduce(chunk(r, 'scratch', peer*size+index), sendtb=index)
+                for peer in range(size):
+                    if peer != r:
+                        c.put(peer, 'scratch', (size*size)+r*size+index, sendtb=index)
 
-        # # Each rank sends the fully reduced nth chunk to all other gpus
-        # for r1 in range(size):
-        #     for r2 in range(size):
-        #         index = r1 * size
-        #         c = chunk(r1, Buffer.input, index + r2)
-        #         for r3 in range(size):
-        #             if r3 != r1:
-        #                 c.put(r3, Buffer.input, index, sendtb=r2)
+        # Each rank get final result from scratch space
+        for r in range(size):
+            for index in range(size):
+                for peer in range(size):
+                    if peer != r:
+                        c = chunk(r, 'scratch', size*size+peer*size+index)
+                        c.copy(r, Buffer.input, peer*size+index, sendtb=index)
 
         Json()
         # Check()
