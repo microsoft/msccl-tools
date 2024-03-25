@@ -16,7 +16,19 @@ def remove_op(op):
 
     for n in op.next:
         n.prev.remove(op)
-        n.prev =  op.prev.union(n.prev)
+        n.prev = op.prev.union(n.prev)
+
+def merge_op(op, other_op):
+    for p in other_op.prev:
+        p.next.remove(other_op)
+        p.next.append(op)
+
+    for n in other_op.next:
+        n.prev.remove(other_op)
+        n.prev.add(op)
+
+    op.prev = op.prev.union(other_op.prev)
+    op.next += other_op.next
 
 def same_tb(op1, op2):
     return op1.tb == op2.tb and op1.channel == op2.channel
@@ -26,6 +38,9 @@ def same_count(op1, op2):
 
 def same_buf_dst(op1, op2):
     return op1.dst.buffer == op2.dst.buffer and op1.dst.index == op2.dst.index
+
+def same_src_dst_buffer_type(op1, op2):
+    return op1.src.buffer == op2.src.buffer and op1.dst.buffer == op2.dst.buffer
 
 def buf_dst_src_match(op1, op2):
     return op1.dst.buffer == op2.src.buffer and op1.dst.index == op2.src.index
@@ -174,6 +189,7 @@ class InstructionDAG:
         # treat signal as a write since it can not be executed parallelly with read operations
         self._write(rank, buffer, index, size, op)
         op.dsts.append(ChunkRef(recv_ref.rank, recv_ref.buffer, recv_ref.index, recv_ref.size))
+        op.srcs.append(ChunkRef(send_ref.rank, send_ref.buffer, send_ref.index, send_ref.size))
         return op
 
     def add_wait(self, rank, dst_ref, src_ref, tb, ch_type):
@@ -184,6 +200,7 @@ class InstructionDAG:
         size = dst_ref.size
         self._write(rank, buffer, index, size, op)
         op.srcs.append(ChunkRef(src_ref.rank, src_ref.buffer, src_ref.index, src_ref.size))
+        op.dsts.append(ChunkRef(dst_ref.rank, dst_ref.buffer, dst_ref.index, dst_ref.size))
         return op
 
     # InstructionDAG - adds a recv node
@@ -383,10 +400,49 @@ class InstructionDAG:
                             continue
                     queue = queue[1:]
 
+    # For signal/wait ops, if they are independent of other operations and no other operations in between,
+    # then merge them into a single signal/wait op
+    # wait(src,sbuf,si,_,_,_) wait(src,sbuf,si,_,_,_) -> wait(list[src,sbuf,si],_,_,_,_])
+    def _parallel_signal_wait(self):
+        for rank, rank_tbs in enumerate(self.tbs):
+            for tbid, tb in rank_tbs.items():
+                queue = list(tb.ops)
+                while len(queue) > 0:
+                    op = queue[0]
+                    if op.inst == Instruction.signal:
+                        fused = False
+                        if len(queue) > 1:
+                            seq_op = queue[1]
+                            if seq_op.inst == Instruction.signal and same_src_dst_buffer_type(op, seq_op) and same_chan_type(op, seq_op):
+                                op.dsts.append(ChunkRef(seq_op.dst.rank, seq_op.dst.buffer, seq_op.dst.index, seq_op.dst.size))
+                                op.srcs.append(ChunkRef(seq_op.src.rank, seq_op.src.buffer, seq_op.src.index, seq_op.src.size))
+                                merge_op(op, seq_op)
+                                tb.ops.remove(seq_op)
+                                queue.remove(seq_op)
+                                fused = True
+                        if fused:
+                            continue
+                    elif op.inst == Instruction.wait:
+                        fused = False
+                        if len(queue) > 1:
+                            seq_op = queue[1]
+                            if seq_op.inst == Instruction.wait and same_src_dst_buffer_type(op, seq_op) and same_chan_type(op, seq_op):
+                                op.dsts.append(ChunkRef(seq_op.dst.rank, seq_op.dst.buffer, seq_op.dst.index, seq_op.dst.size))
+                                op.srcs.append(ChunkRef(seq_op.src.rank, seq_op.src.buffer, seq_op.src.index, seq_op.src.size))
+                                merge_op(op, seq_op)
+                                tb.ops.remove(seq_op)
+                                queue.remove(seq_op)
+                                fused = True
+                        if fused:
+                            continue
+                    queue = queue[1:]
+
     def optimize_mscclpp(self, protocol):
         self._optimize_redandant_signal_wait(protocol)
         self._optimize_rrc_r_signal_wait()
         self._optimize_rrcs_rs()
+
+        self._parallel_signal_wait()
 
     # Completes metadata for chunk_steps (number of steps from a start op) and priority (number of steps to the last op)
     def _complete_metadata(self):
@@ -460,11 +516,6 @@ class InstructionDAG:
                         op.recv_match = next_op.recv_match
                         remove_op(next_op)
                 frontier = frontier[1:] + op.next
-
-    # For signal/wait ops, if they are independent of other operations and no other operations in between,
-    # then merge them into a single signal/wait op
-    def _parallel_signal_wait(self):
-        pass
 
     def _get_tb_step(self, rank, tb):
         if tb in self.tb_steps[rank]:
