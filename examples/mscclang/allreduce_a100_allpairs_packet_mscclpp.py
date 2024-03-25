@@ -29,7 +29,7 @@ def allreduce_allpairs(gpus, instances):
                 c = chunk(r, Buffer.input, r*size + index)
                 for peer in range(size):
                     if peer != r:
-                        c.reduce(chunk(r, 'scratch', peer*size+index), sendtb=index)
+                        c.reduce_mscclpp(chunk(r, 'scratch', peer*size+index), sendtb=index)
                 for peer in range(size):
                     if peer != r:
                         c.put(peer, 'scratch', (size*size)+r*size+index, sendtb=index)

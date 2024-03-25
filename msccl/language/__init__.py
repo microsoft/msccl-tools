@@ -20,6 +20,11 @@ def _curr():
         raise RuntimeError("No Program in context")
     return _current_program
 
+# For msccl++ program, we have one assumption that for channel can be identified by (send_buffer, recv_buffer, type, send_tb/recv_tb)
+# which means the send_tb and recv_tb should be the same for a pair of signal and wait, also same for put/get operation.
+# If one sender what to send data to peer want to use different tb in receiver side. We need to send to same tb in receiver side first,
+# then performance a across tb sync. This is a limitation of current implementation.
+
 class MSCCLProgram:
     def __init__(self, name, topo, collective, instances, protocol='Simple', \
             threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True,
@@ -235,10 +240,28 @@ class Ref(ChunkRef):
             self.prog.instr_dag.add_signal(sender, self, dst_chunkref, -1, ChannelType.none)
             self.prog.instr_dag.add_wait(receiver, dst_chunkref, self, -1, ChannelType.none)
 
-        return dst_chunkref
-
-    def get(self, src, buffer=None, index=-1, recvtb=-1):
+    def get(self, src, buffer=None, index=-1, recvtb=-1, chan_type=ChannelType.sm):
         self.prog.check_buffer_exists(src, buffer)
+        sender = src
+        receiver = self.rank
+        assert sender != receiver, 'Cannot get from the same rank'
+
+        # If index is not specified assume it is going to the same place in the next gpu
+        if index == -1 and buffer == None:
+            index = self.index
+            buffer = self.buffer
+        elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
+            index = self.prog.buffers[src][buffer].instance_size()
+
+        # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
+        buffer, index = self.prog.collective.get_buffer_index(src, buffer, index)
+
+        # Direct get
+        assert (self.prog.topo.link(self.rank, src) or src == self.rank), f'No link from {self.rank} to {src}'
+        src_chunkref = self.prog.get_ref(src, buffer, index, self.size)
+
+        self.prog.apply_send(src, buffer, index, self.rank, self.buffer, self.index, self.size)
+        self.prog.instr_dag.add_get(receiver, src_chunkref, self, recvtb, chan_type)
 
     # for signal and wait, currently we assuem the pair will use the same tb index. In future we need
     # to infer the tb index from the instruction DAG Add a channel is define as (send_tb, src_buffer, recv_tb, dst_buffer, type).
@@ -337,6 +360,21 @@ class Ref(ChunkRef):
             sop.recv_match = rop
         else:
             self.prog.instr_dag.add_reduce(src, other_chunkref, self, sendtb, ch)
+
+        return self
+
+    # Reduces the chunk(s) referenced by other_chunkref into the chunk(s) referenced by this chunkref
+    def reduce_mscclpp(self, other_chunkref, sendtb=-1, recvtb=-1, channel_type=ChannelType.sm):
+        # Receive reduce copy
+        dst = self.rank
+        src = other_chunkref.rank
+        assert (self.prog.topo.link(src, dst) or src == dst), f'No link from {src} to {dst}'
+        self.prog.apply_reduce(src, other_chunkref.buffer, other_chunkref.index, dst, self.buffer, self.index, self.size)
+
+        if src != dst:
+            self.prog.instr_dag.add_read_reduce_copy(dst, other_chunkref, self, recvtb, channel_type)
+        else:
+            self.prog.instr_dag.add_reduce(src, other_chunkref, self, sendtb, ChannelType.none)
 
         return self
 

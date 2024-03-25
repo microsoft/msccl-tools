@@ -145,6 +145,15 @@ class InstructionDAG:
         self._read(rank, buffer, index, size, op)
         return op
 
+    def add_get(self, rank, send_ref, recv_ref, tb, ch_type):
+        tb_step = self._get_tb_step(rank, tb)
+        op = Op(Instruction.get, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel_type=ch_type, step=tb_step)
+        buffer = recv_ref.buffer
+        index = recv_ref.index
+        size = recv_ref.size
+        self._write(rank, buffer, index, size, op)
+        return op
+
     # InstructionDAG - adds a signal node.
     def add_signal(self, rank, send_ref, recv_ref, tb, ch_type):
         tb_step = self._get_tb_step(rank, tb)
@@ -183,6 +192,15 @@ class InstructionDAG:
         size = recv_ref.size
         self._write(rank, buffer, index, size, op, read=True)
         op.send_match = send_op
+        return op
+
+    def add_read_reduce_copy(self, rank, send_ref, recv_ref, tb, ch_type):
+        tb_step = self._get_tb_step(rank, tb)
+        op = Op(Instruction.read_reduce_copy, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel_type=ch_type, step=tb_step)
+        buffer = recv_ref.buffer
+        index = recv_ref.index
+        size = recv_ref.size
+        self._write(rank, buffer, index, size, op, read=True)
         return op
 
     def convert_set_list(self):

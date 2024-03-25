@@ -27,17 +27,15 @@ def allreduce_allpairs(gpus, instances, protocol):
                     index = nghr * size
                     if rank != nghr:
                         c.wait(nghr, Buffer.input, index + tb, recvtb=tb)
+                # reduce the chunks
                 for nghr in range(size):
                     if rank != nghr:
                         c.reduce_mscclpp(chunk(nghr, Buffer.input, index + tb), recvtb=tb)
                 for nghr in range(size):
                     if rank != nghr:
-                        c.put(nghr, Buffer.input, index, sendtb=tb)
-                for nghr in range(size):
-                    if rank != nghr:
                         c.signal(nghr, Buffer.input, index, sendtb=tb)
 
-        # wait for all the chunks to be received
+        # wait for all the chunks is ready, then get the chunks
         for rank in range(size):
             for tb in range(size):
                 for nghr in range(size):
@@ -45,6 +43,9 @@ def allreduce_allpairs(gpus, instances, protocol):
                         index = nghr * size
                         c = chunk(rank, Buffer.input, index + tb)
                         c.wait(nghr, Buffer.input, index, recvtb=tb)
+                for nghr in range(size):
+                    if rank != nghr:
+                        c.get(nghr, Buffer.input, index, recvtb=tb)
 
         Json()
 

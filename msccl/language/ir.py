@@ -108,6 +108,7 @@ class Instruction(Enum):
     recv_reduce_send = 'rrs'
     recv_reduce_copy = 'rrc'
     recv_reduce_copy_send = 'rrcs'
+    read_reduce_copy = "rrc"
     copy = 'cpy'
     reduce = 're'
     delete = 'd'
