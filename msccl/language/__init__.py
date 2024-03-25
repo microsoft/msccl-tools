@@ -135,7 +135,7 @@ class MSCCLProgram:
         convert_to_exectuion_plan(self.instr_dag)
         self.instr_dag.complete_channels()
         if self.instr_fusion:
-            self.instr_dag.optimize_mscclpp()
+            self.instr_dag.optimize_mscclpp(self.protocol)
         self.instr_dag.lower_pt1(self.instances)
         gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)

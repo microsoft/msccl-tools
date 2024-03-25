@@ -109,6 +109,7 @@ class Instruction(Enum):
     recv_reduce_copy = 'rrc'
     recv_reduce_copy_send = 'rrcs'
     read_reduce_copy = "rrc"
+    reduce_send = 'rs'
     copy = 'cpy'
     reduce = 're'
     delete = 'd'
@@ -153,6 +154,8 @@ class Op:
     send_match =  None
     channel: int = -1
     channel_type: ChannelType = ChannelType.none
+    srcs: list = field(default_factory=list)
+    dsts: list = field(default_factory=list)
 
     def cnt(self):
         if self.src:
