@@ -144,7 +144,7 @@ class InstructionDAG:
         srcindex = send_ref.index
         size = recv_ref.size
         prev_ops = []
-        op.srcs.append(ChunkRef(send_ref.rank, send_ref.buffer, send_ref.index, send_ref.size))
+        op.srcs.append((ChunkRef(send_ref.rank, send_ref.buffer, send_ref.index, send_ref.size)), tb_step)
         # Sending part of reduce
         self._read(rank, srcbuffer, srcindex, size, op)
         # Reduce part of copy
@@ -188,8 +188,8 @@ class InstructionDAG:
         size = send_ref.size
         # treat signal as a write since it can not be executed parallelly with read operations
         self._write(rank, buffer, index, size, op)
-        op.dsts.append(ChunkRef(recv_ref.rank, recv_ref.buffer, recv_ref.index, recv_ref.size))
-        op.srcs.append(ChunkRef(send_ref.rank, send_ref.buffer, send_ref.index, send_ref.size))
+        op.dsts.append((ChunkRef(recv_ref.rank, recv_ref.buffer, recv_ref.index, recv_ref.size), tb_step))
+        op.srcs.append((ChunkRef(send_ref.rank, send_ref.buffer, send_ref.index, send_ref.size), tb_step))
         return op
 
     def add_wait(self, rank, dst_ref, src_ref, tb, ch_type):
@@ -199,8 +199,8 @@ class InstructionDAG:
         index = dst_ref.index
         size = dst_ref.size
         self._write(rank, buffer, index, size, op)
-        op.srcs.append(ChunkRef(src_ref.rank, src_ref.buffer, src_ref.index, src_ref.size))
-        op.dsts.append(ChunkRef(dst_ref.rank, dst_ref.buffer, dst_ref.index, dst_ref.size))
+        op.srcs.append((ChunkRef(src_ref.rank, src_ref.buffer, src_ref.index, src_ref.size), tb_step))
+        op.dsts.append((ChunkRef(dst_ref.rank, dst_ref.buffer, dst_ref.index, dst_ref.size), tb_step))
         return op
 
     # InstructionDAG - adds a recv node
@@ -229,7 +229,7 @@ class InstructionDAG:
         buffer = recv_ref.buffer
         index = recv_ref.index
         size = recv_ref.size
-        op.srcs.append(ChunkRef(send_ref.rank, send_ref.buffer, send_ref.index, send_ref.size))
+        op.srcs.append((ChunkRef(send_ref.rank, send_ref.buffer, send_ref.index, send_ref.size), tb_step))
         self._write(rank, buffer, index, size, op, read=True)
         return op
 
@@ -312,11 +312,11 @@ class InstructionDAG:
                 queue = list(tb.ops)
                 while len(queue) > 0:
                     op = queue[0]
-                    if op.inst == Instruction.recv_reduce_copy:
+                    if op.inst == Instruction.read_reduce_copy:
                         fused = False
                         for next_op in op.next:
-                            if next_op.inst == Instruction.recv_reduce_copy and same_count(op, next_op) and same_buf_dst(op, next_op) and same_chan_type(op, next_op):
-                                op.srcs.append(ChunkRef(next_op.src.rank, next_op.src.buffer, next_op.src.index, next_op.src.size))
+                            if next_op.inst == Instruction.read_reduce_copy and same_count(op, next_op) and same_buf_dst(op, next_op) and same_chan_type(op, next_op):
+                                op.srcs.append((ChunkRef(next_op.src.rank, next_op.src.buffer, next_op.src.index, next_op.src.size), next_op.step))
                                 remove_op(next_op)
                                 tb.ops.remove(next_op)
                                 queue.remove(next_op)
@@ -328,7 +328,7 @@ class InstructionDAG:
                         fused = False
                         for next_op in op.next:
                             if next_op.inst == Instruction.reduce and same_buf_dst(op, next_op) and same_chan_type(op, next_op):
-                                op.srcs.append(ChunkRef(next_op.src.rank, next_op.src.buffer, next_op.src.index, next_op.src.size))
+                                op.srcs.append((ChunkRef(next_op.src.rank, next_op.src.buffer, next_op.src.index, next_op.src.size)), next_op.step)
                                 remove_op(next_op)
                                 tb.ops.remove(next_op)
                                 queue.remove(next_op)
@@ -340,7 +340,8 @@ class InstructionDAG:
                         fused = False
                         for next_op in op.next:
                             if next_op.inst == Instruction.signal and same_buf_src(op, next_op) and same_chan_type(op, next_op):
-                                op.dsts.append(ChunkRef(next_op.dst.rank, next_op.dst.buffer, next_op.dst.index, next_op.dst.size))
+                                op.dsts.append((ChunkRef(next_op.dst.rank, next_op.dst.buffer, next_op.dst.index, next_op.dst.size), next_op.step))
+                                op.srcs.append((ChunkRef(next_op.src.rank, next_op.src.buffer, next_op.src.index, next_op.src.size), next_op.step))
                                 remove_op(next_op)
                                 tb.ops.remove(next_op)
                                 queue.remove(next_op)
@@ -352,7 +353,8 @@ class InstructionDAG:
                         fused = False
                         for next_op in op.next:
                             if next_op.inst == Instruction.wait and same_buf_dst(op, next_op) and same_chan_type(op, next_op):
-                                op.srcs.append(ChunkRef(next_op.src.rank, next_op.src.buffer, next_op.src.index, next_op.src.size))
+                                op.srcs.append((ChunkRef(next_op.src.rank, next_op.src.buffer, next_op.src.index, next_op.src.size), next_op.step))
+                                op.dsts.append((ChunkRef(next_op.dst.rank, next_op.dst.buffer, next_op.dst.index, next_op.dst.size),next_op.step))
                                 remove_op(next_op)
                                 tb.ops.remove(next_op)
                                 queue.remove(next_op)
@@ -362,21 +364,21 @@ class InstructionDAG:
                             continue
                     queue = queue[1:]
 
-    # rrc(_,_,_,dst,dbuf,di) send(dst,dbuf,di,_,_,_) -> rrcs(_,_,_,_,_,_)
-    # reduce(_,_,_,dst,dbuf,di) send(dst,dbuf,di,_,_,_) -> rrs(_,_,_,_,_,_)
+    # rrc(_,_,_,dst,dbuf,di) put(dst,dbuf,di,_,_,_) -> rrcs(_,_,_,_,_,_)
+    # reduce(_,_,_,dst,dbuf,di) put(dst,dbuf,di,_,_,_) -> rs(_,_,_,_,_,_)
     def _optimize_rrcs_rs(self):
         for rank, rank_tbs in enumerate(self.tbs):
             for tbid, tb in rank_tbs.items():
                 queue = list(tb.ops)
                 while len(queue) > 0:
                     op = queue[0]
-                    if op.inst == Instruction.recv_reduce_copy or op.inst == Instruction.recv_reduce_copy_send:
+                    if op.inst == Instruction.read_reduce_copy or op.inst == Instruction.read_reduce_copy_send:
                         fused = False
                         for next_op in op.next:
                             if next_op.inst == Instruction.put and same_count(op, next_op) and buf_dst_src_match(op, next_op) and same_chan_type(op, next_op):
-                                if op.inst == Instruction.recv_reduce_copy:
-                                    op.inst = Instruction.recv_reduce_copy_send
-                                op.dsts.append(ChunkRef(next_op.dst.rank, next_op.dst.buffer, next_op.dst.index, next_op.dst.size))
+                                if op.inst == Instruction.read_reduce_copy:
+                                    op.inst = Instruction.read_reduce_copy_send
+                                op.dsts.append((ChunkRef(next_op.dst.rank, next_op.dst.buffer, next_op.dst.index, next_op.dst.size), next_op.step))
                                 remove_op(next_op)
                                 tb.ops.remove(next_op)
                                 queue.remove(next_op)
@@ -390,7 +392,7 @@ class InstructionDAG:
                             if next_op.inst == Instruction.put and same_count(op, next_op) and buf_dst_src_match(op, next_op):
                                 if op.inst == Instruction.reduce:
                                     op.inst = Instruction.reduce_send
-                                op.dsts.append(ChunkRef(next_op.dst.rank, next_op.dst.buffer, next_op.dst.index, next_op.dst.size))
+                                op.dsts.append((ChunkRef(next_op.dst.rank, next_op.dst.buffer, next_op.dst.index, next_op.dst.size), next_op.step))
                                 remove_op(next_op)
                                 tb.ops.remove(next_op)
                                 queue.remove(next_op)
@@ -414,8 +416,8 @@ class InstructionDAG:
                         if len(queue) > 1:
                             seq_op = queue[1]
                             if seq_op.inst == Instruction.signal and same_src_dst_buffer_type(op, seq_op) and same_chan_type(op, seq_op):
-                                op.dsts.append(ChunkRef(seq_op.dst.rank, seq_op.dst.buffer, seq_op.dst.index, seq_op.dst.size))
-                                op.srcs.append(ChunkRef(seq_op.src.rank, seq_op.src.buffer, seq_op.src.index, seq_op.src.size))
+                                op.dsts.append((ChunkRef(seq_op.dst.rank, seq_op.dst.buffer, seq_op.dst.index, seq_op.dst.size), seq_op.step))
+                                op.srcs.append((ChunkRef(seq_op.src.rank, seq_op.src.buffer, seq_op.src.index, seq_op.src.size), seq_op.step))
                                 merge_op(op, seq_op)
                                 tb.ops.remove(seq_op)
                                 queue.remove(seq_op)
@@ -427,8 +429,8 @@ class InstructionDAG:
                         if len(queue) > 1:
                             seq_op = queue[1]
                             if seq_op.inst == Instruction.wait and same_src_dst_buffer_type(op, seq_op) and same_chan_type(op, seq_op):
-                                op.dsts.append(ChunkRef(seq_op.dst.rank, seq_op.dst.buffer, seq_op.dst.index, seq_op.dst.size))
-                                op.srcs.append(ChunkRef(seq_op.src.rank, seq_op.src.buffer, seq_op.src.index, seq_op.src.size))
+                                op.dsts.append((ChunkRef(seq_op.dst.rank, seq_op.dst.buffer, seq_op.dst.index, seq_op.dst.size), seq_op.step))
+                                op.srcs.append((ChunkRef(seq_op.src.rank, seq_op.src.buffer, seq_op.src.index, seq_op.src.size), seq_op.step))
                                 merge_op(op, seq_op)
                                 tb.ops.remove(seq_op)
                                 queue.remove(seq_op)
@@ -577,6 +579,10 @@ class InstructionDAG:
                 for op in tb.ops:
                     op.src = self.lower_chunk(op.src)
                     op.dst = self.lower_chunk(op.dst)
+                    srcs = sorted(op.srcs, key=lambda x: x[1])
+                    dsts = sorted(op.dsts, key=lambda x: x[1])
+                    op.srcs = [src[0] for src in srcs]
+                    op.dsts = [dst[0] for dst in dsts]
                 lowered_tbs[tbid] = tb
             gpus.append(Gpu(rank, list(lowered_tbs.values())))
         return gpus

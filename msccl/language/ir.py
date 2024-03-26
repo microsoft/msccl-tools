@@ -109,6 +109,7 @@ class Instruction(Enum):
     recv_reduce_copy = 'rrc'
     recv_reduce_copy_send = 'rrcs'
     read_reduce_copy = "rrc"
+    read_reduce_copy_send = "rrcs"
     reduce_send = 'rs'
     copy = 'cpy'
     reduce = 're'
@@ -235,7 +236,7 @@ _local_src_insts = {Instruction.send, Instruction.copy, Instruction.reduce, Inst
 _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.recv_reduce_send,
                     Instruction.recv_reduce_copy, Instruction.copy, Instruction.reduce,
                     Instruction.recv_reduce_copy_send, Instruction.wait}
-_send_insts = {Instruction.put}
+_send_insts = {Instruction.put} # do we need this?
 
 
 def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
@@ -552,6 +553,14 @@ def ir_to_json(program: Program, dependence_nop=False):
 
 def dump_to_json(program: Program):
     gpus = []
+
+    def get_channel_ids(chunk_list, tb_channel_dict, src_buffer, dst_buffer, chan_type):
+        channel_ids = []
+        for c in chunk_list:
+            key = (src_buffer, dst_buffer, chan_type)
+            channel_ids.extend([{"id": id, "off": c.index} for id, ele in enumerate(tb_channel_dict[key]["connectedTo"]) if ele == c.rank])
+        return channel_ids
+
     for id, gpu in enumerate(program.gpus):
         gpu_instance = {
             'id': id,
@@ -566,32 +575,89 @@ def dump_to_json(program: Program):
                 "srcBuffer": srcBuffer.name if hasattr(srcBuffer, 'name') else srcBuffer,
                 "dstBuffer": dstBuffer.name if hasattr(dstBuffer, 'name') else dstBuffer,
                 "type": type.name,
-                "connectedTo": [eles[1] for eles in channels],
-                "threadblockMap": [eles[0] for eles in channels]
+                "connectedTo": [eles[1] for eles in channels]
             }
             gpu_instance["channels"].append(obj)
         for tb in gpu.threadblocks:
             if tb.id == -1:
                 continue
             ops = []
+            tb_channels = []
+            tb_channel_dict = {}
+            for (srcBuffer, dstBuffer, type), channels in gpu.channels.items():
+                obj = {
+                    "srcBuffer": srcBuffer.name if hasattr(srcBuffer, 'name') else srcBuffer,
+                    "dstBuffer": dstBuffer.name if hasattr(dstBuffer, 'name') else dstBuffer,
+                    "type": type.name,
+                    "chanIds": [id for id, ele in enumerate(channels) if ele[0] == tb.id],
+                    "connectedTo": [ele[1] for ele in channels if ele[0] == tb.id],
+                }
+                tb_channel_dict[(srcBuffer, dstBuffer, type)] = obj
+                tb_channels.append(obj)
             for op in tb.ops:
                 if op.tb == -1:
                     continue
-                instr = {
-                    "name": op.inst.name,
-                    "src": op.src.rank if op.src else None,
-                    "srcbuff": op.src.buffer.name if op.src.buffer else None,
-                    "srcoff": op.src.index if op.src else None,
-                    "dst": op.dst.rank if op.dst else None,
-                    "dstbuff": op.dst.buffer.name if op.dst.buffer else None,
-                    "dstoff": op.dst.index if op.dst else None,
-                    "channel_type": op.channel_type.name,
-                    "cnt": op.cnt(),
-                }
+                if op.inst == Instruction.signal:
+                    # get dst channel ids
+                    dst_channel_ids = get_channel_ids(op.dsts, tb_channel_dict, op.src.buffer, op.dst.buffer, op.channel_type)
+                    instr = {
+                        "name": op.inst.name,
+                        "o_cids": dst_channel_ids,
+                        "srcbuff": op.src.buffer.value if op.src.buffer else None,
+                        "dstbuff": op.dst.buffer.value if op.dst.buffer else None,
+                        "ctype": op.channel_type.value,
+                    }
+                elif op.inst == Instruction.wait:
+                    # get src channel ids
+                    src_channel_ids = get_channel_ids(op.srcs, tb_channel_dict, op.src.buffer, op.dst.buffer, op.channel_type)
+                    instr = {
+                        "name": op.inst.name,
+                        "i_cids": src_channel_ids,
+                        "srcbuff": op.src.buffer.value if op.src.buffer else None,
+                        "dstbuff": op.dst.buffer.value if op.dst.buffer else None,
+                        "ctype": op.channel_type.value,
+                    }
+                elif op.inst == Instruction.read_reduce_copy:
+                    src_channel_ids = get_channel_ids(op.srcs, tb_channel_dict, op.src.buffer, op.dst.buffer, op.channel_type)
+                    instr = {
+                        "name": op.inst.value,
+                        "i_cids": src_channel_ids,
+                        "srcbuff": op.src.buffer.value if op.src.buffer else None,
+                        "dstbuff": op.dst.buffer.value if op.dst.buffer else None,
+                        "dstoff": op.dst.index if op.dst else None,
+                        "ctype": op.channel_type.value,
+                        "cnt": op.cnt(),
+                    }
+                elif op.inst == Instruction.read_reduce_copy_send:
+                    src_channel_ids = get_channel_ids(op.srcs, tb_channel_dict, op.src.buffer, op.dst.buffer, op.channel_type)
+                    dst_channel_ids = get_channel_ids(op.dsts, tb_channel_dict, op.src.buffer, op.dst.buffer, op.channel_type)
+                    instr = {
+                        "name": op.inst.value,
+                        "i_cids": src_channel_ids,
+                        "o_cids": dst_channel_ids,
+                        "srcbuff": op.src.buffer.value if op.src.buffer else None,
+                        "dstbuff": op.dst.buffer.value if op.dst.buffer else None,
+                        "dstoff": op.dst.index if op.dst else None,
+                        "ctype": op.channel_type.value,
+                        "cnt": op.cnt(),
+                    }
+                else:
+                    instr = {
+                        "name": op.inst.value,
+                        "src": op.src.rank if op.src else None,
+                        "srcbuff": op.src.buffer.value if op.src.buffer else None,
+                        "srcoff": op.src.index if op.src else None,
+                        "dst": op.dst.rank if op.dst else None,
+                        "dstbuff": op.dst.buffer.value if op.dst.buffer else None,
+                        "dstoff": op.dst.index if op.dst else None,
+                        "channel_type": op.channel_type.value,
+                        "cnt": op.cnt(),
+                    }
                 ops.append(instr)
             threadblock = {
                 'id': tb.id,
-                'ops': ops
+                'ops': ops,
+                'channels': list(map(lambda x: {"s": x["srcBuffer"], "d": x["dstBuffer"], "t": x["type"], "cid": x["chanIds"]}, tb_channels))
             }
             gpu_instance['threadblocks'].append(threadblock)
         gpus.append(gpu_instance)
