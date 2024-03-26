@@ -578,6 +578,7 @@ def dump_to_json(program: Program):
                 "connectedTo": [eles[1] for eles in channels]
             }
             gpu_instance["channels"].append(obj)
+        gpu_instance["channels"] = list(filter(lambda x: x["type"] != "none", gpu_instance["channels"]))
         for tb in gpu.threadblocks:
             if tb.id == -1:
                 continue
@@ -586,14 +587,15 @@ def dump_to_json(program: Program):
             tb_channel_dict = {}
             for (srcBuffer, dstBuffer, type), channels in gpu.channels.items():
                 obj = {
-                    "srcBuffer": srcBuffer.name if hasattr(srcBuffer, 'name') else srcBuffer,
-                    "dstBuffer": dstBuffer.name if hasattr(dstBuffer, 'name') else dstBuffer,
+                    "srcBuffer": srcBuffer.value if hasattr(srcBuffer, 'name') else srcBuffer,
+                    "dstBuffer": dstBuffer.value if hasattr(dstBuffer, 'name') else dstBuffer,
                     "type": type.name,
                     "chanIds": [id for id, ele in enumerate(channels) if ele[0] == tb.id],
                     "connectedTo": [ele[1] for ele in channels if ele[0] == tb.id],
                 }
                 tb_channel_dict[(srcBuffer, dstBuffer, type)] = obj
                 tb_channels.append(obj)
+            tb_channels = filter(lambda x: x["type"] != "none", tb_channels)
             for op in tb.ops:
                 if op.tb == -1:
                     continue
@@ -650,14 +652,14 @@ def dump_to_json(program: Program):
                         "dst": op.dst.rank if op.dst else None,
                         "dstbuff": op.dst.buffer.value if op.dst.buffer else None,
                         "dstoff": op.dst.index if op.dst else None,
-                        "channel_type": op.channel_type.value,
+                        "ctype": op.channel_type.value,
                         "cnt": op.cnt(),
                     }
                 ops.append(instr)
             threadblock = {
                 'id': tb.id,
                 'ops': ops,
-                'channels': list(map(lambda x: {"s": x["srcBuffer"], "d": x["dstBuffer"], "t": x["type"], "cid": x["chanIds"]}, tb_channels))
+                'channels': list(map(lambda x: {"src": x["srcBuffer"], "dst": x["dstBuffer"], "ctype": x["type"], "cid": x["chanIds"]}, tb_channels))
             }
             gpu_instance['threadblocks'].append(threadblock)
         gpus.append(gpu_instance)

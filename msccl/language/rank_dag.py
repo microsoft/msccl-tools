@@ -144,7 +144,7 @@ class InstructionDAG:
         srcindex = send_ref.index
         size = recv_ref.size
         prev_ops = []
-        op.srcs.append((ChunkRef(send_ref.rank, send_ref.buffer, send_ref.index, send_ref.size)), tb_step)
+        op.srcs.append((ChunkRef(send_ref.rank, send_ref.buffer, send_ref.index, send_ref.size), tb_step))
         # Sending part of reduce
         self._read(rank, srcbuffer, srcindex, size, op)
         # Reduce part of copy
@@ -328,7 +328,7 @@ class InstructionDAG:
                         fused = False
                         for next_op in op.next:
                             if next_op.inst == Instruction.reduce and same_buf_dst(op, next_op) and same_chan_type(op, next_op):
-                                op.srcs.append((ChunkRef(next_op.src.rank, next_op.src.buffer, next_op.src.index, next_op.src.size)), next_op.step)
+                                op.srcs.append((ChunkRef(next_op.src.rank, next_op.src.buffer, next_op.src.index, next_op.src.size), next_op.step))
                                 remove_op(next_op)
                                 tb.ops.remove(next_op)
                                 queue.remove(next_op)
@@ -408,6 +408,8 @@ class InstructionDAG:
     def _parallel_signal_wait(self):
         for rank, rank_tbs in enumerate(self.tbs):
             for tbid, tb in rank_tbs.items():
+                if tbid == -1:
+                    continue
                 queue = list(tb.ops)
                 while len(queue) > 0:
                     op = queue[0]
