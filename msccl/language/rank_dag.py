@@ -376,6 +376,8 @@ class InstructionDAG:
                         fused = False
                         for next_op in op.next:
                             if next_op.inst == Instruction.put and same_count(op, next_op) and buf_dst_src_match(op, next_op) and same_chan_type(op, next_op):
+                                if len(op.dsts) > 0 and op.dsts[0][0].buffer != next_op.dst.buffer:
+                                    continue
                                 if op.inst == Instruction.read_reduce_copy:
                                     op.inst = Instruction.read_reduce_copy_send
                                 op.dsts.append((ChunkRef(next_op.dst.rank, next_op.dst.buffer, next_op.dst.index, next_op.dst.size), next_op.step))
@@ -389,7 +391,9 @@ class InstructionDAG:
                     if op.inst == Instruction.reduce or op.inst == Instruction.reduce_send:
                         fused = False
                         for next_op in op.next:
-                            if next_op.inst == Instruction.put and same_count(op, next_op) and buf_dst_src_match(op, next_op):
+                            if next_op.inst == Instruction.put and same_count(op, next_op) and buf_dst_src_match(op, next_op) and next_op.channel_type == ChannelType.sm:
+                                if len(op.dsts) > 0 and op.dsts[0][0].buffer != next_op.dst.buffer:
+                                    continue
                                 if op.inst == Instruction.reduce:
                                     op.inst = Instruction.reduce_send
                                 op.dsts.append((ChunkRef(next_op.dst.rank, next_op.dst.buffer, next_op.dst.index, next_op.dst.size), next_op.step))

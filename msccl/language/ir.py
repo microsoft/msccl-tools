@@ -632,7 +632,7 @@ def dump_to_json(program: Program):
                     }
                 elif op.inst == Instruction.read_reduce_copy_send:
                     src_channel_ids = get_channel_ids(op.srcs, tb_channel_dict, op.src.buffer, op.dst.buffer, op.channel_type)
-                    dst_channel_ids = get_channel_ids(op.dsts, tb_channel_dict, op.src.buffer, op.dst.buffer, op.channel_type)
+                    dst_channel_ids = get_channel_ids(op.dsts, tb_channel_dict, op.dst.buffer, op.dsts[0].buffer, op.channel_type)
                     instr = {
                         "name": op.inst.value,
                         "i_cids": src_channel_ids,
@@ -641,6 +641,26 @@ def dump_to_json(program: Program):
                         "dstbuff": op.dst.buffer.value if op.dst.buffer else None,
                         "dstoff": op.dst.index if op.dst else None,
                         "ctype": op.channel_type.value,
+                        "cnt": op.cnt(),
+                    }
+                elif op.inst == Instruction.reduce_send:
+                    dst_channel_ids = get_channel_ids(op.dsts, tb_channel_dict,  op.dst.buffer, op.dsts[0].buffer, ChannelType.sm)
+                    instr = {
+                        "name": op.inst.value,
+                        "o_cids": dst_channel_ids,
+                        "srcbuff": op.src.buffer.value if op.src.buffer else None,
+                        "dstbuff": op.dst.buffer.value if op.dst.buffer else None,
+                        "dstoff": op.dst.index if op.dst else None,
+                        "srcs": list(map(lambda x: {"buff": x.buffer, "off": x.index}, op.srcs)),
+                        "cnt": op.cnt(),
+                    }
+                elif op.inst == Instruction.reduce:
+                    instr = {
+                        "name": op.inst.value,
+                        "srcbuff": op.src.buffer.value if op.src.buffer else None,
+                        "dstbuff": op.dst.buffer.value if op.dst.buffer else None,
+                        "dstoff": op.dst.index if op.dst else None,
+                        "srcs": list(map(lambda x: {"buff": x.buffer, "off": x.index}, op.srcs)),
                         "cnt": op.cnt(),
                     }
                 else:
