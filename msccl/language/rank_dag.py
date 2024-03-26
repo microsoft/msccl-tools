@@ -260,7 +260,7 @@ class InstructionDAG:
 
     def complete_channels(self):
         send_op = [Instruction.put, Instruction.signal]
-        recv_op = [Instruction.wait]
+        recv_op = [Instruction.wait, Instruction.get, Instruction.read_reduce_copy]
         for rank, rank_tbs in enumerate(self.tbs):
             for tbid, tb in rank_tbs.items():
                 chans = set()
