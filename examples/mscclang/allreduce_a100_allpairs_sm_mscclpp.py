@@ -17,18 +17,20 @@ def allreduce_allpairs(gpus, instances, protocol):
         for rank in range(size):
             for tb in range(size):
                 index = rank * size
-                c = chunk(rank, Buffer.input, index + tb)
+                c = chunk(rank, Buffer.input, index+tb)
                 # step1 make sure the data is ready
                 for nghr in range(size):
+                    peer_index = nghr * size
                     if rank != nghr:
-                        c.signal(nghr, Buffer.input, index + tb, sendtb=tb)
+                        c_peer = chunk(rank, Buffer.input, peer_index+tb)
+                        c_peer.signal(nghr, Buffer.input, peer_index+tb, sendtb=tb)
                 for nghr in range(size):
                     if rank != nghr:
-                        c.wait(nghr, Buffer.input, index + tb, recvtb=tb)
+                        c.wait(nghr, Buffer.input, index+tb, recvtb=tb)
                 # step2 reduce the chunks and send to peers
                 for nghr in range(size):
                     if rank != nghr:
-                        c.reduce_mscclpp(chunk(nghr, Buffer.input, index + tb), recvtb=tb)
+                        c.reduce_mscclpp(chunk(nghr, Buffer.input, index+tb), recvtb=tb)
                 for nghr in range(size):
                     if rank != nghr:
                         c.put(nghr, Buffer.input, index, sendtb=tb)
@@ -38,9 +40,9 @@ def allreduce_allpairs(gpus, instances, protocol):
                         c.signal(nghr, Buffer.input, index, sendtb=tb)
                 for nghr in range(size):
                     if rank != nghr:
-                        index = nghr * size
-                        c = chunk(rank, Buffer.input, index + tb)
-                        c.wait(nghr, Buffer.input, index, recvtb=tb)
+                        peer_index = nghr * size
+                        c_peer = chunk(rank, Buffer.input, peer_index+tb)
+                        c_peer.wait(nghr, Buffer.input, peer_index, recvtb=tb)
 
         Json()
 

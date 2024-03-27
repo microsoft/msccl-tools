@@ -472,17 +472,13 @@ def ir_to_json(program: Program, dependence_nop=False):
             chan_dict[key] = sorted(value)
         gpu.channels = chan_dict
 
-    # Filter out dependencies within the same threadblock
-    op_tb_id = {}
+    # Remove the dependencies of wait after signal. They are actually depends on remote chunk
     for gpu in program.gpus:
         for tb in gpu.threadblocks:
             for op in tb.ops:
-                op_tb_id[op] = op.tb
-    for gpu in program.gpus:
-        for tb in gpu.threadblocks:
-            for op in tb.ops:
-                op.depends = list(
-                    filter(lambda dep: op_tb_id[dep] != op.tb, op.depends))
+                if op.inst == Instruction.wait:
+                    op.depends = list(filter(lambda dep: dep.inst != Instruction.signal, op.depends))
+
     # Filter out redundant dependencies
     # e.g. if op1 and op2 depend on op, and op1 happends before op2
     # then op2 does not need to explicitly depend on op
@@ -494,61 +490,26 @@ def ir_to_json(program: Program, dependence_nop=False):
                     filter(lambda dep: dep not in running_depends, op.depends))
                 running_depends = running_depends + op.depends
 
-    # Mark all ops that have a dependence on them
-    has_dependence = set()
-    for gpu in program.gpus:
-        for tb in gpu.threadblocks:
-            for op in tb.ops:
-                has_dependence.update(op.depends)
-
-    if dependence_nop:
+    # Do some additional postprocessing of operations:
+    # - Expand operations with dependencies with no-ops
+    if program.protocol != "LL": # ignore the dependence_nop for LL protocol
         for gpu in program.gpus:
             for tb in gpu.threadblocks:
-                pre_ops = []
-                after_ops = []
-                first_re = None
-                first_dep = None
-                for i, op in enumerate(tb.ops):
+                new_ops = []
+                for op in tb.ops:
                     # Expand extra dependencies into nop operations
-                    num_depends = len(op.depends)
-                    if op.inst is Instruction.reduce:
-                        if num_depends > 0:
-                            for dep in op.depends:
-                                if first_dep is None:
-                                    first_dep = dep
-                                else:
-                                    pre_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
-                            op.depends = []
-                        if first_re is None:
-                            first_re = op
+                    for i, dep in enumerate(op.depends):
+                        new_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
+                        #op_tb_id[new_ops[-1]] = op_tb_id[op]
+                    new_ops.append(op)
+                tb.ops = new_ops
 
-                    if first_re is not None:
-                        after_ops.append(op)
-                    else:
-                        pre_ops.append(op)
-                if first_dep is not None:
-                    first_re.depends = [first_dep]
-                tb.ops = pre_ops + after_ops
-
-    # Do some additional postprocessing of operations:
-    # - Expand operations with extra dependencies with no-ops
-    # - Mark the index of each operation taking any extra no-ops into account
-    op_idx = {}
+    # update step and tid for ops
     for gpu in program.gpus:
         for tb in gpu.threadblocks:
-            new_ops = []
-            for op in tb.ops:
-                # Expand extra dependencies into nop operations
-                if len(op.depends) > 1:
-                    extra_deps = op.depends[1:]
-                    op.depends = op.depends[:1]
-                    for i, dep in enumerate(extra_deps):
-                        new_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
-                        op_idx[new_ops[-1]] = len(new_ops) - 1
-                        #op_tb_id[new_ops[-1]] = op_tb_id[op]
-                new_ops.append(op)
-                op_idx[new_ops[-1]] = len(new_ops) - 1
-            tb.ops = new_ops
+            for i, op in enumerate(tb.ops):
+                op.step = i
+                op.tb = tb.id
 
     # Need to calculate channel info for each GPU
     nchannels = 0
@@ -670,6 +631,11 @@ def dump_to_json(program: Program):
                         "dstoff": op.dst.index if op.dst else None,
                         "srcs": list(map(lambda x: {"buff": x.buffer, "off": x.index}, op.srcs)),
                         "cnt": op.cnt(),
+                    }
+                elif op.inst == Instruction.nop:
+                    instr = {
+                        "name": op.inst.value,
+                        "deps": list(map(lambda dep: {"tb": dep.tb, "step": dep.step}, op.depends))
                     }
                 else:
                     instr = {
