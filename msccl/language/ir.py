@@ -231,12 +231,14 @@ class Op:
 
 
 # Instructions where src is on local GPU
-_local_src_insts = {Instruction.send, Instruction.copy, Instruction.reduce, Instruction.put, Instruction.signal}
+_local_src_insts = {Instruction.send, Instruction.copy, Instruction.reduce}
 # Instructions where dst is on local GPU
 _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.recv_reduce_send,
                     Instruction.recv_reduce_copy, Instruction.copy, Instruction.reduce,
-                    Instruction.recv_reduce_copy_send, Instruction.wait}
-_send_insts = {Instruction.put} # do we need this?
+                    Instruction.recv_reduce_copy_send}
+
+_local_src_insts_mscclpp = {Instruction.put, Instruction.signal, Instruction.copy, Instruction.reduce, Instruction.reduce_send}
+_local_dst_insts_mscclpp = {Instruction.get, Instruction.wait, Instruction.read_reduce_copy, Instruction.copy, Instruction.reduce, Instruction.read_reduce_copy_send, Instruction.reduce_send}
 
 
 def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
@@ -431,18 +433,24 @@ def ir_to_json(program: Program, dependence_nop=False):
     for gpu in program.gpus:
         for tb in gpu.threadblocks:
             for op in tb.ops:
-                if op.inst in _local_src_insts:
+                if op.inst in _local_src_insts_mscclpp:
                     key = (gpu.rank, op.src.buffer)
                     buffer_sizes[key] = max(
                         buffer_sizes[key], op.src.index + op.src.size)
-                if op.inst in _send_insts:
-                    key = (op.dst.rank, op.dst.buffer)
-                    buffer_sizes[key] = max(
-                        buffer_sizes[key], op.dst.index + op.dst.size)
-                if op.inst in _local_dst_insts:
+                    for src in op.srcs:
+                        key = (gpu.rank, src.buffer)
+                        buffer_sizes[key] = max(
+                            buffer_sizes[key], src.index + src.size)
+                if op.inst in _local_dst_insts_mscclpp:
                     key = (gpu.rank, op.dst.buffer)
                     buffer_sizes[key] = max(
                         buffer_sizes[key], op.dst.index + op.dst.size)
+                    # ignore remote buffers
+                    if op.inst != Instruction.read_reduce_copy_send and op.inst != Instruction.reduce_send:
+                        for dst in op.dsts:
+                            key = (gpu.rank, dst.buffer)
+                            buffer_sizes[key] = max(
+                                buffer_sizes[key], dst.index + dst.size)
     for gpu in program.gpus:
         gpu.input_chunks = max(buffer_sizes[(gpu.rank, Buffer.input)], gpu.input_chunks)
         gpu.output_chunks = max(buffer_sizes[(gpu.rank, Buffer.output)], gpu.output_chunks)
