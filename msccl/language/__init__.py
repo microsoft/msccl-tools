@@ -20,13 +20,18 @@ def _curr():
         raise RuntimeError("No Program in context")
     return _current_program
 
+# For msccl++ program, we have one assumption that for channel can be identified by (send_buffer, recv_buffer, type, send_tb/recv_tb)
+# which means the send_tb and recv_tb should be the same for a pair of signal and wait, also same for put/get operation.
+# If one sender what to send data to peer want to use different tb in receiver side. We need to send to same tb in receiver side first,
+# then performance a across tb sync. This is a limitation of current implementation.
+
 class MSCCLProgram:
     def __init__(self, name, topo, collective, instances, protocol='Simple', \
             threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True,
-            instr_fusion=True, check_xml=True, dependence_nop=False):
+            instr_fusion=True, check_xml=True, dependence_nop=False, instance_policy=InstancePolicy.dup):
         self.name = name
         self.topo = topo
-        self.collective = collective       
+        self.collective = collective
         self.num_ranks = topo.num_nodes()
         self.instances = instances
         self.protocol = protocol
@@ -35,6 +40,7 @@ class MSCCLProgram:
         self.instr_fusion = instr_fusion
         self.check_xml = check_xml
         self.dependence_nop = dependence_nop
+        self.instance_policy = instance_policy
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
         self.run_opt = True # Runs optimization passes
@@ -54,7 +60,7 @@ class MSCCLProgram:
         if _current_program != None:
             raise RuntimeError("There is already a MSCCL Program in context")
         _current_program = self
-    
+
     def __exit__(self, exc_type, exc_value, exc_traceback):
         global _current_program
         if _current_program != self:
@@ -120,14 +126,27 @@ class MSCCLProgram:
         gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
         if self.check_xml:
             # Check generated MSCCL-IR for correctness - no circular dependencies, sends and receives are ordered
-            # For very large programs, turn off check_xml when shipping 
+            # For very large programs, turn off check_xml when shipping
             check_dependency_cycles(self.instr_dag.tbs)
             check_threadblock_ordering(self.instr_dag)
-        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
+        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
+
+    # Lower program to MSCCLPP
+    def lower_mscclpp(self):
+        convert_to_exectuion_plan(self.instr_dag)
+        self.instr_dag.complete_channels()
+        if self.instr_fusion:
+            self.instr_dag.optimize_mscclpp(self.protocol)
+        self.instr_dag.lower_pt1(self.instances)
+        gpu_prgms = self.instr_dag.lower_pt2_mscclpp(self.instances, self.instance_policy)
+        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
 
     def generate_xml(self):
         return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop)
-    
+
+    def generate_json(self):
+        return ir_to_json(self.lower_mscclpp(), dependence_nop=self.dependence_nop)
+
     def print_chunk_dag(self):
         visualize_chunk_dag(self.chunk_dag.chunk_paths)
 
@@ -137,6 +156,9 @@ class MSCCLProgram:
                 visualize_instr_dag(self.instr_dags[r].operations)
         else:
             visualize_instr_dag(self.instr_dags[rank].operations)
+
+class MSCCLPPProgram:
+    pass
 
 def Print():
     _curr().print_chunk_dag()
@@ -151,6 +173,9 @@ def create_scratch(rank, name):
 
 def XML():
    print(_curr().generate_xml())
+
+def Json():
+    print(_curr().generate_json())
 
 def Check():
     return _curr().check()
@@ -189,7 +214,93 @@ class Ref(ChunkRef):
 
         end = max(first._end(), second._end())
         return Ref(self.rank, self.buffer, first.index, end - first.index, self.prog)
-        
+
+    def put(self, dst, buffer=None, index=-1, sendtb=-1, chan_type=ChannelType.sm):
+        self.prog.check_buffer_exists(dst, buffer)
+        sender = self.rank
+        receiver = dst
+        assert sender != receiver, 'Cannot put to the same rank'
+
+        # If index is not specified assume it is going to the same place in the next gpu
+        if index == -1 and buffer == None:
+            index = self.index
+            buffer = self.buffer
+        elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
+            index = self.prog.buffers[dst][buffer].instance_size()
+
+        # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
+        buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
+
+        # Direct put
+        assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
+        dst_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
+
+        self.prog.apply_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
+        self.prog.instr_dag.add_put(sender, self, dst_chunkref, sendtb, chan_type)
+        if self.prog.protocol == 'LL':
+            self.prog.instr_dag.add_signal(sender, self, dst_chunkref, -1, ChannelType.none)
+            self.prog.instr_dag.add_wait(receiver, dst_chunkref, self, -1, ChannelType.none)
+
+    def get(self, src, buffer=None, index=-1, recvtb=-1, chan_type=ChannelType.sm):
+        self.prog.check_buffer_exists(src, buffer)
+        sender = src
+        receiver = self.rank
+        assert sender != receiver, 'Cannot get from the same rank'
+
+        # If index is not specified assume it is going to the same place in the next gpu
+        if index == -1 and buffer == None:
+            index = self.index
+            buffer = self.buffer
+        elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
+            index = self.prog.buffers[src][buffer].instance_size()
+
+        # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
+        buffer, index = self.prog.collective.get_buffer_index(src, buffer, index)
+
+        # Direct get
+        assert (self.prog.topo.link(self.rank, src) or src == self.rank), f'No link from {self.rank} to {src}'
+        src_chunkref = self.prog.get_ref(src, buffer, index, self.size)
+
+        self.prog.apply_send(src, buffer, index, self.rank, self.buffer, self.index, self.size)
+        self.prog.instr_dag.add_get(receiver, src_chunkref, self, recvtb, chan_type)
+
+    # for signal and wait, currently we assuem the pair will use the same tb index. In future we need
+    # to infer the tb index from the instruction DAG Add a channel is define as (send_tb, src_buffer, recv_tb, dst_buffer, type).
+    # Then we can use DAG info to reduce the number of channels.
+    def signal(self, dst, buffer=None, index=-1, sendtb=-1, chan_type=ChannelType.sm):
+        sender = self.rank
+        receiver = dst
+        assert sender != receiver, 'Cannot signal to the same rank'
+
+        if index == -1 and buffer == None:
+            index = self.index
+            buffer = self.buffer
+        elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
+            index = self.prog.buffers[dst][buffer].instance_size()
+
+        # Direct signal
+        assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
+        dst_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
+
+        self.prog.instr_dag.add_signal(sender, self, dst_chunkref, sendtb, chan_type)
+
+    def wait(self, src, buffer=None, index=-1, recvtb=-1, chan_type=ChannelType.sm):
+        sender = src
+        receiver = self.rank
+        assert sender != receiver, 'Cannot wait on the same rank'
+
+        if index == -1 and buffer == None:
+            index = self.index
+            buffer = self.buffer
+        elif index == -1 and buffer is not Buffer.input and buffer is not Buffer.output:
+            index = self.prog.buffers[src][buffer].instance_size()
+
+        # Direct signal
+        assert (self.prog.topo.link(self.rank, src) or src == self.rank), f'No link from {self.rank} to {src}'
+        src_chunkref = self.prog.get_ref(src, buffer, index, self.size)
+
+        self.prog.instr_dag.add_wait(receiver, self, src_chunkref, recvtb, chan_type)
+
     # Copies the chunk(s) referenced by this chunkref onto Rank dst at location (buffer, index)
     def copy(self, dst, buffer=None, index=-1, sendtb=-1, recvtb=-1, ch=-1):
         self.prog.check_buffer_exists(dst, buffer)
@@ -214,7 +325,7 @@ class Ref(ChunkRef):
 
         # chunks = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
         # overwritten_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
-        
+
         self.prog.apply_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
         # self.prog.chunk_dag.add_send(chunks, overwritten_chunks, self, dst_chunkref, sendtb, recvtb, ch)
@@ -253,6 +364,21 @@ class Ref(ChunkRef):
 
         return self
 
+    # Reduces the chunk(s) referenced by other_chunkref into the chunk(s) referenced by this chunkref
+    def reduce_mscclpp(self, other_chunkref, sendtb=-1, recvtb=-1, channel_type=ChannelType.sm):
+        # Receive reduce copy
+        dst = self.rank
+        src = other_chunkref.rank
+        assert (self.prog.topo.link(src, dst) or src == dst), f'No link from {src} to {dst}'
+        self.prog.apply_reduce(src, other_chunkref.buffer, other_chunkref.index, dst, self.buffer, self.index, self.size)
+
+        if src != dst:
+            self.prog.instr_dag.add_read_reduce_copy(dst, other_chunkref, self, recvtb, channel_type)
+        else:
+            self.prog.instr_dag.add_reduce(src, other_chunkref, self, sendtb, ChannelType.none)
+
+        return self
+
     def get_origin_index(self, index=0):
         return self._get_chunk(index + self.index).origin_index
 
@@ -266,7 +392,7 @@ class Ref(ChunkRef):
         return self._get_chunk(index + self.index).dst_rank
 
     def print_chunk_info(self, index=0):
-        print(self._get_chunk(index + self.index)) 
+        print(self._get_chunk(index + self.index))
 
 
 # @dataclass
@@ -278,7 +404,7 @@ class Ref(ChunkRef):
 #     recvtb: int = -1#  For lowering to RankInstructions
 #     ch: int = -1 # For lowering to RankInstructions
 #     steps_from_start:int  = -1
-#     steps_to_end: int = -1 
+#     steps_to_end: int = -1
 #     prev: list = field(default_factory=list) # Previous ChunkOps
 #     next: list = field(default_factory=list) # Next ChunkOps
 #     visited = False
@@ -291,7 +417,7 @@ class Ref(ChunkRef):
 #         return self.steps_from_start < other.steps_from_start
 
 #     def __hash__(self):
-#         return hash((self.inst, self.dst.rank, self.dst.index, self.dst.buffer)) # TODO 
+#         return hash((self.inst, self.dst.rank, self.dst.index, self.dst.buffer)) # TODO
 
 # def same_slot(ref1, ref2):
 #     return ref1.rank == ref2.rank and ref1.buffer == ref2.buffer and ref1.index == ref2.index
@@ -348,7 +474,7 @@ class Ref(ChunkRef):
 #             # steps_from_start = max(steps_from_start, prev_op.steps_from_start)
 #             # prev_ops.append(prev_op)
 #         op = ChunkOp(ChunkInstruction.send, src, dst, sendtb, recvtb, ch, steps_from_start+1)
-        
+
 #         for prev_op in prev_ops:
 #             prev_op.next.append(op)
 #         op.prev = prev_ops
@@ -364,7 +490,7 @@ class Ref(ChunkRef):
 #             steps_from_start = max(prev_op_src.steps_from_start, prev_op_dst.steps_from_start, steps_from_start)
 #             prev_ops.append(prev_op_src)
 #             prev_ops.append(prev_op_dst)
-            
+
 #         op = ChunkOp(ChunkInstruction.reduce, src, dst, sendtb, recvtb, ch, steps_from_start+1)
 
 #         for prev_op in prev_ops:
@@ -387,14 +513,14 @@ class Ref(ChunkRef):
 #         for chunk, op in self.chunk_paths.items():
 #             if op.inst == ChunkInstruction.start:
 #                 dfs(op)
-            
+
 
 #     # Assigns each send and a reduce a channel for communication based of policies
 #     def channel_assignment(self, channel_policy='zero'):
 #         frontier = []
 #         visited = set()
 #         for chunk, op in self.chunk_paths.items():
-#             if len(op.prev) == 0: 
+#             if len(op.prev) == 0:
 #                 heapq.heappush(frontier, op)
 
 #         # If an op isn't annotated with a channel set it to 0
@@ -412,7 +538,7 @@ class Ref(ChunkRef):
 #         visited = set()
 
 #         for chunk, op in self.chunk_paths.items():
-#             if len(op.prev) == 0: 
+#             if len(op.prev) == 0:
 #                 heapq.heappush(frontier, ((op.steps_from_start, op.steps_to_end), op))
 
 #         while len(frontier) > 0:

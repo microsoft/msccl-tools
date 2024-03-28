@@ -12,7 +12,7 @@ from msccl.language.rank_dag import *
 def _verify_tb_op_compatible(tb, op):
     s = op.dst.rank if op.is_send() else -1
     r = op.src.rank if op.is_recv() else -1
-        
+
     sends_ok = tb.send == s or s == -1 or tb.send == -1
     recvs_ok = tb.recv == r or r == -1 or tb.recv == -1
     channel_ok = tb.channel == op.channel or tb.channel == -1 or op.channel == -1
@@ -22,7 +22,7 @@ def _verify_tb_op_compatible(tb, op):
 def manual_assign_tbs(rank_dag):
     instrs = topo_sort_instrs(rank_dag)
     for op in instrs:
-        
+
         rank = op.rank
         tbid = op.tb
         if tbid not in rank_dag.tbs[rank]:
@@ -39,6 +39,17 @@ def manual_assign_tbs(rank_dag):
             raise Exception(f"Illegal threadblock assignment. Trying to add {op} to threadblock {tbid}\n" \
                 f"Threadblock {tbid} send:{tb.send} recv:{tb.recv} channel:{tb.channel}\n" \
                 f"Operation send:{op.dst.rank if op.is_send() else -1} recv:{op.dst.rank if op.is_recv() else -1} channel:{op.channel}")
+
+def convert_to_exectuion_plan(instr_dag):
+    ops = instr_dag.convert_set_list()
+    ops = sorted(ops, key=lambda x: x.step)
+    for op in ops:
+        rank = op.rank
+        tbid = op.tb
+        if tbid not in instr_dag.tbs[rank]:
+            instr_dag.tbs[rank][tbid] = Threadblock(id=tbid)
+        tb = instr_dag.tbs[rank][tbid]
+        tb.ops.append(op)
 
 def _get_tb_options(mapping, send, recv, channel, num_tbs):
     options = []
@@ -75,12 +86,12 @@ def auto_assign_tbs(rank_dag):
             tbid = rank_tbids[rank]
             rank_dag.tbs[rank][tbid] = Threadblock(send=s, recv=r, channel=channel)
             rank_tbids[rank] += 1
-        else: 
+        else:
             tbid = tb_options[0]
             for tbid_opt in tb_options:
                 if current_tb_step[rank][tbid_opt] < current_tb_step[rank][tbid] and _verify_tb_op_compatible(rank_dag.tbs[rank][tbid], op):
                     tbid = tbid_opt
-        
+
         tb = rank_dag.tbs[rank][tbid]
         assert _verify_tb_op_compatible(tb, op), f"Failing: Operations uses channel {op.channel}, send:{s} recv:{r} {op}\n" \
                 f"Threadblock uses send:{tb.send} recv:{tb.recv} channel:{tb.channel}"
@@ -90,13 +101,13 @@ def auto_assign_tbs(rank_dag):
         tb.ops.append(op)
         tb.send = op.dst.rank if op.is_send() else tb.send
         tb.recv = op.src.rank if op.is_recv() else tb.recv
-        
+
         op.step = len(tb.ops)-1
         op.tb = tbid
         current_tb_step[rank][tbid] = op.chunk_step
 
 # Topologically orders instructions so that (1): Sends occur before their receives
-# (2): Dependent instructions occur before 
+# (2): Dependent instructions occur before
 def topo_sort_instrs(rank_dag):
     def priority(op):
         return ((op.chunk_step, -op.priority, op.dst.index))
@@ -117,9 +128,9 @@ def topo_sort_instrs(rank_dag):
             rmatch = op.recv_match
             ordered.append(op)
             visited.add(op)
-            
+
             # Add a matching receive if one exists and its dependencies are satisfied
-            if rmatch is not None and all([x in visited for x in rmatch.prev]): 
+            if rmatch is not None and all([x in visited for x in rmatch.prev]):
                 heapq.heappush(ops, (priority(rmatch), rmatch))
             # Add other operation that have dependencies satisfied
             for o in op.next:
@@ -140,7 +151,7 @@ def channel_assignment(instrs, rank_dag):
     def valid_recv_ch(sender, receiver, ch):
         return ch in rank2recvch[receiver][sender]
 
-    # Returns a channel this flow can be scheduled on, else -1 
+    # Returns a channel this flow can be scheduled on, else -1
     def is_matching_flow(flow):
         if flow in flows:
             return flow_channels[flows.index(flow)]
@@ -159,7 +170,7 @@ def channel_assignment(instrs, rank_dag):
         for i in range(1, len(f)):
             flow.add((f[i-1], f[i]))
         return flow
-        
+
     def dfs(op, channels, f):
         if op.is_local():
             op.channel = 0
@@ -210,7 +221,7 @@ def channel_assignment(instrs, rank_dag):
             if op.is_send():
                 dst = op.dst.rank
                 pending_recv[(rank, dst, channel)].append(op.recv_match)
-            
+
             if op.is_recv():
                 src = op.src.rank
                 pr = pending_recv[(src, rank, channel)]
