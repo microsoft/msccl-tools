@@ -646,6 +646,28 @@ def dump_to_json(program: Program):
                         "name": op.inst.value,
                         "deps": list(map(lambda dep: {"tb": dep.tb, "step": dep.step}, op.depends))
                     }
+                elif op.inst == Instruction.put:
+                    cids = get_channel_ids([op.dst], tb_channel_dict, op.src.buffer, op.dst.buffer, op.channel_type)
+                    instr = {
+                        "name": op.inst.value,
+                        "o_cids": cids,
+                        "srcbuff": op.src.buffer.value if op.src.buffer else None,
+                        "srcoff": op.src.index if op.src else None,
+                        "dstbuff": op.dst.buffer.value if op.dst.buffer else None,
+                        "ctype": op.channel_type.value,
+                        "cnt": op.cnt(),
+                    }
+                elif op.inst == Instruction.get:
+                    cids = get_channel_ids([op.src], tb_channel_dict, op.src.buffer, op.dst.buffer, op.channel_type)
+                    instr = {
+                        "name": op.inst.value,
+                        "i_cids": cids,
+                        "srcbuff": op.src.buffer.value if op.src.buffer else None,
+                        "dstbuff": op.dst.buffer.value if op.dst.buffer else None,
+                        "dstoff": op.dst.index if op.dst else None,
+                        "ctype": op.channel_type.value,
+                        "cnt": op.cnt(),
+                    }
                 else:
                     instr = {
                         "name": op.inst.value,
