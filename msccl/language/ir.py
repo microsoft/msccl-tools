@@ -99,6 +99,15 @@ class ThreadblockPolicy(Enum):
     def __str__(self):
         return self.value
 
+class InstancePolicy(Enum):
+    # this means pack multi instrances to deal with the same chunk and share the channels
+    packed = 'packed'
+    # this means each instance deal with the same chunk
+    dup = 'dup'
+
+    def __str__(self):
+        return self.value
+
 
 class Instruction(Enum):
     nop = 'nop'

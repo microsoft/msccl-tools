@@ -12,7 +12,7 @@ def allreduce_allpairs(gpus, instances, protocol):
     topology = fully_connected(size)
     collective = AllReduce(size, chunksperloop, True)
     with MSCCLProgram("allreduce_pairs", topology, collective, instances, protocol=protocol,
-        interleaved_replication=False, threadblock_policy=ThreadblockPolicy.manual, dependence_nop=True):
+        interleaved_replication=False, threadblock_policy=ThreadblockPolicy.manual, dependence_nop=True, instance_policy=InstancePolicy.dup):
 
         # Each rank sends the nth chunk to the nth rank into scratch space
         for rank in range(size):
@@ -21,8 +21,10 @@ def allreduce_allpairs(gpus, instances, protocol):
                 c = chunk(rank, Buffer.input, index + tb)
                 # make sure the data is ready
                 for nghr in range(size):
+                    peer_index = nghr * size
                     if rank != nghr:
-                        c.signal(nghr, Buffer.input, index + tb, sendtb=tb)
+                        c_peer = chunk(rank, Buffer.input, peer_index+tb)
+                        c_peer.signal(nghr, Buffer.input, peer_index + tb, sendtb=tb)
                 for nghr in range(size):
                     if rank != nghr:
                         c.wait(nghr, Buffer.input, index + tb, recvtb=tb)

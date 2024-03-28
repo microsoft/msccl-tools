@@ -28,7 +28,7 @@ def _curr():
 class MSCCLProgram:
     def __init__(self, name, topo, collective, instances, protocol='Simple', \
             threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True,
-            instr_fusion=True, check_xml=True, dependence_nop=False):
+            instr_fusion=True, check_xml=True, dependence_nop=False, instance_policy=InstancePolicy.dup):
         self.name = name
         self.topo = topo
         self.collective = collective
@@ -40,6 +40,7 @@ class MSCCLProgram:
         self.instr_fusion = instr_fusion
         self.check_xml = check_xml
         self.dependence_nop = dependence_nop
+        self.instance_policy = instance_policy
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
         self.run_opt = True # Runs optimization passes
@@ -137,7 +138,7 @@ class MSCCLProgram:
         if self.instr_fusion:
             self.instr_dag.optimize_mscclpp(self.protocol)
         self.instr_dag.lower_pt1(self.instances)
-        gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
+        gpu_prgms = self.instr_dag.lower_pt2_mscclpp(self.instances, self.instance_policy)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)
 
     def generate_xml(self):

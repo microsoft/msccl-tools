@@ -541,6 +541,9 @@ class InstructionDAG:
         self.replicate(instances, interleaved)
         return self.lower_tbs()
 
+    def lower_pt2_mscclpp(self, instances, instance_pollicy):
+        self.replicate_mscclpp(instances, instance_pollicy)
+        return self.lower_tbs()
 
     def infer_dependencies(self):
         for slot, ops in self.operations.items():
@@ -664,3 +667,72 @@ class InstructionDAG:
                             dep_step = dep.step
                             iop.depends[s] = self.instanced_tbs[op.rank][dep_itbid].ops[dep_step]
 
+    def replicate_mscclpp(self, instances, instance_policy):
+        # update op step
+        for rank, rank_tbs in enumerate(self.tbs):
+            for _, tb in rank_tbs.items():
+                for id, op in enumerate(tb.ops):
+                    op.step = id
+
+        if instances == 1:
+            self.instanced_tbs = self.tbs
+            return
+
+        self.instanced_tbs = []
+        for _ in range(self.num_ranks):
+            self.instanced_tbs.append({})
+
+        def is_scratch(buffer):
+            return buffer != Buffer.input and buffer != Buffer.output
+
+        def get_new_index(rank, buffer, index, size, i):
+            # Scratch buffers always use batched
+            if is_scratch(buffer):
+                buf_instance_len = self.buffers[rank][buffer].instance_size()
+                return buf_instance_len * i + index
+            return  len(self.buffers[rank][buffer]) * i + index
+
+        def get_instance_ref(ref):
+            iindex = get_new_index(ref.rank, ref.buffer, ref.index, ref.size, i)
+            iref = ChunkRef(ref.rank, ref.buffer, iindex, ref.size)
+            return iref
+
+        if instance_policy == InstancePolicy.dup:
+            for i in range(instances):
+                # Generate all the threadblocks and ops
+                for rank, rank_tbs in enumerate(self.tbs):
+                    # rank_channels = self.num_channels[rank]
+                    for tbid, tb in rank_tbs.items():
+                        itbid = tbid * instances + i
+                        itb = Threadblock(id=itbid)
+                        itb.ops = [None] * len(tb.ops)
+                        for s, op in enumerate(tb.ops):
+                            isrc = get_instance_ref(op.src)
+                            idst = get_instance_ref(op.dst)
+                            idepends = []
+                            # Note: We don't need the fill out the rest of the metadata since replication is the last optimization
+                            iop = Op(op.inst, op.rank, isrc, idst, idepends, op.step, itbid, channel_type=op.channel_type)
+                            itb.ops[s] = iop
+                            for src, step in op.srcs:
+                                isrc = get_instance_ref(src)
+                                iop.srcs.append((isrc, step))
+                            for dst, step in op.dsts:
+                                idst = get_instance_ref(dst)
+                                iop.dsts.append((idst, step))
+                        for chan in tb.channels:
+                            itb.channels.append(chan)
+                        self.instanced_tbs[op.rank][itbid] = itb
+
+            # Redo dependency analysis
+            for rank, rank_tbs in enumerate(self.tbs):
+                for tbid, tb in rank_tbs.items():
+                    for i in range(instances):
+                        itbid = tbid * instances + i
+                        itb = self.instanced_tbs[rank][itbid]
+                        for op, iop in zip(tb.ops, itb.ops):
+                            iop.depends = [None] * len(op.depends)
+                            for s, dep in enumerate(op.depends):
+                                dep_tbid = dep.tb
+                                dep_itbid = dep_tbid * instances + i
+                                dep_step = dep.step
+                                iop.depends[s] = self.instanced_tbs[op.rank][dep_itbid].ops[dep_step]
